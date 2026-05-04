@@ -87,6 +87,7 @@ export function useAvailableFieldsQuery() {
   return useQuery({
     queryKey: fieldVisibilityKeys.fields,
     queryFn: fetchAvailableFields,
+    staleTime: 0,
   })
 }
 

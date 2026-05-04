@@ -20,9 +20,9 @@ import {
   ShoppingBagIcon,
   BuildingIcon,
   UserIcon,
-  HomeIcon,
-  MessageSquareIcon,
-  PaletteIcon,
+  // HomeIcon,
+  // MessageSquareIcon,
+  // PaletteIcon,
   EyeIcon,
 } from "lucide-react"
 
@@ -84,7 +84,7 @@ type NavEntry = NavLeaf | NavGroup
 
 const navEntries: NavEntry[] = [
   { type: "link", to: ROUTES.DASHBOARD, icon: LayoutDashboardIcon, labelKey: "nav.dashboard" },
-  { type: "link", to: ROUTES.HOMEPAGE, icon: HomeIcon, labelKey: "nav.homepage", adminOnly: true },
+  // { type: "link", to: ROUTES.HOMEPAGE, icon: HomeIcon, labelKey: "nav.homepage", adminOnly: true },
   {
     type: "group",
     key: "catalog",
@@ -120,8 +120,8 @@ const navEntries: NavEntry[] = [
   },
   { type: "link", to: ROUTES.USERS, icon: UsersIcon, labelKey: "nav.users", adminOnly: true },
   { type: "link", to: ROUTES.MERCHANT_EMPLOYEES, icon: UserIcon, labelKey: "nav.employees", merchantOnly: true },
-  { type: "link", to: ROUTES.WHATSAPP_TEMPLATES, icon: MessageSquareIcon, labelKey: "nav.whatsappTemplates", adminOnly: true },
-  { type: "link", to: ROUTES.BRANDING, icon: PaletteIcon, labelKey: "nav.branding", adminOnly: true },
+  // { type: "link", to: ROUTES.WHATSAPP_TEMPLATES, icon: MessageSquareIcon, labelKey: "nav.whatsappTemplates", adminOnly: true },
+  // { type: "link", to: ROUTES.BRANDING, icon: PaletteIcon, labelKey: "nav.branding", adminOnly: true },
   { type: "link", to: ROUTES.FIELD_VISIBILITY, icon: EyeIcon, labelKey: "nav.fieldVisibility", adminOnly: true },
   { type: "link", to: ROUTES.SETTINGS, icon: SettingsIcon, labelKey: "nav.settings" },
 ]

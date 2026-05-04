@@ -42,10 +42,11 @@ export function FieldVisibilityPage() {
   const allFields = fieldsQuery.data ?? []
   const allFieldKeys = allFields.map((f) => f.key)
 
-  // Sync local state when BP config loads
+  // Sync local state when BP config loads, filtering out any stale keys no longer in the defs
   useEffect(() => {
     if (bpConfigQuery.data) {
-      setBpSelected(new Set(bpConfigQuery.data.visibleFields))
+      const validKeys = new Set(allFieldKeys)
+      setBpSelected(new Set(bpConfigQuery.data.visibleFields.filter((k) => validKeys.has(k))))
     } else if (bpConfigQuery.isFetched && !bpConfigQuery.data) {
       // No config yet — all fields visible by default
       setBpSelected(new Set(allFieldKeys))
