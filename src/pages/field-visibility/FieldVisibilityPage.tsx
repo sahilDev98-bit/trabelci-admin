@@ -41,6 +41,7 @@ export function FieldVisibilityPage() {
 
   const allFields = fieldsQuery.data ?? []
   const allFieldKeys = allFields.map((f) => f.key)
+  const defaultFieldKeys = allFieldKeys.filter((k) => k !== 'latestWarehouseTInventoryPrice')
 
   // Sync local state when BP config loads, filtering out any stale keys no longer in the defs
   useEffect(() => {
@@ -48,12 +49,12 @@ export function FieldVisibilityPage() {
       const validKeys = new Set(allFieldKeys)
       setBpSelected(new Set(bpConfigQuery.data.visibleFields.filter((k) => validKeys.has(k))))
     } else if (bpConfigQuery.isFetched && !bpConfigQuery.data) {
-      // No config yet — all fields visible by default
-      setBpSelected(new Set(allFieldKeys))
+      // No config yet — inventory price excluded by default
+      setBpSelected(new Set(defaultFieldKeys))
     }
   }, [bpConfigQuery.data, bpConfigQuery.isFetched, allFields.length])
 
-  const serverFields = bpConfigQuery.data?.visibleFields ?? allFieldKeys
+  const serverFields = bpConfigQuery.data?.visibleFields ?? defaultFieldKeys
   const isDirty =
     bpSelected.size !== serverFields.length ||
     serverFields.some((k) => !bpSelected.has(k))

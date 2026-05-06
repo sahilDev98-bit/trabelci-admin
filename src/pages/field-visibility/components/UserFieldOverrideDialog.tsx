@@ -38,14 +38,15 @@ export function UserFieldOverrideDialog({
   const deleteMutation = useDeleteUserFieldVisibilityMutation()
 
   const allFieldKeys = fields.map((f) => f.key)
+  const defaultFieldKeys = allFieldKeys.filter((k) => k !== 'latestWarehouseTInventoryPrice')
   const validKeys = new Set(allFieldKeys)
-  const effectiveFields = (user?.visibleFields ?? bpVisibleFields ?? allFieldKeys).filter((k) => validKeys.has(k))
+  const effectiveFields = (user?.visibleFields ?? bpVisibleFields ?? defaultFieldKeys).filter((k) => validKeys.has(k))
   const [selected, setSelected] = useState<Set<string>>(new Set(effectiveFields))
 
   useEffect(() => {
     if (user) {
       const valid = new Set(fields.map((f) => f.key))
-      const effective = (user.visibleFields ?? bpVisibleFields ?? allFieldKeys).filter((k) => valid.has(k))
+      const effective = (user.visibleFields ?? bpVisibleFields ?? defaultFieldKeys).filter((k) => valid.has(k))
       setSelected(new Set(effective))
     }
   }, [user, bpVisibleFields])
