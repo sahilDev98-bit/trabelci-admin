@@ -59,3 +59,10 @@ export interface EffectiveProduct {
   coverUrl: string | null
   images: string[]
 }
+
+export interface EffectiveProductsPage {
+  products: EffectiveProduct[]
+  total: number
+  page: number
+  limit: number
+}

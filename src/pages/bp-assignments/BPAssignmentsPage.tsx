@@ -297,6 +297,7 @@ export function BPAssignmentsPage() {
   const [selectedBpId, setSelectedBpId] = useState<string | null>(null)
   const [activeTab, setActiveTab] = useState<TabKey>("groups")
   const [showPreview, setShowPreview] = useState(false)
+  const [previewPage, setPreviewPage] = useState(1)
 
   // Dialog states
   const [assignGroupsOpen, setAssignGroupsOpen] = useState(false)
@@ -324,11 +325,15 @@ export function BPAssignmentsPage() {
 
 
   const {
-    data: effectiveProducts,
+    data: effectivePage,
     isLoading: effectiveLoading,
     isError: effectiveError,
     error: effectiveErrorObj,
-  } = useEffectiveProductsQuery(showPreview ? selectedBpId : null)
+  } = useEffectiveProductsQuery(showPreview ? selectedBpId : null, previewPage)
+
+  const effectiveProducts = effectivePage?.products
+  const effectiveTotal = effectivePage?.total ?? 0
+  const effectiveTotalPages = Math.ceil(effectiveTotal / (effectivePage?.limit ?? 50))
 
   // Mutations (only created when a business partner is selected)
   const bpIdForMutations = selectedBpId ?? ""
@@ -713,13 +718,13 @@ export function BPAssignmentsPage() {
                 </p>
               </div>
               <div className="flex items-center gap-2">
-                {showPreview && effectiveProducts ? (
-                  <Badge variant="secondary">{effectiveProducts.length} products</Badge>
+                {showPreview && effectiveTotal > 0 ? (
+                  <Badge variant="secondary">{effectiveTotal} products</Badge>
                 ) : null}
                 <Button
                   type="button"
                   variant={showPreview ? "outline" : "default"}
-                  onClick={() => setShowPreview((prev) => !prev)}
+                  onClick={() => { setShowPreview((prev) => !prev); setPreviewPage(1) }}
                 >
                   <Eye className="size-4" />
                   {showPreview ? t("bpAssignments.hidePreview") : t("bpAssignments.previewEffective")}
@@ -758,6 +763,29 @@ export function BPAssignmentsPage() {
                       ))}
                     </TableBody>
                   </Table>
+                  {effectiveTotalPages > 1 && (
+                    <div className="flex items-center justify-between pt-4 text-sm text-muted-foreground">
+                      <span>Page {previewPage} of {effectiveTotalPages} ({effectiveTotal} total)</span>
+                      <div className="flex gap-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          disabled={previewPage <= 1}
+                          onClick={() => setPreviewPage((p) => p - 1)}
+                        >
+                          Previous
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          disabled={previewPage >= effectiveTotalPages}
+                          onClick={() => setPreviewPage((p) => p + 1)}
+                        >
+                          Next
+                        </Button>
+                      </div>
+                    </div>
+                  )}
                 </QueryStateWrapper>
               </CardContent>
             ) : null}

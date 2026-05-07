@@ -6,6 +6,7 @@ import { bpAssignmentKeys } from "./queryKeys"
 import type {
   BPAssignments,
   EffectiveProduct,
+  EffectiveProductsPage,
   GroupIdsPayload,
   ProductIdsPayload,
 } from "./types"
@@ -61,9 +62,12 @@ async function removeExclusions({ bpId, payload }: { bpId: string; payload: Prod
   })
 }
 
-async function fetchEffectiveProducts(bpId: string): Promise<EffectiveProduct[]> {
-  const res = await apiFetch<{ success: true; products: EffectiveProduct[] }>(`${API_ENDPOINTS.BUSINESS_PARTNER_ASSIGNMENTS}/${bpId}/effective-products`, { method: "GET" })
-  return res.products ?? []
+async function fetchEffectiveProducts(bpId: string, page = 1, limit = 10): Promise<EffectiveProductsPage> {
+  const res = await apiFetch<{ success: true; products: EffectiveProduct[]; total: number; page: number; limit: number }>(
+    `${API_ENDPOINTS.BUSINESS_PARTNER_ASSIGNMENTS}/${bpId}/effective-products?page=${page}&limit=${limit}`,
+    { method: "GET" }
+  )
+  return { products: res.products ?? [], total: res.total ?? 0, page: res.page ?? page, limit: res.limit ?? limit }
 }
 
 // ---------------------------------------------------------------------------
@@ -78,10 +82,10 @@ export function useBPAssignmentsQuery(bpId: string | null) {
   })
 }
 
-export function useEffectiveProductsQuery(bpId: string | null) {
+export function useEffectiveProductsQuery(bpId: string | null, page = 1) {
   return useQuery({
-    queryKey: bpId ? bpAssignmentKeys.effectiveProducts(bpId) : bpAssignmentKeys.all,
-    queryFn: () => fetchEffectiveProducts(bpId!),
+    queryKey: bpId ? [...bpAssignmentKeys.effectiveProducts(bpId), page] : bpAssignmentKeys.all,
+    queryFn: () => fetchEffectiveProducts(bpId!, page),
     enabled: Boolean(bpId),
   })
 }

@@ -15,7 +15,7 @@ export function SimilarityStatusBar() {
   const [isPolling, setIsPolling] = useState(false)
 
   const { data: status, isError } = useSimilarityGlobalStatusQuery({
-    refetchInterval: isPolling ? 3000 : false,
+    refetchInterval: isPolling ? 15000 : false,
   })
 
   const wasRunningRef = useRef(false)
