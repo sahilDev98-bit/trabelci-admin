@@ -2,6 +2,7 @@ export interface BPAssignments {
   groups: AssignedGroup[]
   products: AssignedProduct[]
   exclusions: ExcludedProduct[]
+  groupExclusions: ExcludedGroup[]
 }
 
 export interface AssignedGroup {
@@ -30,6 +31,16 @@ export interface ExcludedProduct {
   product_id: number
   product_name?: string | null
   product_sku?: string | null
+  excluded_by: string | null
+  starts_at: string | null
+  expires_at: string | null
+  created_at: string | null
+}
+
+export interface ExcludedGroup {
+  id: number
+  group_id: number
+  group_name?: string | null
   excluded_by: string | null
   starts_at: string | null
   expires_at: string | null

@@ -62,6 +62,20 @@ async function removeExclusions({ bpId, payload }: { bpId: string; payload: Prod
   })
 }
 
+async function excludeGroups({ bpId, payload }: { bpId: string; payload: GroupIdsPayload }): Promise<void> {
+  await apiFetch(`${API_ENDPOINTS.BUSINESS_PARTNER_ASSIGNMENTS}/${bpId}/assignments/group-exclusions`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  })
+}
+
+async function removeGroupExclusions({ bpId, payload }: { bpId: string; payload: GroupIdsPayload }): Promise<void> {
+  await apiFetch(`${API_ENDPOINTS.BUSINESS_PARTNER_ASSIGNMENTS}/${bpId}/assignments/group-exclusions`, {
+    method: "DELETE",
+    body: JSON.stringify(payload),
+  })
+}
+
 async function fetchEffectiveProducts(bpId: string, page = 1, limit = 10): Promise<EffectiveProductsPage> {
   const res = await apiFetch<{ success: true; products: EffectiveProduct[]; total: number; page: number; limit: number }>(
     `${API_ENDPOINTS.BUSINESS_PARTNER_ASSIGNMENTS}/${bpId}/effective-products?page=${page}&limit=${limit}`,
@@ -159,6 +173,32 @@ export function useRemoveExclusionsMutation(bpId: string) {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (payload: ProductIdsPayload) => removeExclusions({ bpId, payload }),
+    onSuccess: async () => {
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: bpAssignmentKeys.assignments(bpId) }),
+        qc.invalidateQueries({ queryKey: bpAssignmentKeys.effectiveProducts(bpId) }),
+      ])
+    },
+  })
+}
+
+export function useExcludeGroupsMutation(bpId: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (payload: GroupIdsPayload) => excludeGroups({ bpId, payload }),
+    onSuccess: async () => {
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: bpAssignmentKeys.assignments(bpId) }),
+        qc.invalidateQueries({ queryKey: bpAssignmentKeys.effectiveProducts(bpId) }),
+      ])
+    },
+  })
+}
+
+export function useRemoveGroupExclusionsMutation(bpId: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (payload: GroupIdsPayload) => removeGroupExclusions({ bpId, payload }),
     onSuccess: async () => {
       await Promise.all([
         qc.invalidateQueries({ queryKey: bpAssignmentKeys.assignments(bpId) }),

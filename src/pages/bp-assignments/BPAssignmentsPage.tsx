@@ -45,6 +45,8 @@ import {
   useRemoveProductsMutation,
   useExcludeProductsMutation,
   useRemoveExclusionsMutation,
+  useExcludeGroupsMutation,
+  useRemoveGroupExclusionsMutation,
 } from "@/features/bpAssignments/api"
 import type { ProductGroup } from "@/features/productGroups/types"
 import type { Product } from "@/features/products/types"
@@ -303,6 +305,7 @@ export function BPAssignmentsPage() {
   const [assignGroupsOpen, setAssignGroupsOpen] = useState(false)
   const [addProductsOpen, setAddProductsOpen] = useState(false)
   const [addExclusionsOpen, setAddExclusionsOpen] = useState(false)
+  const [excludeGroupsOpen, setExcludeGroupsOpen] = useState(false)
 
   // Tabs (inside component so t() is available)
   const tabs = useMemo(() => [
@@ -343,6 +346,8 @@ export function BPAssignmentsPage() {
   const removeProductsMutation = useRemoveProductsMutation(bpIdForMutations)
   const excludeProductsMutation = useExcludeProductsMutation(bpIdForMutations)
   const removeExclusionsMutation = useRemoveExclusionsMutation(bpIdForMutations)
+  const excludeGroupsMutation = useExcludeGroupsMutation(bpIdForMutations)
+  const removeGroupExclusionsMutation = useRemoveGroupExclusionsMutation(bpIdForMutations)
 
   // Derived data: filter out already-assigned groups
   const assignedGroupIds = useMemo(
@@ -372,6 +377,16 @@ export function BPAssignmentsPage() {
   const availableForExclusion = useMemo(
     () => (allProducts ?? []).filter((p) => !excludedProductIds.has(p.id)),
     [allProducts, excludedProductIds],
+  )
+
+  // Derived data: filter out already-excluded groups
+  const excludedGroupIds = useMemo(
+    () => new Set((assignments?.groupExclusions ?? []).map((e) => String(e.group_id))),
+    [assignments],
+  )
+  const availableForGroupExclusion = useMemo(
+    () => (productGroups ?? []).filter((g) => !excludedGroupIds.has(g.id)),
+    [productGroups, excludedGroupIds],
   )
 
   const selectedBPName = useMemo(
@@ -442,6 +457,25 @@ export function BPAssignmentsPage() {
     })
   }
 
+  const handleExcludeGroups = async (groupIds: string[], startsAt?: string, expiresAt?: string) => {
+    await excludeGroupsMutation.mutateAsync({
+      groupIds: groupIds.map(Number),
+      startsAt: startsAt ? new Date(startsAt).toISOString() : undefined,
+      expiresAt: expiresAt ? new Date(expiresAt).toISOString() : undefined,
+    })
+    setExcludeGroupsOpen(false)
+    toast.success(t("bpAssignments.groupExcluded"), {
+      description: t("bpAssignments.groupExcludedDesc", { count: groupIds.length, name: selectedBPName ?? "business partner" }),
+    })
+  }
+
+  const handleRemoveGroupExclusion = async (groupId: string) => {
+    await removeGroupExclusionsMutation.mutateAsync({ groupIds: [Number(groupId)] })
+    toast.success(t("bpAssignments.groupExclusionRemoved"), {
+      description: t("bpAssignments.groupExclusionRemovedDesc"),
+    })
+  }
+
   return (
     <div className="grid gap-6">
       {/* Business Partner Selector */}
@@ -500,7 +534,7 @@ export function BPAssignmentsPage() {
                       ? assignments.groups.length
                       : tab.key === "products"
                         ? assignments.products.length
-                        : assignments.exclusions.length}
+                        : assignments.exclusions.length + (assignments.groupExclusions?.length ?? 0)}
                   </Badge>
                 ) : null}
               </button>
@@ -639,73 +673,139 @@ export function BPAssignmentsPage() {
             </Card>
           ) : null}
 
-          {/* Section C: Excluded Products */}
+          {/* Section C: Exclusions (groups + products) */}
           {activeTab === "exclusions" ? (
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between gap-4">
-                <div>
-                  <CardTitle>{t("bpAssignments.excludedProducts")}</CardTitle>
-                  <p className="mt-1 text-sm text-muted-foreground">
-                    {t("bpAssignments.excludedFrom", { name: selectedBPName })}
-                  </p>
-                </div>
-                <Button type="button" onClick={() => setAddExclusionsOpen(true)}>
-                  <Plus className="size-4" />
-                  {t("bpAssignments.addExclusion")}
-                </Button>
-              </CardHeader>
-              <CardContent>
-                <QueryStateWrapper
-                  isLoading={assignmentsLoading}
-                  isError={assignmentsError}
-                  error={assignmentsErrorObj}
-                  entityName="excluded products"
-                  isEmpty={!assignments || assignments.exclusions.length === 0}
-                  emptyMessage={t("bpAssignments.noExclusions")}
-                >
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>{t("products.sku")}</TableHead>
-                        <TableHead>{t("common.name")}</TableHead>
-                        <TableHead>{t("bpAssignments.excludedAt")}</TableHead>
-                        <TableHead>{t("bpAssignments.visibilityWindow")}</TableHead>
-                        <TableHead className="w-[120px] text-right">{t("common.actions")}</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {assignments?.exclusions.map((e) => (
-                        <TableRow key={e.id}>
-                          <TableCell className="font-mono text-xs sm:text-sm">
-                            {e.product_sku ?? "---"}
-                          </TableCell>
-                          <TableCell className="font-medium">
-                            {e.product_name ?? e.product_id}
-                          </TableCell>
-                          <TableCell className="text-sm text-muted-foreground">
-                            {formatDate(e.created_at)}
-                          </TableCell>
-                          <TableCell className="text-sm">
-                            <VisibilityWindowCell startsAt={e.starts_at} expiresAt={e.expires_at} t={t} />
-                          </TableCell>
-                          <TableCell className="text-right">
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              disabled={removeExclusionsMutation.isPending}
-                              onClick={() => handleRemoveExclusion(String(e.product_id))}
-                            >
-                              <Trash2 className="size-3.5" />
-                              {t("bpAssignments.removeExclusion")}
-                            </Button>
-                          </TableCell>
+            <div className="grid gap-4">
+              {/* C1: Excluded Groups */}
+              <Card>
+                <CardHeader className="flex flex-row items-center justify-between gap-4">
+                  <div>
+                    <CardTitle>{t("bpAssignments.excludedGroups")}</CardTitle>
+                    <p className="mt-1 text-sm text-muted-foreground">
+                      {t("bpAssignments.excludedFrom", { name: selectedBPName })}
+                    </p>
+                  </div>
+                  <Button type="button" onClick={() => setExcludeGroupsOpen(true)}>
+                    <Plus className="size-4" />
+                    {t("bpAssignments.excludeGroup")}
+                  </Button>
+                </CardHeader>
+                <CardContent>
+                  <QueryStateWrapper
+                    isLoading={assignmentsLoading}
+                    isError={assignmentsError}
+                    error={assignmentsErrorObj}
+                    entityName="excluded groups"
+                    isEmpty={!assignments || (assignments.groupExclusions?.length ?? 0) === 0}
+                    emptyMessage={t("bpAssignments.noGroupExclusions")}
+                  >
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>{t("bpAssignments.groupName")}</TableHead>
+                          <TableHead>{t("bpAssignments.excludedAt")}</TableHead>
+                          <TableHead>{t("bpAssignments.visibilityWindow")}</TableHead>
+                          <TableHead className="w-[120px] text-right">{t("common.actions")}</TableHead>
                         </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </QueryStateWrapper>
-              </CardContent>
-            </Card>
+                      </TableHeader>
+                      <TableBody>
+                        {assignments?.groupExclusions?.map((e) => (
+                          <TableRow key={e.id}>
+                            <TableCell className="font-medium">
+                              {e.group_name ?? e.group_id}
+                            </TableCell>
+                            <TableCell className="text-sm text-muted-foreground">
+                              {formatDate(e.created_at)}
+                            </TableCell>
+                            <TableCell className="text-sm">
+                              <VisibilityWindowCell startsAt={e.starts_at} expiresAt={e.expires_at} t={t} />
+                            </TableCell>
+                            <TableCell className="text-right">
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                disabled={removeGroupExclusionsMutation.isPending}
+                                onClick={() => handleRemoveGroupExclusion(String(e.group_id))}
+                              >
+                                <Trash2 className="size-3.5" />
+                                {t("bpAssignments.removeExclusion")}
+                              </Button>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </QueryStateWrapper>
+                </CardContent>
+              </Card>
+
+              {/* C2: Excluded Products */}
+              <Card>
+                <CardHeader className="flex flex-row items-center justify-between gap-4">
+                  <div>
+                    <CardTitle>{t("bpAssignments.excludedProducts")}</CardTitle>
+                    <p className="mt-1 text-sm text-muted-foreground">
+                      {t("bpAssignments.excludedFrom", { name: selectedBPName })}
+                    </p>
+                  </div>
+                  <Button type="button" onClick={() => setAddExclusionsOpen(true)}>
+                    <Plus className="size-4" />
+                    {t("bpAssignments.addExclusion")}
+                  </Button>
+                </CardHeader>
+                <CardContent>
+                  <QueryStateWrapper
+                    isLoading={assignmentsLoading}
+                    isError={assignmentsError}
+                    error={assignmentsErrorObj}
+                    entityName="excluded products"
+                    isEmpty={!assignments || assignments.exclusions.length === 0}
+                    emptyMessage={t("bpAssignments.noExclusions")}
+                  >
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>{t("products.sku")}</TableHead>
+                          <TableHead>{t("common.name")}</TableHead>
+                          <TableHead>{t("bpAssignments.excludedAt")}</TableHead>
+                          <TableHead>{t("bpAssignments.visibilityWindow")}</TableHead>
+                          <TableHead className="w-[120px] text-right">{t("common.actions")}</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {assignments?.exclusions.map((e) => (
+                          <TableRow key={e.id}>
+                            <TableCell className="font-mono text-xs sm:text-sm">
+                              {e.product_sku ?? "---"}
+                            </TableCell>
+                            <TableCell className="font-medium">
+                              {e.product_name ?? e.product_id}
+                            </TableCell>
+                            <TableCell className="text-sm text-muted-foreground">
+                              {formatDate(e.created_at)}
+                            </TableCell>
+                            <TableCell className="text-sm">
+                              <VisibilityWindowCell startsAt={e.starts_at} expiresAt={e.expires_at} t={t} />
+                            </TableCell>
+                            <TableCell className="text-right">
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                disabled={removeExclusionsMutation.isPending}
+                                onClick={() => handleRemoveExclusion(String(e.product_id))}
+                              >
+                                <Trash2 className="size-3.5" />
+                                {t("bpAssignments.removeExclusion")}
+                              </Button>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </QueryStateWrapper>
+                </CardContent>
+              </Card>
+            </div>
           ) : null}
 
           {/* Effective Products Preview */}
@@ -851,6 +951,23 @@ export function BPAssignmentsPage() {
         confirmLabel={t("bpAssignments.exclude")}
         isPending={excludeProductsMutation.isPending}
         onConfirm={handleExcludeProducts}
+      />
+
+      {/* Exclude Groups Dialog */}
+      <SelectionDialog<ProductGroup>
+        open={excludeGroupsOpen}
+        onOpenChange={setExcludeGroupsOpen}
+        title={t("bpAssignments.excludeGroupsTitle")}
+        description={t("bpAssignments.excludeGroupsDesc", { name: selectedBPName ?? "this business partner" })}
+        items={availableForGroupExclusion}
+        isLoading={groupsLoading}
+        getKey={(g) => g.id}
+        getLabel={(g) => g.name}
+        getSubLabel={(g) => `${g.productCount} product${g.productCount === 1 ? "" : "s"}`}
+        searchPlaceholder={t("bpAssignments.searchGroups")}
+        confirmLabel={t("bpAssignments.exclude")}
+        isPending={excludeGroupsMutation.isPending}
+        onConfirm={handleExcludeGroups}
       />
     </div>
   )

@@ -2,7 +2,7 @@ import { useTranslation } from "react-i18next"
 import { Button } from "@/components/ui/button"
 import type { FieldDefinition } from "@/features/fieldVisibility/types"
 
-const GROUP_LABELS: Record<string, string> = {
+const GROUP_FALLBACKS: Record<string, string> = {
   basic: "Basic Info",
   pricing: "Pricing",
   stock: "Stock",
@@ -23,7 +23,7 @@ export function FieldCheckboxGrid({ fields, selected, onChange }: FieldCheckboxG
 
   const grouped = GROUP_ORDER.map((group) => ({
     group,
-    label: GROUP_LABELS[group] ?? group,
+    label: t(`fieldVisibility.groups.${group}`, GROUP_FALLBACKS[group] ?? group),
     items: fields.filter((f) => f.group === group),
   })).filter((g) => g.items.length > 0)
 
@@ -79,7 +79,7 @@ export function FieldCheckboxGrid({ fields, selected, onChange }: FieldCheckboxG
                     onChange={() => handleToggle(field.key)}
                     className="size-4 rounded border-border accent-primary"
                   />
-                  <span>{field.label}</span>
+                  <span>{t(`fieldVisibility.fields.${field.key}`, field.label)}</span>
                 </label>
               ))}
             </div>
