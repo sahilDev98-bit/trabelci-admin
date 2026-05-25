@@ -25,9 +25,16 @@ export interface BPUser {
 export interface CreateBusinessPartnerInput {
   name: string
   email: string
+  card_code?: string
+  card_name?: string
 }
 
 export interface UpdateBusinessPartnerInput {
   name: string
   email: string
+}
+
+export interface SapBpLookupResult {
+  CardCode: string
+  CardName: string
 }

@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { apiFetch } from "@/lib/apiClient"
 import { API_ENDPOINTS } from "@/lib/apiEndpoints"
 import { businessPartnersQueryKeys } from "./queryKeys"
-import type { CreateBusinessPartnerInput, UpdateBusinessPartnerInput, BusinessPartner, BPUser } from "./types"
+import type { CreateBusinessPartnerInput, UpdateBusinessPartnerInput, BusinessPartner, BPUser, SapBpLookupResult } from "./types"
 
 type BusinessPartnerRow = {
   id: number
@@ -65,6 +65,15 @@ async function createBusinessPartner(input: CreateBusinessPartnerInput): Promise
     method: "POST",
     body: JSON.stringify(input),
   })
+}
+
+export async function lookupSapBp(cardCode: string): Promise<SapBpLookupResult> {
+  const params = new URLSearchParams({ cardCode })
+  const res = await apiFetch<{ success: true; sapBusinessPartner: SapBpLookupResult }>(
+    `${API_ENDPOINTS.BUSINESS_PARTNERS}/sap-lookup?${params}`,
+    { method: "GET" },
+  )
+  return res.sapBusinessPartner
 }
 
 async function fetchBusinessPartner(id: string): Promise<BusinessPartner> {

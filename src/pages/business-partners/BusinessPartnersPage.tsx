@@ -2,7 +2,7 @@ import { useState } from "react"
 import { useNavigate } from "@tanstack/react-router"
 import { useTranslation } from "react-i18next"
 import { useForm } from "react-hook-form"
-import { MoreVerticalIcon, RefreshCwIcon } from "lucide-react"
+import { CheckCircle2Icon, ChevronDownIcon, ChevronUpIcon, Loader2Icon, MoreVerticalIcon, RefreshCwIcon, XCircleIcon } from "lucide-react"
 import { toast } from "sonner"
 
 import { ErrorMessage } from "@/components/ErrorMessage"
@@ -35,8 +35,9 @@ import {
   useUpdateBusinessPartnerMutation,
   useDeleteBusinessPartnerMutation,
   useToggleBusinessPartnerActiveMutation,
+  lookupSapBp,
 } from "@/features/businessPartners/api"
-import type { BusinessPartner, CreateBusinessPartnerInput } from "@/features/businessPartners/types"
+import type { BusinessPartner, CreateBusinessPartnerInput, SapBpLookupResult } from "@/features/businessPartners/types"
 
 type FormValues = CreateBusinessPartnerInput
 
@@ -62,9 +63,48 @@ export function BusinessPartnersPage() {
   const [pendingDelete, setPendingDelete] = useState<BusinessPartner | null>(null)
   const [togglingId, setTogglingId] = useState<string | null>(null)
 
+  // SAP link state
+  const [sapSectionOpen, setSapSectionOpen] = useState(false)
+  const [sapCodeInput, setSapCodeInput] = useState("")
+  const [sapLookupLoading, setSapLookupLoading] = useState(false)
+  const [sapLookupResult, setSapLookupResult] = useState<SapBpLookupResult | null>(null)
+  const [sapLookupError, setSapLookupError] = useState<string | null>(null)
+  const [linkedSapBp, setLinkedSapBp] = useState<SapBpLookupResult | null>(null)
+
+  const resetSapState = () => {
+    setSapCodeInput("")
+    setSapLookupResult(null)
+    setSapLookupError(null)
+    setLinkedSapBp(null)
+    setSapSectionOpen(false)
+  }
+
+  const handleSapLookup = async () => {
+    const code = sapCodeInput.trim()
+    if (!code) return
+    setSapLookupLoading(true)
+    setSapLookupResult(null)
+    setSapLookupError(null)
+    try {
+      const result = await lookupSapBp(code)
+      setSapLookupResult(result)
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "SAP lookup failed"
+      setSapLookupError(msg)
+    } finally {
+      setSapLookupLoading(false)
+    }
+  }
+
   const onCreateSubmit = async (values: FormValues) => {
-    await createMutation.mutateAsync({ name: values.name, email: values.email })
+    const payload: CreateBusinessPartnerInput = { name: values.name, email: values.email }
+    if (linkedSapBp) {
+      payload.card_code = linkedSapBp.CardCode
+      payload.card_name = linkedSapBp.CardName
+    }
+    await createMutation.mutateAsync(payload)
     createForm.reset({ name: "", email: "" })
+    resetSapState()
     toast.success(t("businessPartners.bpCreated"))
   }
 
@@ -108,16 +148,96 @@ export function BusinessPartnersPage() {
             <CardTitle>{t("businessPartners.createTitle")}</CardTitle>
           </CardHeader>
           <CardContent>
-            <form className="flex flex-col gap-4 sm:flex-row sm:items-end" onSubmit={createForm.handleSubmit(onCreateSubmit)}>
-              <div className="flex-1">
-                <Label htmlFor="name" className="mb-4">{t("businessPartners.bpName")}</Label>
-                <Input id="name" required autoComplete="organization" {...createForm.register("name")} />
+            <form className="flex flex-col gap-4" onSubmit={createForm.handleSubmit(onCreateSubmit)}>
+              <div className="flex flex-col gap-4 sm:flex-row sm:items-end">
+                <div className="flex-1">
+                  <Label htmlFor="name" className="mb-2 block">{t("businessPartners.bpName")}</Label>
+                  <Input id="name" required autoComplete="organization" {...createForm.register("name")} />
+                </div>
+                <div className="flex-1">
+                  <Label htmlFor="email" className="mb-2 block">{t("common.email")}</Label>
+                  <Input id="email" type="email" required autoComplete="email" {...createForm.register("email")} />
+                </div>
               </div>
-              <div className="flex-1">
-                <Label htmlFor="email" className="mb-4">{t("common.email")}</Label>
-                <Input id="email" type="email" required autoComplete="email" {...createForm.register("email")} />
+
+              {/* SAP Link Section */}
+              <div className="rounded-md border">
+                <button
+                  type="button"
+                  className="flex w-full items-center justify-between px-4 py-3 text-sm font-medium text-muted-foreground hover:text-foreground"
+                  onClick={() => setSapSectionOpen((v) => !v)}
+                >
+                  <span>{t("businessPartners.sapLinkTitle")}</span>
+                  {sapSectionOpen ? <ChevronUpIcon className="h-4 w-4" /> : <ChevronDownIcon className="h-4 w-4" />}
+                </button>
+
+                {sapSectionOpen && (
+                  <div className="border-t px-4 pb-4 pt-3 flex flex-col gap-3">
+                    <p className="text-xs text-muted-foreground">{t("businessPartners.sapLinkHint")}</p>
+
+                    {linkedSapBp ? (
+                      <div className="flex items-center gap-2 rounded-md bg-green-50 px-3 py-2 text-sm text-green-800 dark:bg-green-950 dark:text-green-200">
+                        <CheckCircle2Icon className="h-4 w-4 shrink-0" />
+                        <span className="flex-1">
+                          {t("businessPartners.willLinkTo")}: <strong>{linkedSapBp.CardName}</strong> ({linkedSapBp.CardCode})
+                        </span>
+                        <button
+                          type="button"
+                          className="text-xs underline"
+                          onClick={() => { setLinkedSapBp(null); setSapLookupResult(null) }}
+                        >
+                          {t("businessPartners.removeLink")}
+                        </button>
+                      </div>
+                    ) : (
+                      <>
+                        <div className="flex gap-2">
+                          <Input
+                            placeholder={t("businessPartners.sapCardCodePlaceholder")}
+                            value={sapCodeInput}
+                            onChange={(e) => { setSapCodeInput(e.target.value); setSapLookupResult(null); setSapLookupError(null) }}
+                            onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); handleSapLookup() } }}
+                          />
+                          <Button
+                            type="button"
+                            variant="outline"
+                            disabled={!sapCodeInput.trim() || sapLookupLoading}
+                            onClick={handleSapLookup}
+                          >
+                            {sapLookupLoading ? <Loader2Icon className="h-4 w-4 animate-spin" /> : t("businessPartners.checkSap")}
+                          </Button>
+                        </div>
+
+                        {sapLookupError && (
+                          <div className="flex items-center gap-2 text-sm text-destructive">
+                            <XCircleIcon className="h-4 w-4 shrink-0" />
+                            <span>{sapLookupError}</span>
+                          </div>
+                        )}
+
+                        {sapLookupResult && (
+                          <div className="rounded-md border bg-muted/40 p-3 text-sm flex flex-col gap-2">
+                            <div className="flex items-center gap-2 font-medium text-green-700 dark:text-green-400">
+                              <CheckCircle2Icon className="h-4 w-4" />
+                              {t("businessPartners.sapCustomerFound")}
+                            </div>
+                            <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                              <span className="font-medium text-foreground">{t("common.name")}</span><span>{sapLookupResult.CardName}</span>
+                              <span className="font-medium text-foreground">{t("businessPartners.cardCode")}</span><span>{sapLookupResult.CardCode}</span>
+                            </div>
+                            <p className="text-xs text-amber-600 dark:text-amber-400">{t("businessPartners.sapNameOverrideNote")}</p>
+                            <Button type="button" size="sm" onClick={() => setLinkedSapBp(sapLookupResult)}>
+                              {t("businessPartners.linkToThisCustomer")}
+                            </Button>
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </div>
+                )}
               </div>
-              <div className="flex gap-2">
+
+              <div>
                 <Button type="submit" disabled={createMutation.isPending}>
                   {createMutation.isPending ? t("common.creating") : t("common.create")}
                 </Button>
@@ -168,8 +288,8 @@ export function BusinessPartnersPage() {
                       <TableCell className="text-sm text-muted-foreground">{bp.email ?? t("common.noData")}</TableCell>
                       <TableCell className="text-sm text-muted-foreground">{bp.cardCode ?? t("common.noData")}</TableCell>
                       <TableCell>
-                        <Badge variant={bp.sapSyncStatus === "synced" ? "default" : "secondary"}>
-                          {bp.sapSyncStatus === "synced" ? t("common.synced") : t("common.pending")}
+                        <Badge variant={bp.sapSyncStatus === "synced" || bp.sapSyncStatus === "manually_linked" ? "default" : "secondary"}>
+                          {bp.sapSyncStatus === "synced" ? t("common.synced") : bp.sapSyncStatus === "manually_linked" ? t("businessPartners.manuallyLinked") : t("common.pending")}
                         </Badge>
                       </TableCell>
                       <TableCell>
