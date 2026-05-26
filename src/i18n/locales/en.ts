@@ -429,7 +429,7 @@ const en = {
     editTitle: "Edit Business Partner",
     editDesc: "Update the business partner name and email.",
     deleteTitle: "Delete business partner?",
-    deleteDesc: "This will permanently remove",
+    deleteDesc: "This will permanently remove the business partner and all its linked users:",
     sapLinkTitle: "Link to existing SAP customer (optional)",
     sapLinkHint: "Leave blank to auto-create a new SAP record. Only fill this if the business already exists in SAP.",
     sapCardCodePlaceholder: "SAP Card Code",
