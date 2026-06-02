@@ -19,5 +19,10 @@ export const ROUTES = {
   WHATSAPP_TEMPLATES: "/whatsapp-templates",
   BRANDING: "/branding",
   FIELD_VISIBILITY: "/field-visibility",
+  SKU_MANAGEMENT: "/sku-management",
+  SKU_MANAGEMENT_NEW: "/sku-management/new",
+  SKU_MANAGEMENT_CLEANUP: "/sku-management/cleanup",
+  SKU_MANAGEMENT_DROPDOWNS: "/sku-management/dropdowns",
+  SKU_MANAGEMENT_TEMPLATES: "/sku-management/templates",
   SETTINGS: "/settings",
 } as const

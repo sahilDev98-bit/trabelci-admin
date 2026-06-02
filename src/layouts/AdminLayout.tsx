@@ -24,6 +24,7 @@ import {
   // MessageSquareIcon,
   // PaletteIcon,
   EyeIcon,
+  ScanBarcodeIcon,
 } from "lucide-react"
 
 import { useQueryClient } from "@tanstack/react-query"
@@ -123,6 +124,19 @@ const navEntries: NavEntry[] = [
   // { type: "link", to: ROUTES.WHATSAPP_TEMPLATES, icon: MessageSquareIcon, labelKey: "nav.whatsappTemplates", adminOnly: true },
   // { type: "link", to: ROUTES.BRANDING, icon: PaletteIcon, labelKey: "nav.branding", adminOnly: true },
   { type: "link", to: ROUTES.FIELD_VISIBILITY, icon: EyeIcon, labelKey: "nav.fieldVisibility", adminOnly: true },
+  {
+    type: "group",
+    key: "sku",
+    icon: ScanBarcodeIcon,
+    labelKey: "nav.skuManagement",
+    adminOnly: true,
+    children: [
+      { type: "link", to: ROUTES.SKU_MANAGEMENT_NEW, icon: PackageIcon, labelKey: "nav.skuNew", adminOnly: true },
+      { type: "link", to: ROUTES.SKU_MANAGEMENT_CLEANUP, icon: LayersIcon, labelKey: "nav.skuCleanup", adminOnly: true },
+      { type: "link", to: ROUTES.SKU_MANAGEMENT_DROPDOWNS, icon: FolderTreeIcon, labelKey: "nav.skuDropdowns", adminOnly: true },
+      { type: "link", to: ROUTES.SKU_MANAGEMENT_TEMPLATES, icon: SettingsIcon, labelKey: "nav.skuTemplates", adminOnly: true },
+    ],
+  },
   { type: "link", to: ROUTES.SETTINGS, icon: SettingsIcon, labelKey: "nav.settings" },
 ]
 

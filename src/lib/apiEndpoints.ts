@@ -30,4 +30,17 @@ export const API_ENDPOINTS = {
   FIELD_VISIBILITY: "/admin/field-visibility",
   FIELD_VISIBILITY_FIELDS: "/admin/field-visibility/fields",
   FIELD_VISIBILITY_BP_USERS: "/admin/field-visibility/merchants",
+
+  // SKU Management Platform
+  SKU_METADATA: "/sku/metadata",
+  SKU_METADATA_BULK: "/sku/metadata/bulk",
+  SKU_DROPDOWNS: "/sku/dropdowns",
+  SKU_TEMPLATES: "/sku/templates",
+  SKU_VALIDATE: "/sku/validate",
+  SKU_CHECK_DUPLICATES: "/sku/check-duplicates",
+  SKU_GENERATE_NAME: "/sku/generate-name",
+  SKU_SUBMIT_TO_SAP: "/sku/submit-to-sap",
+  SKU_IMPORT_SAP_ITEMS: "/sku/import-sap-items",
+  SKU_CLEANUP_STATS: "/sku/cleanup-stats",
+  SKU_AUDIT_LOG: "/sku/audit-log",
 } as const

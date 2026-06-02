@@ -38,6 +38,11 @@ const HomepagePage = lazy(() => import("@/pages/homepage/HomepagePage").then(m =
 const WhatsAppTemplatesPage = lazy(() => import("@/pages/whatsapp-templates/WhatsAppTemplatesPage").then(m => ({ default: m.WhatsAppTemplatesPage })))
 const BrandingPage = lazy(() => import("@/pages/branding/BrandingPage").then(m => ({ default: m.BrandingPage })))
 const FieldVisibilityPage = lazy(() => import("@/pages/field-visibility/FieldVisibilityPage").then(m => ({ default: m.FieldVisibilityPage })))
+const SkuManagementPage = lazy(() => import("@/pages/sku-management/SkuManagementPage").then(m => ({ default: m.SkuManagementPage })))
+const SkuNewCreationPage = lazy(() => import("@/pages/sku-management/SkuNewCreationPage").then(m => ({ default: m.SkuNewCreationPage })))
+const SkuCleanupPage = lazy(() => import("@/pages/sku-management/SkuCleanupPage").then(m => ({ default: m.SkuCleanupPage })))
+const SkuDropdownsPage = lazy(() => import("@/pages/sku-management/SkuDropdownsPage").then(m => ({ default: m.SkuDropdownsPage })))
+const SkuTemplatesPage = lazy(() => import("@/pages/sku-management/SkuTemplatesPage").then(m => ({ default: m.SkuTemplatesPage })))
 
 const SuspenseFallback = (
   <div className="flex min-h-screen items-center justify-center">
@@ -263,6 +268,56 @@ const fieldVisibilityRoute = createRoute({
   ),
 })
 
+const skuManagementRoute = createRoute({
+  getParentRoute: () => appLayoutRoute,
+  path: "/sku-management",
+  component: () => (
+    <RequireRole allowedRoles={[USER_ROLES.ADMIN]}>
+      <SkuManagementPage />
+    </RequireRole>
+  ),
+})
+
+const skuNewCreationRoute = createRoute({
+  getParentRoute: () => appLayoutRoute,
+  path: "/sku-management/new",
+  component: () => (
+    <RequireRole allowedRoles={[USER_ROLES.ADMIN]}>
+      <SkuNewCreationPage />
+    </RequireRole>
+  ),
+})
+
+const skuCleanupRoute = createRoute({
+  getParentRoute: () => appLayoutRoute,
+  path: "/sku-management/cleanup",
+  component: () => (
+    <RequireRole allowedRoles={[USER_ROLES.ADMIN]}>
+      <SkuCleanupPage />
+    </RequireRole>
+  ),
+})
+
+const skuDropdownsRoute = createRoute({
+  getParentRoute: () => appLayoutRoute,
+  path: "/sku-management/dropdowns",
+  component: () => (
+    <RequireRole allowedRoles={[USER_ROLES.ADMIN]}>
+      <SkuDropdownsPage />
+    </RequireRole>
+  ),
+})
+
+const skuTemplatesRoute = createRoute({
+  getParentRoute: () => appLayoutRoute,
+  path: "/sku-management/templates",
+  component: () => (
+    <RequireRole allowedRoles={[USER_ROLES.ADMIN]}>
+      <SkuTemplatesPage />
+    </RequireRole>
+  ),
+})
+
 const routeTree = rootRoute.addChildren([
   loginRoute,
   forgotPasswordRoute,
@@ -286,6 +341,11 @@ const routeTree = rootRoute.addChildren([
     whatsappTemplatesRoute,
     brandingRoute,
     fieldVisibilityRoute,
+    skuManagementRoute,
+    skuNewCreationRoute,
+    skuCleanupRoute,
+    skuDropdownsRoute,
+    skuTemplatesRoute,
   ]),
 ])
 
