@@ -39,6 +39,7 @@ export const API_ENDPOINTS = {
   SKU_VALIDATE: "/sku/validate",
   SKU_CHECK_DUPLICATES: "/sku/check-duplicates",
   SKU_GENERATE_NAME: "/sku/generate-name",
+  SKU_UPLOAD_IMAGE: "/sku/upload-image",
   SKU_SUBMIT_TO_SAP: "/sku/submit-to-sap",
   SKU_IMPORT_SAP_ITEMS: "/sku/import-sap-items",
   SKU_CLEANUP_STATS: "/sku/cleanup-stats",

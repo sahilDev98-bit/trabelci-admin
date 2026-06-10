@@ -17,6 +17,7 @@ export interface SkuMetadataRow {
 
   company?: string;
   supplier?: string;
+  supplier_code?: string;
   series?: string;
   model?: string;
   color?: string;
@@ -35,6 +36,12 @@ export interface SkuMetadataRow {
   sap_item_name?: string;
   internal_notes?: string;
 
+  // Image URLs — files live in Cloudflare R2; product images are multiple
+  // (mirrors the product table's cover_url + images pattern)
+  product_image_urls?: string[];
+  cover_image_url?: string;
+  ambience_image_url?: string;
+
   original_sap_name?: string;
   original_sap_description?: string;
 
@@ -44,12 +51,20 @@ export interface SkuMetadataRow {
   created_at?: string;
   updated_at?: string;
 
+  // Transient wire field — set only when saving a row whose SKU the user
+  // edited; tells the backend to rename the stored record instead of
+  // inserting a new one. Never persisted.
+  previous_sku?: string;
+
   // Client-only — not persisted
   _validationStatus?: SkuValidationStatus;
   _validationErrors?: SkuValidationError[];
   _validationWarnings?: SkuValidationError[];
   _duplicates?: SkuDuplicate[];
   _isDirty?: boolean;
+  _clientId?: string;
+  /** SKU this row is currently stored under in the DB (set on load/save) */
+  _savedSku?: string;
 }
 
 export interface SkuValidationError {
@@ -58,7 +73,13 @@ export interface SkuValidationError {
 }
 
 export interface SkuDuplicate {
-  type: 'exact_sku' | 'existing_product' | 'structural';
+  type:
+    | 'exact_sku'           // same SKU in sku_metadata, or repeated within the batch
+    | 'existing_product'    // SKU exists in the synced product table
+    | 'sap_itemcode'        // ItemCode exists in SAP (OITM, direct check)
+    | 'structural'          // same company/series/color/size/finish within the batch
+    | 'structural_existing' // same structure as an already-saved record
+    | 'supplier_code'       // same supplier code (secondary signal, never blocks)
   message: string;
   matchedSku: string;
 }
@@ -129,7 +150,9 @@ export interface SkuImportResult {
 }
 
 export interface SkuSubmitToSapResult {
-  created: Array<{ sku: string; sapResponse: unknown }>;
+  /** sku = final SAP ItemCode; originalSku = the sheet's SKU before SAP
+   *  auto-assignment (differs for NEW-… rows) */
+  created: Array<{ sku: string; originalSku?: string; sapResponse: unknown }>;
   failed: Array<{ sku: string; error: string }>;
 }
 

@@ -151,6 +151,23 @@ export async function generateSkuName(
   })
 }
 
+export type SkuImageType = "product" | "cover" | "ambience"
+
+export async function uploadSkuImage(
+  file: File,
+  imageType: SkuImageType,
+  sku?: string
+): Promise<{ url: string }> {
+  const form = new FormData()
+  form.append("file", file)
+  form.append("imageType", imageType)
+  if (sku) form.append("sku", sku)
+  return apiFetch(API_ENDPOINTS.SKU_UPLOAD_IMAGE, {
+    method: "POST",
+    body: form,
+  })
+}
+
 export async function submitSkusToSap(
   skus: string[]
 ): Promise<SkuSubmitToSapResult> {

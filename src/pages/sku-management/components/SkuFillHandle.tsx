@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import type { AgGridReact } from "ag-grid-react"
+import type { CellFocusedEvent } from "ag-grid-community"
 import type { SkuMetadataRow } from "@/features/skuManagement/types"
 
 // ─── Smart fill value logic ──────────────────────────────────────────────────
@@ -8,10 +9,16 @@ import type { SkuMetadataRow } from "@/features/skuManagement/types"
 //   "3"          → 4, 5, 6  …   (pure integer)
 //   "Series 3"   → Series 4, Series 5 … (text + trailing integer)
 //   "La Fabbrica"→ La Fabbrica, La Fabbrica … (no number → repeat)
+//
+// repeatOnly: dropdown-controlled fields must hold exact vocabulary values,
+// so incrementing (e.g. "60x120" → "60x121") would produce invalid options —
+// those fields always copy the value down unchanged.
 
-function smartFillValues(source: unknown, count: number): unknown[] {
+function smartFillValues(source: unknown, count: number, repeatOnly = false): unknown[] {
   if (count <= 0) return []
   const str = String(source ?? "")
+
+  if (repeatOnly) return Array(count).fill(str)
 
   // Pure integer
   if (/^\d+$/.test(str)) {
@@ -72,6 +79,8 @@ interface SkuFillHandleProps {
   gridRef: React.RefObject<AgGridReact<SkuMetadataRow> | null>
   rows: SkuMetadataRow[]
   onFill: (updates: FillUpdate[]) => void
+  /** Fields whose values are copied down as-is (no numeric increment) — dropdown-controlled columns */
+  repeatOnlyFields?: string[]
 }
 
 // ─── Component ───────────────────────────────────────────────────────────────
@@ -81,6 +90,7 @@ export function SkuFillHandle({
   gridRef,
   rows,
   onFill,
+  repeatOnlyFields,
 }: SkuFillHandleProps) {
   const [handlePos, setHandlePos] = useState<{ left: number; top: number } | null>(null)
   const focusedCell = useRef<{ rowIndex: number; colId: string } | null>(null)
@@ -95,8 +105,8 @@ export function SkuFillHandle({
     const api = gridRef.current?.api
     if (!api) return
 
-    const onFocus = (e: any) => {
-      if (e.rowIndex == null || !e.column) {
+    const onFocus = (e: CellFocusedEvent) => {
+      if (e.rowIndex == null || !e.column || typeof e.column === "string") {
         focusedCell.current = null
         setHandlePos(null)
         return
@@ -107,7 +117,11 @@ export function SkuFillHandle({
 
     api.addEventListener("cellFocused", onFocus)
     return () => {
-      try { api.removeEventListener("cellFocused", onFocus) } catch {}
+      try {
+        api.removeEventListener("cellFocused", onFocus)
+      } catch {
+        // grid may already be destroyed during unmount
+      }
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [gridRef.current?.api])
@@ -155,7 +169,8 @@ export function SkuFillHandle({
       if (selectedNodes.length === 0) return
 
       e.preventDefault()
-      const fillVals = smartFillValues(sourceValue, selectedNodes.length)
+      const repeatOnly = repeatOnlyFields?.includes(fc.colId) ?? false
+      const fillVals = smartFillValues(sourceValue, selectedNodes.length, repeatOnly)
       const updates: FillUpdate[] = selectedNodes
         .sort((a, b) => (a.rowIndex ?? 0) - (b.rowIndex ?? 0))
         .map((n, i) => ({
@@ -169,7 +184,7 @@ export function SkuFillHandle({
 
     document.addEventListener("keydown", handleKeyDown)
     return () => document.removeEventListener("keydown", handleKeyDown)
-  }, [gridRef, onFill])
+  }, [gridRef, onFill, repeatOnlyFields])
 
   // ── Mouse drag ────────────────────────────────────────────────────────────
   const handleMouseDown = useCallback(
@@ -245,7 +260,8 @@ export function SkuFillHandle({
         if (endRow == null || endRow <= fc.rowIndex) return
 
         const count = endRow - fc.rowIndex
-        const fillVals = smartFillValues(sourceValue, count)
+        const repeatOnly = repeatOnlyFields?.includes(fc.colId) ?? false
+        const fillVals = smartFillValues(sourceValue, count, repeatOnly)
 
         const updates: FillUpdate[] = []
         for (let i = 0; i < count; i++) {
@@ -262,7 +278,7 @@ export function SkuFillHandle({
       document.addEventListener("mousemove", onMouseMove)
       document.addEventListener("mouseup", onMouseUp)
     },
-    [containerRef, gridRef, onFill]
+    [containerRef, gridRef, onFill, repeatOnlyFields]
   )
 
   // Cleanup overlay on unmount

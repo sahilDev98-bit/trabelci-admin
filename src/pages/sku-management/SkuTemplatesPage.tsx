@@ -18,7 +18,8 @@ import type { SkuTemplate } from "@/features/skuManagement/types"
 const AVAILABLE_FIELDS = [
   "company", "series", "color", "size", "finish",
   "country_of_origin", "thickness", "r_rating", "surface_type",
-  "supplier", "model", "subcategory", "product_type",
+  "supplier", "supplier_code", "model", "subcategory", "product_type",
+  "product_image_urls", "cover_image_url", "ambience_image_url",
 ]
 
 const SAMPLE_ROW: Record<string, string> = {
