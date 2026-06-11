@@ -747,6 +747,7 @@ const en = {
       removeImage: "Remove image",
       duplicateSkuInSheet: 'SKU "{{sku}}" is used on more than one row — SKU / ItemCode must be unique. Fix the red cells first.',
       duplicateSkuTooltip: "Duplicate SKU — this code is already used on another row. SKU / ItemCode must be unique.",
+      fillColumnMismatch: "Same column only",
       approveBlocked: "{{count}} row(s) cannot be approved — fix the red errors first",
     },
 

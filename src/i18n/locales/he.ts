@@ -731,6 +731,7 @@ const he = {
       removeImage: "הסר תמונה",
       duplicateSkuInSheet: 'SKU "{{sku}}" מופיע ביותר משורה אחת — קוד הפריט חייב להיות ייחודי. תקנו תחילה את התאים האדומים.',
       duplicateSkuTooltip: "SKU כפול — קוד זה כבר בשימוש בשורה אחרת. קוד הפריט חייב להיות ייחודי.",
+      fillColumnMismatch: "אותה עמודה בלבד",
       approveBlocked: "{{count}} שורות לא ניתנות לאישור — תקנו קודם את השגיאות האדומות",
     },
 

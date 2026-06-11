@@ -14,7 +14,8 @@ import {
   useSkuSubmitToSapMutation,
 } from "@/features/skuManagement/api"
 import type { SkuMetadataRow } from "@/features/skuManagement/types"
-import { SkuGrid } from "./components/SkuGrid"
+import { SkuSheetCeramic } from "./components/SkuSheetCeramic"
+// Rollback to the AG Grid sheet: import { SkuGrid } from "./components/SkuGrid"
 // Right-side details panel — temporarily hidden (doc point 29 lists it as
 // optional). Uncomment the related blocks below to bring it back.
 // import { SkuDetailPanel } from "./components/SkuDetailPanel"
@@ -466,17 +467,13 @@ function CreationSheet({ initialRows }: { initialRows: SkuMetadataRow[] }) {
       {/* Grid + detail panel */}
       <div className="flex flex-1 overflow-hidden">
         <div className="flex-1 overflow-hidden p-4">
-          <SkuGrid
+          <SkuSheetCeramic
             rows={rows}
             onRowsChange={handleRowsChange}
             dropdowns={dropdowns}
-            mode="creation"
-            enableSelection={false}
             createEmptyRow={makeEmptyRow}
             onUndo={undo}
             onRedo={redo}
-            // Details panel — temporarily hidden
-            // onActiveRowChange={setActiveRow}
           />
         </div>
         {/* Right-side details panel — temporarily hidden
