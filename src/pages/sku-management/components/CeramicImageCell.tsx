@@ -16,6 +16,7 @@ interface CeramicImageCellProps {
   imageType: SkuImageType
   multiple: boolean
   rowIndex: number
+  colIndex: number
   onRowChange: (updatedRow: SkuMetadataRow) => void
   onFillStart: (
     startRow: number,
@@ -63,6 +64,7 @@ export function CeramicImageCell({
   imageType,
   multiple,
   rowIndex,
+  colIndex,
   onRowChange,
   onFillStart,
 }: CeramicImageCellProps) {
@@ -176,6 +178,7 @@ export function CeramicImageCell({
           aria-label={t("sku.grid.uploadImage")}
           data-fill-cell
           data-row={rowIndex}
+          data-col={colIndex}
           data-field={field}
           onClick={triggerUpload}
           onKeyDown={handleKeyDown}
@@ -201,6 +204,7 @@ export function CeramicImageCell({
           className="ceramic-img-group"
           data-fill-cell
           data-row={rowIndex}
+          data-col={colIndex}
           data-field={field}
         >
           {urls.slice(0, MAX_VISIBLE_THUMBS).map((url) => (

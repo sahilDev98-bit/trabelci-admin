@@ -31,7 +31,8 @@ export interface SkuSheetCeramicProps {
   rows: SkuMetadataRow[]
   onRowsChange: (rows: SkuMetadataRow[]) => void
   dropdowns: SkuDropdownMap
-  createEmptyRow: () => SkuMetadataRow
+  /** Kept for API compatibility (used previously by multi-row paste) */
+  createEmptyRow?: () => SkuMetadataRow
   onUndo: () => void
   onRedo: () => void
 }
@@ -81,9 +82,6 @@ const COLUMNS: CeramicColumn[] = [
   { field: "status",             type: "readonly",     minWidth: 110 },
 ]
 
-const WRITABLE_FIELDS = new Set(
-  COLUMNS.filter((c) => c.type === "text" || c.type === "dropdown").map((c) => c.field),
-)
 function getHeaderKey(field: string): string {
   if (field === "rowNumber") return "#"
   return `sku.fields.${field}`
@@ -125,16 +123,16 @@ const CERAMIC_CSS = `
     --ceramic-head-text: #1f2433;
     --ceramic-head-border: rgba(30, 36, 60, 0.12);
     --ceramic-muted-text: #8a90a8;
-    /* warm ivory-family chip with neutral ink digits */
-    --ceramic-idx-bg: linear-gradient(150deg, #f1ece3, #e3dccd);
+    /* neutral zinc chip matching the admin light surfaces */
+    --ceramic-idx-bg: linear-gradient(150deg, #f4f4f5, #e4e4e7);
     --ceramic-idx-text: #52525b;
-    --ceramic-idx-shadow: inset 0 1px 2px rgba(70,55,40,.14), 0 1px 0 rgba(255,255,255,.7);
+    --ceramic-idx-shadow: inset 0 1px 2px rgba(24,24,27,.10), 0 1px 0 rgba(255,255,255,.8);
     --ceramic-scrollbar-thumb: rgba(30,36,60,.25);
     --ceramic-scrollbar-thumb-hover: rgba(30,36,60,.45);
-    /* buttons/chips that sit on the page background (admin-primary style) */
-    --ceramic-btn-bg: linear-gradient(150deg, #34363e, #16171c);
-    --ceramic-btn-fg: #fafafa;
-    --ceramic-btn-shadow: 0 6px 14px -4px rgba(20,22,30,.45), inset 0 1px 0 rgba(255,255,255,.18);
+    /* round "+" buttons: same white pill in BOTH themes */
+    --ceramic-btn-bg: linear-gradient(150deg, #fafafa, #d9d9de);
+    --ceramic-btn-fg: #18181b;
+    --ceramic-btn-shadow: 0 5px 12px -4px rgba(20,22,30,.35), inset 0 1px 0 rgba(255,255,255,.8), 0 0 0 1px rgba(24,24,27,.08);
     --ceramic-chip-border: rgba(24,26,34,.45);
     --ceramic-chip-bg: rgba(24,26,34,.06);
     --ceramic-chip-text: #3f414d;
@@ -160,9 +158,6 @@ const CERAMIC_CSS = `
     --ceramic-idx-shadow: inset 0 2px 4px rgba(0,0,0,.55), inset 0 -1px 0 rgba(255,255,255,.05), 0 1px 0 rgba(255,255,255,.04);
     --ceramic-scrollbar-thumb: rgba(255,255,255,.18);
     --ceramic-scrollbar-thumb-hover: rgba(255,255,255,.32);
-    /* on dark the primary action style is light-on-dark (like Approve) */
-    --ceramic-btn-bg: linear-gradient(150deg, #fafafa, #d9d9de);
-    --ceramic-btn-fg: #18181b;
     --ceramic-btn-shadow: 0 6px 14px -4px rgba(0,0,0,.6), inset 0 1px 0 rgba(255,255,255,.7);
     --ceramic-chip-border: rgba(255,255,255,.45);
     --ceramic-chip-bg: rgba(255,255,255,.07);
@@ -496,21 +491,40 @@ const CERAMIC_CSS = `
     box-shadow: 0 0 0 2px rgba(217,119,6,.45), var(--ceramic-shadow-rest);
   }
 
-  /* Fill handle — small round grip on the cell corner; drag down to fill */
+  /* Fill handle — a bare "v" chevron on the cell corner (no background,
+     like the approved reference); drag to fill */
   .ceramic-fill-handle {
     position: absolute;
-    bottom: -5px;
-    inset-inline-end: -5px;
-    width: 11px;
-    height: 11px;
-    border-radius: 50%;
-    background: var(--ceramic-ink);
-    border: 2px solid #ffffff;
-    box-shadow: 0 1px 3px rgba(0,0,0,.35);
+    bottom: -9px;
+    inset-inline-end: -11px;
+    width: 16px;
+    height: 14px;
+    background: none;
+    border: none;
+    box-shadow: none;
     cursor: grab;
     opacity: 0;
     transition: opacity .15s ease;
     z-index: 3;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .ceramic-fill-handle::after {
+    content: "";
+    width: 7px;
+    height: 7px;
+    border-right: 2.5px solid var(--ceramic-chip-text);
+    border-bottom: 2.5px solid var(--ceramic-chip-text);
+    border-radius: 1px;
+    transform: rotate(45deg);
+    margin-top: -4px;
+  }
+  .ceramic-fill-handle:hover::after {
+    border-color: var(--ceramic-ink);
+  }
+  .dark .ceramic-fill-handle:hover::after {
+    border-color: #ffffff;
   }
   .ceramic-rect:hover .ceramic-fill-handle,
   .ceramic-rect:focus-within .ceramic-fill-handle,
@@ -596,6 +610,26 @@ const CERAMIC_CSS = `
     opacity: .15;
   }
 
+  /* Multi-cell range selection (Shift+Click / Shift+↑↓ / Ctrl+A) */
+  .ceramic-sel-cell {
+    box-shadow: inset 0 0 0 2px rgba(24,26,34,.45), var(--ceramic-shadow-rest) !important;
+    background-image: linear-gradient(rgba(24,26,34,.07), rgba(24,26,34,.07)),
+      linear-gradient(180deg, #ffffff, var(--ceramic-cell-soft)) !important;
+  }
+  .dark .ceramic-sel-cell {
+    box-shadow: inset 0 0 0 2px rgba(255,255,255,.55), var(--ceramic-shadow-rest) !important;
+  }
+  .ceramic-img-group.ceramic-sel-cell {
+    box-shadow: none !important;
+    background-image: none !important;
+    outline: 2px dashed rgba(24,26,34,.45);
+    outline-offset: 3px;
+    border-radius: var(--ceramic-radius);
+  }
+  .dark .ceramic-img-group.ceramic-sel-cell {
+    outline-color: rgba(255,255,255,.55);
+  }
+
   /* Reduced motion */
   @media (prefers-reduced-motion: reduce) {
     .ceramic-rect,
@@ -669,6 +703,12 @@ interface CeramicRowProps {
 
 type CellIssue = { kind: "error" | "warning"; message: string } | undefined
 
+/** Row/column coordinates of a cell (column = index into COLUMNS) */
+interface CellRC {
+  r: number
+  c: number
+}
+
 const CeramicRow = memo(function CeramicRow({
   row,
   rowIndex,
@@ -733,6 +773,7 @@ const CeramicRow = memo(function CeramicRow({
                 imageType={col.imageType!}
                 multiple={col.type === "image-multi"}
                 rowIndex={rowIndex}
+                colIndex={colIndex}
                 onRowChange={onRowChange}
                 onFillStart={onFillStart}
               />
@@ -753,6 +794,7 @@ const CeramicRow = memo(function CeramicRow({
                 clientId={row._clientId ?? ""}
                 field={col.field}
                 rowIndex={rowIndex}
+                colIndex={colIndex}
                 issue={issue?.kind}
                 validationTint={col.field !== "rowNumber" ? validationTint : undefined}
                 onCommit={onCellCommit}
@@ -912,6 +954,7 @@ interface DropdownCellWrapperProps {
   clientId: string
   field: string
   rowIndex: number
+  colIndex: number
   issue?: "error" | "warning"
   validationTint?: string
   onCommit: (clientId: string, field: string, value: unknown) => void
@@ -925,6 +968,7 @@ function DropdownCellWrapper({
   clientId,
   field,
   rowIndex,
+  colIndex,
   issue,
   validationTint,
   onCommit,
@@ -980,6 +1024,7 @@ function DropdownCellWrapper({
         data-issue={issue}
         data-fill-cell
         data-row={rowIndex}
+        data-col={colIndex}
         data-field={field}
         onClick={handleOpen}
         onKeyDown={handleKeyDown}
@@ -1013,7 +1058,6 @@ export function SkuSheetCeramic({
   rows,
   onRowsChange,
   dropdowns,
-  createEmptyRow,
   onUndo,
   onRedo,
 }: SkuSheetCeramicProps) {
@@ -1316,89 +1360,289 @@ export function SkuSheetCeramic({
     [rows.length],
   )
 
-  // ── Keyboard shortcuts (Ctrl+Z/Y on the container) ────────────────────
-  useEffect(() => {
+  // ── Multi-cell range selection (Shift+Click / Shift+↑↓ / Ctrl+A) ──────
+  // Painted directly on the DOM (like the fill preview) for performance.
+  const selRef = useRef<{ anchor: CellRC; focus: CellRC } | null>(null)
+  const selEls = useRef<HTMLElement[]>([])
+  const lastFocusRef = useRef<CellRC | null>(null)
+
+  const clearSelectionPaint = useCallback(() => {
+    for (const el of selEls.current) el.classList.remove("ceramic-sel-cell")
+    selEls.current = []
+  }, [])
+
+  const clearSelection = useCallback(() => {
+    selRef.current = null
+    clearSelectionPaint()
+  }, [clearSelectionPaint])
+
+  const paintSelection = useCallback(() => {
+    clearSelectionPaint()
     const container = containerRef.current
-    if (!container) return
-
-    function handleKeyDown(e: KeyboardEvent) {
-      // Ctrl+Z / Ctrl+Y — always intercept
-      if ((e.ctrlKey || e.metaKey) && e.key === "z") {
-        e.preventDefault()
-        onUndo()
-      } else if ((e.ctrlKey || e.metaKey) && e.key === "y") {
-        e.preventDefault()
-        onRedo()
-      }
-    }
-
-    container.addEventListener("keydown", handleKeyDown)
-    return () => container.removeEventListener("keydown", handleKeyDown)
-  }, [onUndo, onRedo])
-
-  // ── Paste handler ─────────────────────────────────────────────────────
-  useEffect(() => {
-    const container = containerRef.current
-    if (!container) return
-
-    function handlePaste(e: ClipboardEvent) {
-      const text = e.clipboardData?.getData("text/plain") ?? ""
-      if (!text.includes("\t") && !text.includes("\n")) return
-
-      // Multi-cell paste
-      e.preventDefault()
-      const activeEl = document.activeElement as HTMLElement | null
-      const rowAttr = activeEl?.getAttribute("data-row")
-      const colAttr = activeEl?.getAttribute("data-col")
-      if (rowAttr == null || colAttr == null) return
-
-      const startRow = parseInt(rowAttr, 10)
-      const startCol = parseInt(colAttr, 10)
-
-      const pasteRows = text.split(/\r?\n/).filter((line) => line.length > 0)
-      const newRows = [...rows]
-
-      // Grow if needed
-      while (startRow + pasteRows.length > newRows.length) {
-        newRows.push(createEmptyRow())
-      }
-
-      for (let ri = 0; ri < pasteRows.length; ri++) {
-        const pasteCols = pasteRows[ri].split("\t")
-        let colOffset = 0
-
-        for (let ci = 0; ci < pasteCols.length; ci++) {
-          // Walk columns from startCol, skipping readonly/image
-          while (startCol + colOffset + ci < COLUMNS.length) {
-            const col = COLUMNS[startCol + colOffset + ci]
-            if (!col) break
-            if (WRITABLE_FIELDS.has(col.field)) break
-            colOffset++
-          }
-
-          const targetColIdx = startCol + colOffset + ci
-          if (targetColIdx >= COLUMNS.length) break
-          const col = COLUMNS[targetColIdx]
-          if (!col || !WRITABLE_FIELDS.has(col.field)) continue
-
-          const targetRowIdx = startRow + ri
-          if (targetRowIdx >= newRows.length) break
-
-          newRows[targetRowIdx] = {
-            ...newRows[targetRowIdx],
-            [col.field]: pasteCols[ci],
-            _isDirty: true,
-            _validationStatus: "unchecked" as SkuValidationStatus,
-          }
+    const sel = selRef.current
+    if (!container || !sel) return
+    const r1 = Math.min(sel.anchor.r, sel.focus.r)
+    const r2 = Math.max(sel.anchor.r, sel.focus.r)
+    const c1 = Math.min(sel.anchor.c, sel.focus.c)
+    const c2 = Math.max(sel.anchor.c, sel.focus.c)
+    for (let r = r1; r <= r2; r++) {
+      for (let c = c1; c <= c2; c++) {
+        const el = container.querySelector<HTMLElement>(
+          `[data-fill-cell][data-row="${r}"][data-col="${c}"]`,
+        )
+        if (el) {
+          el.classList.add("ceramic-sel-cell")
+          selEls.current.push(el)
         }
       }
+    }
+  }, [clearSelectionPaint])
 
-      onRowsChange(newRows)
+  const setSelection = useCallback(
+    (anchor: CellRC, focus: CellRC) => {
+      selRef.current = { anchor, focus }
+      paintSelection()
+    },
+    [paintSelection],
+  )
+
+  const selectionRect = useCallback(() => {
+    const sel = selRef.current
+    if (!sel) return null
+    return {
+      r1: Math.min(sel.anchor.r, sel.focus.r),
+      r2: Math.max(sel.anchor.r, sel.focus.r),
+      c1: Math.min(sel.anchor.c, sel.focus.c),
+      c2: Math.max(sel.anchor.c, sel.focus.c),
+    }
+  }, [])
+
+  const rcFromElement = (el: Element | null): CellRC | null => {
+    const cell = (el?.closest?.("[data-fill-cell]") ?? null) as HTMLElement | null
+    if (!cell) return null
+    const r = cell.getAttribute("data-row")
+    const c = cell.getAttribute("data-col")
+    if (r == null || c == null) return null
+    return { r: parseInt(r, 10), c: parseInt(c, 10) }
+  }
+
+  // Cell-range mutations (Delete / Ctrl+X / Ctrl+D) — one undo step each
+  const clearRange = useCallback(() => {
+    const rect = selectionRect()
+    if (!rect) return
+    const newRows = rowsRef.current.map((row, i) => {
+      if (i < rect.r1 || i > rect.r2) return row
+      let changed = false
+      const next = { ...row }
+      for (let c = rect.c1; c <= rect.c2; c++) {
+        const col = COLUMNS[c]
+        if (!col) continue
+        if (col.type === "text" || col.type === "dropdown") {
+          ;(next as Record<string, unknown>)[col.field] = ""
+          changed = true
+        } else if (col.type === "image-multi") {
+          next.product_image_urls = []
+          changed = true
+        } else if (col.type === "image-single") {
+          ;(next as Record<string, unknown>)[col.field] = ""
+          changed = true
+        }
+      }
+      if (!changed) return row
+      next._isDirty = true
+      next._validationStatus = "unchecked"
+      return next
+    })
+    onRowsChangeRef.current(newRows)
+  }, [selectionRect])
+
+  const buildRangeTsv = useCallback(() => {
+    const rect = selectionRect()
+    if (!rect) return ""
+    const lines: string[] = []
+    for (let r = rect.r1; r <= rect.r2; r++) {
+      const row = rowsRef.current[r]
+      if (!row) continue
+      const cells: string[] = []
+      for (let c = rect.c1; c <= rect.c2; c++) {
+        const col = COLUMNS[c]
+        cells.push(col ? getFieldValue(row, col.field) : "")
+      }
+      lines.push(cells.join("\t"))
+    }
+    return lines.join("\n")
+  }, [selectionRect])
+
+  const fillDownRange = useCallback(() => {
+    const rect = selectionRect()
+    if (!rect || rect.r2 === rect.r1) return
+    const sourceRow = rowsRef.current[rect.r1]
+    if (!sourceRow) return
+    const newRows = rowsRef.current.map((row, i) => {
+      if (i <= rect.r1 || i > rect.r2) return row
+      const next = { ...row }
+      for (let c = rect.c1; c <= rect.c2; c++) {
+        const col = COLUMNS[c]
+        if (!col) continue
+        if (col.type === "text" || col.type === "dropdown") {
+          const base = getFieldValue(sourceRow, col.field)
+          ;(next as Record<string, unknown>)[col.field] = fillValueAt(
+            base,
+            i - rect.r1,
+            col.field === "sku",
+          )
+        } else if (col.type === "image-multi") {
+          next.product_image_urls = [...(sourceRow.product_image_urls ?? [])]
+        } else if (col.type === "image-single") {
+          ;(next as Record<string, unknown>)[col.field] =
+            getFieldValue(sourceRow, col.field)
+        }
+      }
+      next._isDirty = true
+      next._validationStatus = "unchecked"
+      return next
+    })
+    onRowsChangeRef.current(newRows)
+  }, [selectionRect])
+
+  // ── Keyboard shortcuts + selection events ─────────────────────────────
+  useEffect(() => {
+    const container = containerRef.current
+    if (!container) return
+
+    const selectableCols = COLUMNS.map((col, i) => ({ col, i }))
+      .filter(({ col }) => col.type !== "index" && col.type !== "readonly")
+      .map(({ i }) => i)
+    const firstCol = selectableCols[0]
+    const lastCol = selectableCols[selectableCols.length - 1]
+
+    const focusCell = (r: number, c: number) => {
+      const el = container.querySelector<HTMLElement>(
+        `[data-fill-cell][data-row="${r}"][data-col="${c}"]`,
+      )
+      if (!el) return
+      const focusable =
+        el.matches("input,button,[tabindex]")
+          ? el
+          : el.querySelector<HTMLElement>("input,button,[tabindex]")
+      ;(focusable ?? el).focus()
     }
 
-    container.addEventListener("paste", handlePaste)
-    return () => container.removeEventListener("paste", handlePaste)
-  }, [rows, onRowsChange, createEmptyRow])
+    // Plain focus collapses any selection and records the anchor cell
+    const onFocusIn = (e: FocusEvent) => {
+      const rc = rcFromElement(e.target as Element)
+      if (!rc) return
+      lastFocusRef.current = rc
+      if (selRef.current) clearSelection()
+    }
+
+    // Shift+Click extends the selection from the anchor
+    const onMouseDown = (e: MouseEvent) => {
+      if (!e.shiftKey) return
+      const rc = rcFromElement(e.target as Element)
+      if (!rc) return
+      e.preventDefault()
+      const anchor = selRef.current?.anchor ?? lastFocusRef.current ?? rc
+      setSelection(anchor, rc)
+    }
+
+    // Undo/redo listen on the DOCUMENT in capture phase so they work no
+    // matter where focus is (inside a cell, on a button, on the page body)
+    // and always beat the browser's native input undo. If a cell edit is in
+    // progress, it is committed first so the undo includes it.
+    const onUndoRedo = (e: KeyboardEvent) => {
+      const ctrl = e.ctrlKey || e.metaKey
+      if (!ctrl) return
+      const key = e.key.toLowerCase()
+      if (key !== "z" && key !== "y") return
+      e.preventDefault()
+      e.stopPropagation()
+      const active = document.activeElement
+      if (active instanceof HTMLInputElement && active.classList.contains("ceramic-field")) {
+        active.blur() // commit the in-progress edit synchronously
+      }
+      if (key === "z") onUndo()
+      else onRedo()
+    }
+
+    function handleKeyDown(e: KeyboardEvent) {
+      const ctrl = e.ctrlKey || e.metaKey
+      const key = e.key.toLowerCase()
+
+      const activeRC = rcFromElement(document.activeElement)
+
+      // Shift+↑/↓ extend the selection vertically (←/→ keep native
+      // text-selection behavior inside inputs)
+      if (e.shiftKey && (e.key === "ArrowDown" || e.key === "ArrowUp") && (activeRC || selRef.current)) {
+        e.preventDefault()
+        const base = selRef.current?.focus ?? activeRC!
+        const anchor = selRef.current?.anchor ?? activeRC!
+        const nextR = Math.max(
+          0,
+          Math.min(base.r + (e.key === "ArrowDown" ? 1 : -1), rowsRef.current.length - 1),
+        )
+        setSelection(anchor, { r: nextR, c: base.c })
+        return
+      }
+
+      if (e.key === "Escape") {
+        clearSelection()
+        return
+      }
+
+      if (ctrl && (e.key === "Home" || e.key === "End")) {
+        e.preventDefault()
+        clearSelection()
+        if (e.key === "Home") focusCell(0, firstCol)
+        else focusCell(rowsRef.current.length - 1, lastCol)
+        return
+      }
+
+      const rect = selectionRect()
+      const isMulti = rect && (rect.r1 !== rect.r2 || rect.c1 !== rect.c2)
+
+      if ((e.key === "Delete" || e.key === "Backspace") && isMulti) {
+        e.preventDefault()
+        clearRange()
+        return
+      }
+
+      if (ctrl && key === "x" && isMulti) {
+        e.preventDefault()
+        void navigator.clipboard.writeText(buildRangeTsv()).then(() => clearRange())
+        return
+      }
+
+      if (ctrl && key === "d" && isMulti) {
+        e.preventDefault()
+        fillDownRange()
+        return
+      }
+    }
+
+    document.addEventListener("keydown", onUndoRedo, true)
+    container.addEventListener("focusin", onFocusIn)
+    container.addEventListener("mousedown", onMouseDown, true)
+    container.addEventListener("keydown", handleKeyDown)
+    return () => {
+      document.removeEventListener("keydown", onUndoRedo, true)
+      container.removeEventListener("focusin", onFocusIn)
+      container.removeEventListener("mousedown", onMouseDown, true)
+      container.removeEventListener("keydown", handleKeyDown)
+    }
+  }, [
+    onUndo,
+    onRedo,
+    setSelection,
+    clearSelection,
+    selectionRect,
+    clearRange,
+    buildRangeTsv,
+    fillDownRange,
+  ])
+
+  // (Custom Ctrl+C / Ctrl+V handling removed by request — text inputs keep
+  // the browser's native copy/paste for plain text only.)
 
   return (
     <div ref={containerRef} className="ceramic-sheet-root">
