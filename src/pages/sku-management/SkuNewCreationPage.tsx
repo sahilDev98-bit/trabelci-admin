@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { useNavigate } from "@tanstack/react-router"
 import { useTranslation } from "react-i18next"
 import { ArrowLeft, Save, Send, Loader2, CheckSquare } from "lucide-react"
@@ -153,22 +153,27 @@ function CreationSheet({ initialRows }: { initialRows: SkuMetadataRow[] }) {
     future: [],
   })
 
+  // Mirror of `rows` for the history handlers. State updaters must stay PURE
+  // (React StrictMode invokes them twice, which corrupted the history when
+  // pops/pushes lived inside them) — so all history mutations happen out
+  // here, against this ref, and setRows only receives plain values.
+  const rowsSnapshotRef = useRef<SkuMetadataRow[]>(initialRows)
+  useEffect(() => {
+    rowsSnapshotRef.current = rows
+  }, [rows])
+
   const undo = useCallback(() => {
-    setRows((current) => {
-      const prev = historyRef.current.past.pop()
-      if (!prev) return current
-      historyRef.current.future.push(current)
-      return prev
-    })
+    const prev = historyRef.current.past.pop()
+    if (!prev) return
+    historyRef.current.future.push(rowsSnapshotRef.current)
+    setRows(prev)
   }, [])
 
   const redo = useCallback(() => {
-    setRows((current) => {
-      const next = historyRef.current.future.pop()
-      if (!next) return current
-      historyRef.current.past.push(current)
-      return next
-    })
+    const next = historyRef.current.future.pop()
+    if (!next) return
+    historyRef.current.past.push(rowsSnapshotRef.current)
+    setRows(next)
   }, [])
   // Details panel state — temporarily hidden
   // const [activeRow, setActiveRow] = useState<SkuMetadataRow | null>(null)
@@ -214,16 +219,16 @@ function CreationSheet({ initialRows }: { initialRows: SkuMetadataRow[] }) {
   // what was reviewed). The grid marks edited rows _isDirty. Padding keeps
   // blank rows available below as the user fills the sheet downward.
   const handleRowsChange = useCallback((updated: SkuMetadataRow[]) => {
-    setRows((current) => {
-      historyRef.current.past.push(current)
-      if (historyRef.current.past.length > 100) historyRef.current.past.shift()
-      historyRef.current.future = []
-      return padWithEmptyRows(
+    historyRef.current.past.push(rowsSnapshotRef.current)
+    if (historyRef.current.past.length > 100) historyRef.current.past.shift()
+    historyRef.current.future = []
+    setRows(
+      padWithEmptyRows(
         updated.map((r) =>
           r._isDirty && r.status === "approved" ? { ...r, status: "draft" as const } : r
         )
       )
-    })
+    )
   }, [])
 
   // Single-flow gate (spec points 4/13/17/27/30): one click runs validation
