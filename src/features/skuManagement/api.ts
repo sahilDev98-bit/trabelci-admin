@@ -10,6 +10,7 @@ import type {
   SkuDropdownMap,
   SkuDropdownValue,
   SkuImportResult,
+  SkuImportAllResult,
   SkuMetadataFilters,
   SkuMetadataListResponse,
   SkuMetadataRow,
@@ -190,6 +191,10 @@ export async function fetchCleanupStats(): Promise<SkuCleanupStats> {
   return apiFetch(API_ENDPOINTS.SKU_CLEANUP_STATS)
 }
 
+export async function importAllSapItemsToCleanup(): Promise<SkuImportAllResult> {
+  return apiFetch(API_ENDPOINTS.SKU_IMPORT_ALL_SAP_ITEMS, { method: "POST" })
+}
+
 // ─── React Query hooks ───────────────────────────────────────────────────────
 
 export function useSkuMetadataListQuery(filters: SkuMetadataFilters = {}) {
@@ -303,6 +308,17 @@ export function useImportSapItemsMutation() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (itemCodes: string[]) => importSapItemsToCleanup(itemCodes),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: skuQueryKeys.metadata.all })
+      qc.invalidateQueries({ queryKey: skuQueryKeys.cleanupStats })
+    },
+  })
+}
+
+export function useImportAllSapItemsMutation() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: () => importAllSapItemsToCleanup(),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: skuQueryKeys.metadata.all })
       qc.invalidateQueries({ queryKey: skuQueryKeys.cleanupStats })

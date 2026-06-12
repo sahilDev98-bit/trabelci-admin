@@ -161,7 +161,17 @@ export interface SkuCleanupStats {
   cleaned: number;
   pending: number;
   byCompany: Record<string, { total: number; cleaned: number }>;
+  productTotal?: number;
+  importable?: number;
 }
+
+export interface SkuImportAllResult {
+  imported: number;
+  skipped: number;
+  failed: number;
+}
+
+export type SkuCleanupStatusTab = 'pending' | 'cleaned' | 'all';
 
 export interface SkuMetadataFilters {
   workflowType?: SkuWorkflowType;

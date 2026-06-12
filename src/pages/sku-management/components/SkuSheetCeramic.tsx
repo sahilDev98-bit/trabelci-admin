@@ -31,15 +31,24 @@ export interface SkuSheetCeramicProps {
   rows: SkuMetadataRow[]
   onRowsChange: (rows: SkuMetadataRow[]) => void
   dropdowns: SkuDropdownMap
-  /** Kept for API compatibility (used previously by multi-row paste) */
+  /** "cleanup" adds the original SAP name column and locks the SKU column.
+   *  Default: "creation". */
+  mode?: "creation" | "cleanup"
+  /** Lets multi-row paste grow the sheet (creation mode only) */
   createEmptyRow?: () => SkuMetadataRow
-  onUndo: () => void
-  onRedo: () => void
+  onUndo?: () => void
+  onRedo?: () => void
 }
 
 // ─── Column definitions ───────────────────────────────────────────────────────
 
-type ColType = "index" | "text" | "dropdown" | "image-multi" | "image-single" | "readonly"
+type ColType =
+  | "index"
+  | "text"
+  | "dropdown"
+  | "image-multi"
+  | "image-single"
+  | "readonly"
 
 interface CeramicColumn {
   field: string
@@ -49,6 +58,10 @@ interface CeramicColumn {
   dropdownKey?: string
   /** For image columns */
   imageType?: "product" | "cover" | "ambience"
+  /** Text columns that can be viewed/copied but never edited */
+  readOnly?: boolean
+  /** Muted italic styling (original SAP values) */
+  italic?: boolean
 }
 
 const COLUMNS: CeramicColumn[] = [
@@ -82,9 +95,41 @@ const COLUMNS: CeramicColumn[] = [
   { field: "status",             type: "readonly",     minWidth: 110 },
 ]
 
+// Cleanup mode: checkbox column after #, readonly SKU, original SAP name
+// (readonly, italic) right after it — mirrors the old grid's cleanup layout
+function buildColumns(mode: "creation" | "cleanup"): CeramicColumn[] {
+  if (mode !== "cleanup") return COLUMNS
+  const out: CeramicColumn[] = []
+  for (const col of COLUMNS) {
+    if (col.field === "rowNumber") {
+      out.push(col)
+      continue
+    }
+    if (col.field === "sku") {
+      out.push({ ...col, readOnly: true })
+      out.push({
+        field: "original_sap_name",
+        type: "text",
+        minWidth: 200,
+        readOnly: true,
+        italic: true,
+      })
+      continue
+    }
+    out.push(col)
+  }
+  return out
+}
+
 function getHeaderKey(field: string): string {
   if (field === "rowNumber") return "#"
   return `sku.fields.${field}`
+}
+
+/** May paste/clear/fill write into this column? */
+function isWritableCol(col: CeramicColumn | undefined): boolean {
+  if (!col || col.readOnly) return false
+  return col.type === "text" || col.type === "dropdown"
 }
 
 // Readable on both light and dark app backgrounds
@@ -699,6 +744,7 @@ interface CeramicRowProps {
   onRowChange: (updatedRow: SkuMetadataRow) => void
   onNavigate: (rowIndex: number, colIndex: number, direction: "down" | "up") => void
   onFillStart: (startRow: number, field: string, value: string | string[], e: React.MouseEvent) => void
+  sheetMode?: "creation" | "cleanup"
 }
 
 type CellIssue = { kind: "error" | "warning"; message: string } | undefined
@@ -721,6 +767,7 @@ const CeramicRow = memo(function CeramicRow({
   onRowChange,
   onNavigate,
   onFillStart,
+  sheetMode = "creation",
 }: CeramicRowProps) {
   const validationTint = getValidationTint(row._validationStatus)
   const validationErrors = row._validationErrors ?? []
@@ -751,7 +798,12 @@ const CeramicRow = memo(function CeramicRow({
 
         if (col.type === "readonly") {
           const status = row.status ?? ""
-          const label = t(`sku.status.${status}`, { defaultValue: status })
+          let labelKey = `sku.status.${status}`
+          if (sheetMode === "cleanup") {
+            if (status === "cleanup_only") labelKey = "sku.cleanup.status.pending"
+            else if (status === "approved") labelKey = "sku.cleanup.status.cleaned"
+          }
+          const label = t(labelKey, { defaultValue: status })
           return (
             <div key={col.field} className="ceramic-cell">
               <span
@@ -791,7 +843,7 @@ const CeramicRow = memo(function CeramicRow({
                 value={value}
                 label={label}
                 options={options}
-                clientId={row._clientId ?? ""}
+                clientId={row._clientId ?? row.sku}
                 field={col.field}
                 rowIndex={rowIndex}
                 colIndex={colIndex}
@@ -809,7 +861,7 @@ const CeramicRow = memo(function CeramicRow({
           <div key={col.field} className="ceramic-cell" title={issue?.message}>
             <TextCellWrapper
               initialValue={getFieldValue(row, col.field)}
-              clientId={row._clientId ?? ""}
+              clientId={row._clientId ?? row.sku}
               field={col.field}
               rowIndex={rowIndex}
               colIndex={colIndex}
@@ -821,6 +873,8 @@ const CeramicRow = memo(function CeramicRow({
               }
               issue={issue?.kind}
               validationTint={validationTint}
+              readOnly={col.readOnly}
+              italic={col.italic}
               onCommit={onCellCommit}
               onNavigate={onNavigate}
               onFillStart={onFillStart}
@@ -844,6 +898,8 @@ interface TextCellWrapperProps {
   duplicateTooltip?: string
   issue?: "error" | "warning"
   validationTint?: string
+  readOnly?: boolean
+  italic?: boolean
   onCommit: (clientId: string, field: string, value: unknown) => void
   onNavigate: (rowIndex: number, colIndex: number, direction: "down" | "up") => void
   onFillStart: (startRow: number, field: string, value: string | string[], e: React.MouseEvent) => void
@@ -859,12 +915,26 @@ function TextCellWrapper({
   duplicateTooltip,
   issue,
   validationTint,
+  readOnly,
+  italic,
   onCommit,
   onNavigate,
   onFillStart,
 }: TextCellWrapperProps) {
   const inputRef = useRef<HTMLInputElement>(null)
   const committedRef = useRef(initialValue)
+
+  // The fill handle only shows on cells that have something to copy. The
+  // input is uncontrolled, so typing is tracked as an override that resets
+  // whenever the external value changes (React's adjust-state-during-render
+  // pattern — no effect involved).
+  const [prevInitial, setPrevInitial] = useState(initialValue)
+  const [typedHasValue, setTypedHasValue] = useState<boolean | null>(null)
+  if (prevInitial !== initialValue) {
+    setPrevInitial(initialValue)
+    setTypedHasValue(null)
+  }
+  const hasValue = typedHasValue ?? Boolean(initialValue.trim())
 
   // Sync when the external value changes (e.g. after undo, paste, save).
   // Setting the DOM input value is exactly what effects are for —
@@ -925,22 +995,27 @@ function TextCellWrapper({
         type="text"
         dir="auto"
         defaultValue={initialValue}
+        readOnly={readOnly}
+        style={italic ? { fontStyle: "italic", color: "#8a8aa0", fontWeight: 500 } : undefined}
         onBlur={commit}
         onKeyDown={handleKeyDown}
+        onInput={(e) => setTypedHasValue(Boolean(e.currentTarget.value.trim()))}
         data-row={rowIndex}
         data-col={colIndex}
         data-field={field}
       />
-      <span
-        className="ceramic-fill-handle"
-        title="Drag to fill (same column)"
-        onClick={(e) => e.stopPropagation()}
-        onMouseDown={(e) => {
-          // Commit what's being typed first, then fill with that value
-          commit()
-          onFillStart(rowIndex, field, inputRef.current?.value ?? "", e)
-        }}
-      />
+      {!readOnly && hasValue && (
+        <span
+          className="ceramic-fill-handle"
+          title="Drag to fill (same column)"
+          onClick={(e) => e.stopPropagation()}
+          onMouseDown={(e) => {
+            // Commit what's being typed first, then fill with that value
+            commit()
+            onFillStart(rowIndex, field, inputRef.current?.value ?? "", e)
+          }}
+        />
+      )}
     </div>
   )
 }
@@ -1032,12 +1107,14 @@ function DropdownCellWrapper({
         style={triggerStyle}
       >
         {label || "\u00A0"}
-        <span
-          className="ceramic-fill-handle"
-          title="Drag to fill (same column)"
-          onClick={(e) => e.stopPropagation()}
-          onMouseDown={(e) => onFillStart(rowIndex, field, value, e)}
-        />
+        {Boolean(value.trim()) && (
+          <span
+            className="ceramic-fill-handle"
+            title="Drag to fill (same column)"
+            onClick={(e) => e.stopPropagation()}
+            onMouseDown={(e) => onFillStart(rowIndex, field, value, e)}
+          />
+        )}
       </button>
       {open && triggerRect && (
         <CeramicDropdown
@@ -1058,6 +1135,8 @@ export function SkuSheetCeramic({
   rows,
   onRowsChange,
   dropdowns,
+  mode = "creation",
+  createEmptyRow,
   onUndo,
   onRedo,
 }: SkuSheetCeramicProps) {
@@ -1065,12 +1144,16 @@ export function SkuSheetCeramic({
   const isHe = i18n.language === "he"
   const containerRef = useRef<HTMLDivElement>(null)
 
+  const columns = useMemo(() => buildColumns(mode), [mode])
+
   // Fresh references for document-level drag listeners (avoid stale closures)
   const rowsRef = useRef(rows)
   const onRowsChangeRef = useRef(onRowsChange)
+  const columnsRef = useRef(columns)
   useEffect(() => {
     rowsRef.current = rows
     onRowsChangeRef.current = onRowsChange
+    columnsRef.current = columns
   })
 
   // ── Fill-down drag (the corner handle) ────────────────────────────────
@@ -1091,12 +1174,19 @@ export function SkuSheetCeramic({
       const container = containerRef.current
       if (!container) return
 
+      // Nothing to copy from a blank cell — an empty-source drag would only
+      // mark untouched rows as edited without changing anything
+      const isEmptySource = Array.isArray(value)
+        ? value.length === 0
+        : !String(value ?? "").trim()
+      if (isEmptySource) return
+
       const isSku = field === "sku"
       let endRow = startRow
       let overWrongColumn = false
 
       // Dropdown values travel as their display label, like a committed cell
-      const colDef = COLUMNS.find((c) => c.field === field)
+      const colDef = columnsRef.current.find((c) => c.field === field)
       const isImage = colDef?.type === "image-multi" || colDef?.type === "image-single"
       const toDisplay = (raw: string) =>
         colDef?.dropdownKey
@@ -1282,17 +1372,19 @@ export function SkuSheetCeramic({
   // ── Grid template columns ─────────────────────────────────────────────
   const gridTemplateColumns = useMemo(
     () =>
-      COLUMNS.map((c) =>
-        c.type === "index"
-          ? `${c.minWidth}px`
-          : `minmax(${c.minWidth}px, ${c.minWidth < 120 ? "1fr" : "1.2fr"})`,
-      ).join(" "),
-    [],
+      columns
+        .map((c) =>
+          c.type === "index"
+            ? `${c.minWidth}px`
+            : `minmax(${c.minWidth}px, ${c.minWidth < 120 ? "1fr" : "1.2fr"})`,
+        )
+        .join(" "),
+    [columns],
   )
 
   const gridMinWidth = useMemo(
-    () => COLUMNS.reduce((sum, c) => sum + c.minWidth + 8, 0),
-    [],
+    () => columns.reduce((sum, c) => sum + c.minWidth + 8, 0),
+    [columns],
   )
 
   // ── Duplicate SKU detection ───────────────────────────────────────────
@@ -1308,6 +1400,15 @@ export function SkuSheetCeramic({
   // ── Cell commit (text fields commit on blur / Enter) ──────────────────
   const onCellCommit = useCallback(
     (clientId: string, field: string, value: unknown) => {
+      // A commit that matches no row means the typed text would stay visible
+      // in the (uncontrolled) input while never reaching the data — that must
+      // never pass silently (it once made "filled" cells validate as empty).
+      if (!rows.some((r) => (r._clientId ?? r.sku) === clientId)) {
+        console.error(
+          `[SkuSheetCeramic] dropped commit — no row matched key "${clientId}" (field: ${field})`,
+        )
+        return
+      }
       const newRows = rows.map((r) =>
         (r._clientId ?? r.sku) === clientId
           ? {
@@ -1435,8 +1536,8 @@ export function SkuSheetCeramic({
       let changed = false
       const next = { ...row }
       for (let c = rect.c1; c <= rect.c2; c++) {
-        const col = COLUMNS[c]
-        if (!col) continue
+        const col = columnsRef.current[c]
+        if (!col || col.readOnly) continue
         if (col.type === "text" || col.type === "dropdown") {
           ;(next as Record<string, unknown>)[col.field] = ""
           changed = true
@@ -1465,7 +1566,7 @@ export function SkuSheetCeramic({
       if (!row) continue
       const cells: string[] = []
       for (let c = rect.c1; c <= rect.c2; c++) {
-        const col = COLUMNS[c]
+        const col = columnsRef.current[c]
         cells.push(col ? getFieldValue(row, col.field) : "")
       }
       lines.push(cells.join("\t"))
@@ -1480,10 +1581,14 @@ export function SkuSheetCeramic({
     if (!sourceRow) return
     const newRows = rowsRef.current.map((row, i) => {
       if (i <= rect.r1 || i > rect.r2) return row
+      let changed = false
       const next = { ...row }
       for (let c = rect.c1; c <= rect.c2; c++) {
-        const col = COLUMNS[c]
-        if (!col) continue
+        const col = columnsRef.current[c]
+        if (!col || col.readOnly) continue
+        // Blank source cells are skipped — filling "" downward would only
+        // dirty rows without changing anything
+        if (!getFieldValue(sourceRow, col.field).trim()) continue
         if (col.type === "text" || col.type === "dropdown") {
           const base = getFieldValue(sourceRow, col.field)
           ;(next as Record<string, unknown>)[col.field] = fillValueAt(
@@ -1491,13 +1596,17 @@ export function SkuSheetCeramic({
             i - rect.r1,
             col.field === "sku",
           )
+          changed = true
         } else if (col.type === "image-multi") {
           next.product_image_urls = [...(sourceRow.product_image_urls ?? [])]
+          changed = true
         } else if (col.type === "image-single") {
           ;(next as Record<string, unknown>)[col.field] =
             getFieldValue(sourceRow, col.field)
+          changed = true
         }
       }
+      if (!changed) return row
       next._isDirty = true
       next._validationStatus = "unchecked"
       return next
@@ -1505,13 +1614,86 @@ export function SkuSheetCeramic({
     onRowsChangeRef.current(newRows)
   }, [selectionRect])
 
+  // ── Cell copy/paste (Ctrl+C / Ctrl+V, Excel-compatible) ────────────────
+  // Paste spreads tab/newline-separated blocks across writable columns from
+  // the focused cell, growing the sheet when needed (creation mode).
+  useEffect(() => {
+    const container = containerRef.current
+    if (!container) return
+
+    function handlePaste(e: ClipboardEvent) {
+      const text = e.clipboardData?.getData("text/plain") ?? ""
+      if (!text.includes("\t") && !text.includes("\n")) return
+
+      // Multi-cell paste
+      e.preventDefault()
+      const activeEl = document.activeElement as HTMLElement | null
+      const cellEl = (activeEl?.closest?.("[data-fill-cell]") ?? null) as HTMLElement | null
+      const rowAttr = cellEl?.getAttribute("data-row")
+      const colAttr = cellEl?.getAttribute("data-col")
+      if (rowAttr == null || colAttr == null) return
+
+      const cols = columnsRef.current
+      const startRow = parseInt(rowAttr, 10)
+      const startCol = parseInt(colAttr, 10)
+
+      const pasteRows = text
+        .replace(/\r/g, "")
+        .split("\n")
+        .filter((line, i, arr) => !(i === arr.length - 1 && line === ""))
+      const newRows = [...rowsRef.current]
+
+      // Grow if needed (creation mode provides the blank-row factory)
+      while (createEmptyRow && startRow + pasteRows.length > newRows.length) {
+        newRows.push(createEmptyRow())
+      }
+
+      for (let ri = 0; ri < pasteRows.length; ri++) {
+        const pasteCols = pasteRows[ri].split("\t")
+        let colOffset = 0
+
+        for (let ci = 0; ci < pasteCols.length; ci++) {
+          // Walk columns from startCol, skipping readonly/image/select
+          while (startCol + colOffset + ci < cols.length) {
+            if (isWritableCol(cols[startCol + colOffset + ci])) break
+            colOffset++
+          }
+
+          const targetColIdx = startCol + colOffset + ci
+          if (targetColIdx >= cols.length) break
+          const col = cols[targetColIdx]
+          if (!isWritableCol(col)) continue
+
+          const targetRowIdx = startRow + ri
+          if (targetRowIdx >= newRows.length) break
+
+          newRows[targetRowIdx] = {
+            ...newRows[targetRowIdx],
+            [col.field]: pasteCols[ci],
+            _isDirty: true,
+            _validationStatus: "unchecked" as SkuValidationStatus,
+          }
+        }
+      }
+
+      onRowsChangeRef.current(newRows)
+    }
+
+    container.addEventListener("paste", handlePaste)
+    return () => container.removeEventListener("paste", handlePaste)
+  }, [createEmptyRow])
+
   // ── Keyboard shortcuts + selection events ─────────────────────────────
   useEffect(() => {
     const container = containerRef.current
     if (!container) return
 
-    const selectableCols = COLUMNS.map((col, i) => ({ col, i }))
-      .filter(({ col }) => col.type !== "index" && col.type !== "readonly")
+    const selectableCols = columns
+      .map((col, i) => ({ col, i }))
+      .filter(
+        ({ col }) =>
+          col.type !== "index" && col.type !== "readonly",
+      )
       .map(({ i }) => i)
     const firstCol = selectableCols[0]
     const lastCol = selectableCols[selectableCols.length - 1]
@@ -1561,8 +1743,8 @@ export function SkuSheetCeramic({
       if (active instanceof HTMLInputElement && active.classList.contains("ceramic-field")) {
         active.blur() // commit the in-progress edit synchronously
       }
-      if (key === "z") onUndo()
-      else onRedo()
+      if (key === "z") onUndo?.()
+      else onRedo?.()
     }
 
     function handleKeyDown(e: KeyboardEvent) {
@@ -1607,6 +1789,26 @@ export function SkuSheetCeramic({
         return
       }
 
+      if (ctrl && key === "c") {
+        if (isMulti) {
+          // Copy the selection as Excel-compatible cells (TSV)
+          e.preventDefault()
+          void navigator.clipboard.writeText(buildRangeTsv())
+        } else if (
+          document.activeElement instanceof HTMLElement &&
+          !(document.activeElement instanceof HTMLInputElement)
+        ) {
+          // Single dropdown/image cell — copy its value (inputs copy natively)
+          const cell = document.activeElement.closest("[data-fill-cell]")
+          const value = cell?.getAttribute("data-value")
+          if (value != null) {
+            e.preventDefault()
+            void navigator.clipboard.writeText(value)
+          }
+        }
+        return
+      }
+
       if (ctrl && key === "x" && isMulti) {
         e.preventDefault()
         void navigator.clipboard.writeText(buildRangeTsv()).then(() => clearRange())
@@ -1633,6 +1835,7 @@ export function SkuSheetCeramic({
   }, [
     onUndo,
     onRedo,
+    columns,
     setSelection,
     clearSelection,
     selectionRect,
@@ -1657,7 +1860,7 @@ export function SkuSheetCeramic({
           }}
         >
           {/* Header row */}
-          {COLUMNS.map((col) => (
+          {columns.map((col) => (
             <div key={`h-${col.field}`} className="ceramic-head">
               {col.field === "rowNumber" ? "#" : t(getHeaderKey(col.field))}
             </div>
@@ -1669,7 +1872,7 @@ export function SkuSheetCeramic({
               key={row._clientId ?? row.sku ?? rowIndex}
               row={row}
               rowIndex={rowIndex}
-              columns={COLUMNS}
+              columns={columns}
               dropdowns={dropdowns}
               isDuplicate={!!row.sku?.trim() && duplicateSkus.has(row.sku.trim())}
               t={t}
@@ -1678,6 +1881,7 @@ export function SkuSheetCeramic({
               onRowChange={onImageRowChange}
               onNavigate={onNavigate}
               onFillStart={handleFillStart}
+              sheetMode={mode}
             />
           ))}
         </div>

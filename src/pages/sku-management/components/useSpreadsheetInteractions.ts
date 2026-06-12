@@ -81,7 +81,9 @@ export function useSpreadsheetInteractions({
   const shiftDownRef = useRef(false)
 
   const rowCountRef = useRef(rowCount)
-  rowCountRef.current = rowCount
+  useEffect(() => {
+    rowCountRef.current = rowCount
+  }, [rowCount])
 
   const colIndex = useCallback(
     (colId: string) => getDataColIds().indexOf(colId),
@@ -186,8 +188,8 @@ export function useSpreadsheetInteractions({
         // grid may already be destroyed during unmount
       }
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [gridRef.current?.api, setRange, collapseTo])
+    // gridRef is a stable ref; the grid mounts before this effect runs
+  }, [gridRef, setRange, collapseTo])
 
   // ── Shared guards ──────────────────────────────────────────────────────────
   // Active only when focus is inside the grid, no cell editor is open, and

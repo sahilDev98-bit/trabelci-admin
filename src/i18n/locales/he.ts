@@ -733,6 +733,8 @@ const he = {
       duplicateSkuTooltip: "SKU כפול — קוד זה כבר בשימוש בשורה אחרת. קוד הפריט חייב להיות ייחודי.",
       fillColumnMismatch: "אותה עמודה בלבד",
       approveBlocked: "{{count}} שורות לא ניתנות לאישור — תקנו קודם את השגיאות האדומות",
+      saveSummary: "נשמרו {{saved}} · אושרו {{approved}} · {{blocked}} לא אושרו — מלאו את השדות האדומים ושמרו שוב",
+      saveSummaryPlain: "נשמרו {{saved}} · אושרו {{approved}}",
     },
 
     fields: {
@@ -787,6 +789,20 @@ const he = {
     cleanup: {
       subtitle: "SAP לעולם לא משתנה — השינויים שמורים בפלטפורמת SKU בלבד",
       noItems: "אין פריטים עדיין. ייבא פריטי SAP כדי להתחיל בניקוי.",
+      tabs: {
+        pending: "ממתין",
+        cleaned: "מנוקה",
+        all: "הכל",
+      },
+      status: {
+        pending: "ממתין",
+        cleaned: "מנוקה",
+      },
+      pagination: {
+        prev: "הקודם",
+        next: "הבא",
+        pageOf: "עמוד {{page}} מתוך {{pages}} ({{total}} פריטים)",
+      },
     },
 
     validation: {
@@ -800,7 +816,13 @@ const he = {
       description: "הדבק קודי פריטים מופרדים בשורות חדשות, פסיקים או נקודה-פסיק. שמות SAP המקוריים יישלפו אוטומטית.",
       placeholder: "12345\n67890\nABC001",
       result: "יובאו {{imported}} · דולגו {{skipped}} · נכשלו {{failed}}",
+      resultAll: "יובאו {{imported}} · דולגו {{skipped}} · נכשלו {{failed}}",
       failed: "ייבוא נכשל",
+      importAll: "ייבא הכל מ-SAP (~{{count}} פריטים)",
+      importAllTitle: "לייבא את כל מוצרי SAP?",
+      importAllDescription:
+        "פעולה זו תיצור שורות ניקוי לכל מוצר בקטלוג שעדיין לא יובא (~{{count}} פריטים). הפעולה עשויה להימשך דקה.",
+      importAllConfirm: "ייבא הכל",
     },
 
     audit: {

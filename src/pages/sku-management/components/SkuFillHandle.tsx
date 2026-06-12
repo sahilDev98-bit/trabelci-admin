@@ -100,6 +100,25 @@ export function SkuFillHandle({
   const overlayRef = useRef<HTMLDivElement | null>(null)
   const dragTargetRow = useRef<number | null>(null)
 
+  const positionHandle = useCallback(() => {
+    const fc = focusedCell.current
+    const container = containerRef.current
+    if (!fc || !container) { setHandlePos(null); return }
+
+    // Small delay to let AG Grid paint the focused cell
+    setTimeout(() => {
+      const cell = getCellEl(container, fc.rowIndex, fc.colId)
+      if (!cell) { setHandlePos(null); return }
+
+      const cellRect = cell.getBoundingClientRect()
+      const contRect = container.getBoundingClientRect()
+      setHandlePos({
+        left: cellRect.right - contRect.left - 5,
+        top: cellRect.bottom - contRect.top - 5,
+      })
+    }, 40)
+  }, [containerRef])
+
   // ── Subscribe to AG Grid cell-focus events ────────────────────────────────
   useEffect(() => {
     const api = gridRef.current?.api
@@ -123,33 +142,13 @@ export function SkuFillHandle({
         // grid may already be destroyed during unmount
       }
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [gridRef.current?.api])
+    // gridRef is a stable ref; the grid mounts before this effect runs
+  }, [gridRef, positionHandle])
 
   // Re-position handle when rows change (e.g. fill applied)
   useEffect(() => {
     positionHandle()
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rows])
-
-  const positionHandle = useCallback(() => {
-    const fc = focusedCell.current
-    const container = containerRef.current
-    if (!fc || !container) { setHandlePos(null); return }
-
-    // Small delay to let AG Grid paint the focused cell
-    setTimeout(() => {
-      const cell = getCellEl(container, fc.rowIndex, fc.colId)
-      if (!cell) { setHandlePos(null); return }
-
-      const cellRect = cell.getBoundingClientRect()
-      const contRect = container.getBoundingClientRect()
-      setHandlePos({
-        left: cellRect.right - contRect.left - 5,
-        top: cellRect.bottom - contRect.top - 5,
-      })
-    }, 40)
-  }, [containerRef])
+  }, [rows, positionHandle])
 
   // ── Ctrl+D keyboard fill ──────────────────────────────────────────────────
   useEffect(() => {

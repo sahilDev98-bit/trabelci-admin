@@ -749,6 +749,8 @@ const en = {
       duplicateSkuTooltip: "Duplicate SKU — this code is already used on another row. SKU / ItemCode must be unique.",
       fillColumnMismatch: "Same column only",
       approveBlocked: "{{count}} row(s) cannot be approved — fix the red errors first",
+      saveSummary: "Saved {{saved}} · approved {{approved}} · {{blocked}} not approved — fill the red fields and save again",
+      saveSummaryPlain: "Saved {{saved}} · approved {{approved}}",
     },
 
     fields: {
@@ -803,6 +805,20 @@ const en = {
     cleanup: {
       subtitle: "SAP data is never modified — changes live in the SKU platform only",
       noItems: "No items yet. Import SAP items to start cleanup.",
+      tabs: {
+        pending: "Pending",
+        cleaned: "Cleaned",
+        all: "All",
+      },
+      status: {
+        pending: "Pending",
+        cleaned: "Cleaned",
+      },
+      pagination: {
+        prev: "Prev",
+        next: "Next",
+        pageOf: "Page {{page}} of {{pages}} ({{total}} items)",
+      },
     },
 
     validation: {
@@ -816,7 +832,13 @@ const en = {
       description: "Paste ItemCodes separated by newlines, commas, or semicolons. Original SAP names will be fetched automatically.",
       placeholder: "ItemCode1\nItemCode2\nItemCode3",
       result: "Imported {{imported}} · Skipped {{skipped}} · Failed {{failed}}",
+      resultAll: "Imported {{imported}} · Skipped {{skipped}} · Failed {{failed}}",
       failed: "Import failed",
+      importAll: "Import all from SAP (~{{count}} items)",
+      importAllTitle: "Import all SAP products?",
+      importAllDescription:
+        "This will create cleanup rows for every product in the catalog that is not already imported (~{{count}} items). This may take a minute.",
+      importAllConfirm: "Import all",
     },
 
     audit: {
