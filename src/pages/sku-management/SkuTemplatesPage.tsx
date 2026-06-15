@@ -16,20 +16,20 @@ import {
 import type { SkuTemplate } from "@/features/skuManagement/types"
 
 const AVAILABLE_FIELDS = [
-  "company", "series", "color", "size", "finish",
-  "country_of_origin", "thickness", "r_rating", "surface_type",
-  "supplier", "supplier_code", "model", "subcategory", "product_type",
-  "product_image_urls", "cover_image_url", "ambience_image_url",
+  "supplier", "series", "color", "size", "finish",
+  "country_of_origin", "shade", "qty_per_carton", "qty_per_pallet",
+  "supplier_code", "supplier_sku", "series_en", "color_en",
+  "product_image_urls", "gallery_image_urls",
 ]
 
 const SAMPLE_ROW: Record<string, string> = {
-  company: "La Fabbrica",
+  supplier: "La Fabbrica",
   series: "Onice",
   color: "Ghiaccio",
   size: "60x120",
   finish: "Polished",
   country_of_origin: "Italy",
-  thickness: "10mm",
+  shade: "Light",
 }
 
 function NamePreview({ pattern }: { pattern: string }) {
@@ -55,13 +55,13 @@ function TemplateForm({ initial = {}, onSave, onCancel, isSaving }: TemplateForm
   const [name, setName] = useState(initial.name ?? "")
   const [description, setDescription] = useState(initial.description ?? "")
   const [pattern, setPattern] = useState(
-    initial.name_pattern ?? "{company} | {series} {color} | {size} | {finish}"
+    initial.name_pattern ?? "{supplier} | {series} {color} | {size} | {finish}"
   )
   const [requiredFields, setRequiredFields] = useState<string[]>(
-    initial.required_fields ?? ["company", "series", "color", "size", "finish"]
+    initial.required_fields ?? ["supplier", "series", "color", "size", "finish"]
   )
   const [recommendedFields, setRecommendedFields] = useState<string[]>(
-    initial.recommended_fields ?? ["country_of_origin", "thickness", "r_rating"]
+    initial.recommended_fields ?? ["country_of_origin", "shade"]
   )
 
   const toggleField = (field: string, list: string[], setList: (v: string[]) => void) => {
@@ -108,7 +108,7 @@ function TemplateForm({ initial = {}, onSave, onCancel, isSaving }: TemplateForm
         <Input
           value={pattern}
           onChange={(e) => setPattern(e.target.value)}
-          placeholder="{company} | {series} {color} | {size} | {finish}"
+          placeholder="{supplier} | {series} {color} | {size} | {finish}"
           className="font-mono text-sm"
         />
         <p className="text-xs text-muted-foreground">

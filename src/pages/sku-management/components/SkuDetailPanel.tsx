@@ -35,7 +35,7 @@ export function SkuDetailPanel({ row }: SkuDetailPanelProps) {
       }
     }, 400)
     return () => clearTimeout(timer)
-  }, [row.company, row.series, row.color, row.size, row.finish])
+  }, [row.supplier, row.series, row.color, row.size, row.finish])
 
   const errors = row._validationErrors ?? []
   const warnings = row._validationWarnings ?? []

@@ -22,6 +22,17 @@ import type {
   SkuDropdownValue,
   SkuValidationStatus,
 } from "@/features/skuManagement/types"
+import { useSkuDeleteMutation } from "@/features/skuManagement/api"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 import { CeramicDropdown } from "./CeramicDropdown"
 import { CeramicImageCell } from "./CeramicImageCell"
 
@@ -57,7 +68,7 @@ interface CeramicColumn {
   /** For dropdown columns — the key into SkuDropdownMap */
   dropdownKey?: string
   /** For image columns */
-  imageType?: "product" | "cover" | "ambience"
+  imageType?: "product" | "gallery"
   /** Text columns that can be viewed/copied but never edited */
   readOnly?: boolean
   /** Muted italic styling (original SAP values) */
@@ -67,10 +78,7 @@ interface CeramicColumn {
 const COLUMNS: CeramicColumn[] = [
   { field: "rowNumber",          type: "index",        minWidth: 44  },
   { field: "sku",                type: "text",         minWidth: 140 },
-  { field: "product_image_urls", type: "image-multi",  minWidth: 170, imageType: "product"  },
-  { field: "cover_image_url",    type: "image-single", minWidth: 150, imageType: "cover"    },
-  { field: "ambience_image_url", type: "image-single", minWidth: 150, imageType: "ambience" },
-  { field: "company",            type: "text",         minWidth: 140 },
+  { field: "supplier",           type: "text",         minWidth: 130 },
   { field: "series",             type: "text",         minWidth: 120 },
   { field: "color",              type: "text",         minWidth: 110 },
   // Dropdown widths leave room for the longest vocabulary label on ONE line
@@ -78,20 +86,17 @@ const COLUMNS: CeramicColumn[] = [
   // no ellipsis, per design decision
   { field: "size",               type: "dropdown",     minWidth: 130, dropdownKey: "size"              },
   { field: "finish",             type: "dropdown",     minWidth: 125, dropdownKey: "finish"            },
+  { field: "product_image_urls", type: "image-multi",  minWidth: 170, imageType: "product" },
+  { field: "gallery_image_urls", type: "image-multi",  minWidth: 170, imageType: "gallery" },
   { field: "country_of_origin",  type: "dropdown",     minWidth: 130, dropdownKey: "country_of_origin" },
-  { field: "thickness",          type: "dropdown",     minWidth: 115, dropdownKey: "thickness"         },
-  { field: "surface_type",       type: "dropdown",     minWidth: 140, dropdownKey: "surface_type"      },
-  { field: "r_rating",           type: "dropdown",     minWidth: 100, dropdownKey: "r_rating"          },
-  { field: "product_type",       type: "dropdown",     minWidth: 150, dropdownKey: "product_type"      },
-  { field: "supplier",           type: "text",         minWidth: 120 },
+  { field: "qty_per_carton",     type: "text",         minWidth: 110 },
+  { field: "qty_per_pallet",     type: "text",         minWidth: 110 },
+  { field: "shade",              type: "dropdown",     minWidth: 110, dropdownKey: "shade" },
   { field: "supplier_code",      type: "text",         minWidth: 110 },
-  { field: "model",              type: "text",         minWidth: 100 },
-  { field: "sap_item_name",      type: "text",         minWidth: 180 },
   { field: "display_name_en",    type: "text",         minWidth: 180 },
-  { field: "display_name_he",    type: "text",         minWidth: 160 },
-  { field: "category",           type: "text",         minWidth: 120 },
-  { field: "subcategory",        type: "text",         minWidth: 120 },
-  { field: "internal_notes",     type: "text",         minWidth: 140 },
+  { field: "series_en",          type: "text",         minWidth: 120 },
+  { field: "color_en",           type: "text",         minWidth: 110 },
+  { field: "supplier_sku",       type: "text",         minWidth: 130 },
   { field: "status",             type: "readonly",     minWidth: 110 },
 ]
 
@@ -183,7 +188,12 @@ const CERAMIC_CSS = `
     --ceramic-chip-text: #3f414d;
     --ceramic-shadow-rest: 0 1px 1px rgba(20,24,48,.10), 0 8px 18px -10px rgba(20,24,48,.25), inset 0 1px 0 rgba(255,255,255,.85);
     --ceramic-shadow-hover: 0 2px 4px rgba(20,24,48,.12), 0 14px 26px -12px rgba(20,24,48,.30), inset 0 1px 0 rgba(255,255,255,.95);
+    --ceramic-menu-shadow: 0 2px 4px rgba(20,24,48,.12), 0 14px 26px -12px rgba(20,24,48,.30);
     --ceramic-rect-border: 1px solid rgba(30,36,60,.10);
+    /* Sticky header/columns sit on the page background so scrolled content
+       doesn't show through */
+    --ceramic-sticky-bg: var(--background);
+    --ceramic-menu-hover: rgba(15,23,42,.06);
 
     height: 100%;
     display: flex;
@@ -209,7 +219,9 @@ const CERAMIC_CSS = `
     --ceramic-chip-text: #e4e4e7;
     --ceramic-shadow-rest: 0 1px 1px rgba(0,0,0,.45), 0 10px 22px -10px rgba(0,0,0,.6), inset 0 1px 0 rgba(255,255,255,.85);
     --ceramic-shadow-hover: 0 2px 4px rgba(0,0,0,.5), 0 18px 34px -12px rgba(0,0,0,.65), inset 0 1px 0 rgba(255,255,255,.95);
+    --ceramic-menu-shadow: 0 2px 4px rgba(0,0,0,.5), 0 18px 34px -12px rgba(0,0,0,.65);
     --ceramic-rect-border: none;
+    --ceramic-menu-hover: rgba(255,255,255,.08);
   }
 
   .ceramic-panel {
@@ -256,6 +268,14 @@ const CERAMIC_CSS = `
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    position: sticky;
+    top: 0;
+    z-index: 5;
+    background: var(--ceramic-sticky-bg);
+    /* Extend the header's background over the panel's 4px top padding and
+       the 10px grid row-gap below it, so a vertically-scrolling row can't
+       peek through either gap */
+    box-shadow: 0 -4px 0 0 var(--ceramic-sticky-bg), 0 10px 0 0 var(--ceramic-sticky-bg);
   }
 
   .ceramic-cell {
@@ -263,6 +283,72 @@ const CERAMIC_CSS = `
     align-items: center;
     justify-content: center;
     padding: 5px 4px;
+  }
+
+  /* Frozen "#" and "sku" columns (always columns 0 and 1) — pinned to the
+     left edge of .ceramic-panel while the sheet scrolls horizontally */
+  .ceramic-cell-sticky {
+    position: sticky;
+    z-index: 3;
+    background: var(--ceramic-sticky-bg);
+    /* Extend the cell's background over the 8px grid column-gap so a
+       horizontally-scrolling column header can't peek through behind it */
+    box-shadow: 8px 0 0 0 var(--ceramic-sticky-bg);
+  }
+  .ceramic-cell-sticky-0 {
+    /* inset-inline-start: left edge in LTR (English), right edge in RTL
+       (Hebrew) — keeps "#" pinned to the leading edge in both directions */
+    inset-inline-start: 0;
+    /* Also cover the panel's leading-edge padding next to "#" */
+    box-shadow: -4px 0 0 0 var(--ceramic-sticky-bg), 8px 0 0 0 var(--ceramic-sticky-bg);
+  }
+  /* 44px "#" column + 8px grid column-gap, so column 1 sticks at the same
+     spot it occupies unscrolled (no jump when it engages) */
+  .ceramic-cell-sticky-1 {
+    inset-inline-start: 52px;
+  }
+  /* Corner cells (frozen header × frozen column) sit above everything.
+     Re-declare the combined horizontal + vertical box-shadow coverage here —
+     a single box-shadow declaration on .ceramic-head or .ceramic-cell-sticky
+     alone would otherwise be fully overridden (box-shadow doesn't merge
+     across rules of equal specificity). */
+  .ceramic-head.ceramic-cell-sticky {
+    z-index: 6;
+    box-shadow:
+      8px 0 0 0 var(--ceramic-sticky-bg),
+      0 -4px 0 0 var(--ceramic-sticky-bg),
+      0 10px 0 0 var(--ceramic-sticky-bg);
+  }
+  .ceramic-head.ceramic-cell-sticky-0 {
+    box-shadow:
+      -4px 0 0 0 var(--ceramic-sticky-bg),
+      8px 0 0 0 var(--ceramic-sticky-bg),
+      0 -4px 0 0 var(--ceramic-sticky-bg),
+      0 10px 0 0 var(--ceramic-sticky-bg);
+  }
+
+  /* RTL (Hebrew): columns 0/1 are pinned to the right edge instead of the
+     left, so the horizontal box-shadow coverage must flip direction —
+     extend toward the left (column-gap / rest of the grid) instead of
+     the right, and cover the panel's right padding instead of its left */
+  html[dir="rtl"] .ceramic-cell-sticky {
+    box-shadow: -8px 0 0 0 var(--ceramic-sticky-bg);
+  }
+  html[dir="rtl"] .ceramic-cell-sticky-0 {
+    box-shadow: 4px 0 0 0 var(--ceramic-sticky-bg), -8px 0 0 0 var(--ceramic-sticky-bg);
+  }
+  html[dir="rtl"] .ceramic-head.ceramic-cell-sticky {
+    box-shadow:
+      -8px 0 0 0 var(--ceramic-sticky-bg),
+      0 -4px 0 0 var(--ceramic-sticky-bg),
+      0 10px 0 0 var(--ceramic-sticky-bg);
+  }
+  html[dir="rtl"] .ceramic-head.ceramic-cell-sticky-0 {
+    box-shadow:
+      4px 0 0 0 var(--ceramic-sticky-bg),
+      -8px 0 0 0 var(--ceramic-sticky-bg),
+      0 -4px 0 0 var(--ceramic-sticky-bg),
+      0 10px 0 0 var(--ceramic-sticky-bg);
   }
 
   .ceramic-rect {
@@ -675,6 +761,41 @@ const CERAMIC_CSS = `
     outline-color: rgba(255,255,255,.55);
   }
 
+  /* Right-click row menu (Delete row) */
+  .ceramic-context-menu {
+    position: fixed;
+    z-index: 1000;
+    min-width: 170px;
+    background: var(--background);
+    border: 1px solid var(--ceramic-head-border);
+    border-radius: 10px;
+    box-shadow: var(--ceramic-menu-shadow);
+    padding: 4px;
+  }
+  .ceramic-context-menu-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 9px 12px;
+    border: none;
+    background: none;
+    border-radius: 7px;
+    cursor: pointer;
+    text-align: start;
+    color: var(--ceramic-head-text);
+    font: 600 13.5px/1.2 'DM Sans', 'Heebo', sans-serif;
+  }
+  .ceramic-context-menu-item:hover {
+    background: var(--ceramic-menu-hover);
+  }
+  .ceramic-context-menu-item-danger {
+    color: #ef4444;
+  }
+  .ceramic-context-menu-item-danger:hover {
+    background: rgba(239,68,68,.12);
+  }
+
   /* Reduced motion */
   @media (prefers-reduced-motion: reduce) {
     .ceramic-rect,
@@ -783,6 +904,13 @@ const CeramicRow = memo(function CeramicRow({
     return undefined
   }
 
+  // Columns 0 ("#") and 1 ("sku") are frozen in place while scrolling
+  const cellClassName = (colIndex: number): string => {
+    if (colIndex === 0) return "ceramic-cell ceramic-cell-sticky ceramic-cell-sticky-0"
+    if (colIndex === 1) return "ceramic-cell ceramic-cell-sticky ceramic-cell-sticky-1"
+    return "ceramic-cell"
+  }
+
   return (
     <>
       {columns.map((col, colIndex) => {
@@ -790,7 +918,7 @@ const CeramicRow = memo(function CeramicRow({
 
         if (col.type === "index") {
           return (
-            <div key={col.field} className="ceramic-cell">
+            <div key={col.field} className={cellClassName(colIndex)} data-row-index={rowIndex}>
               <div className="ceramic-idx">{rowIndex + 1}</div>
             </div>
           )
@@ -805,7 +933,7 @@ const CeramicRow = memo(function CeramicRow({
           }
           const label = t(labelKey, { defaultValue: status })
           return (
-            <div key={col.field} className="ceramic-cell">
+            <div key={col.field} className={cellClassName(colIndex)} data-row-index={rowIndex}>
               <span
                 className="ceramic-status"
                 style={{ color: getStatusColor(status) }}
@@ -818,10 +946,10 @@ const CeramicRow = memo(function CeramicRow({
 
         if (col.type === "image-multi" || col.type === "image-single") {
           return (
-            <div key={col.field} className="ceramic-cell">
+            <div key={col.field} className={cellClassName(colIndex)} data-row-index={rowIndex}>
               <CeramicImageCell
                 row={row}
-                field={col.field as "product_image_urls" | "cover_image_url" | "ambience_image_url"}
+                field={col.field as "product_image_urls" | "gallery_image_urls"}
                 imageType={col.imageType!}
                 multiple={col.type === "image-multi"}
                 rowIndex={rowIndex}
@@ -838,7 +966,7 @@ const CeramicRow = memo(function CeramicRow({
           const value = getFieldValue(row, col.field)
           const label = getDropdownLabel(value, options, isHe)
           return (
-            <div key={col.field} className="ceramic-cell" title={issue?.message}>
+            <div key={col.field} className={cellClassName(colIndex)} data-row-index={rowIndex} title={issue?.message}>
               <DropdownCellWrapper
                 value={value}
                 label={label}
@@ -858,7 +986,7 @@ const CeramicRow = memo(function CeramicRow({
 
         // text cell
         return (
-          <div key={col.field} className="ceramic-cell" title={issue?.message}>
+          <div key={col.field} className={cellClassName(colIndex)} data-row-index={rowIndex} title={issue?.message}>
             <TextCellWrapper
               initialValue={getFieldValue(row, col.field)}
               clientId={row._clientId ?? row.sku}
@@ -1527,6 +1655,75 @@ export function SkuSheetCeramic({
     return { r: parseInt(r, 10), c: parseInt(c, 10) }
   }
 
+  // ── Right-click "Delete row" menu ──────────────────────────────────────
+  const rowIndexFromElement = (el: Element | null): number | null => {
+    const cell = (el?.closest?.("[data-row-index]") ?? null) as HTMLElement | null
+    if (!cell) return null
+    const r = cell.getAttribute("data-row-index")
+    return r == null ? null : parseInt(r, 10)
+  }
+
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; rowIndex: number } | null>(null)
+  const contextMenuRef = useRef<HTMLDivElement>(null)
+  const [deleteTarget, setDeleteTarget] = useState<SkuMetadataRow | null>(null)
+  const deleteMutation = useSkuDeleteMutation()
+
+  const removeRow = useCallback((row: SkuMetadataRow) => {
+    const key = row._clientId ?? row.sku
+    const newRows = rowsRef.current.filter((r) => (r._clientId ?? r.sku) !== key)
+    onRowsChangeRef.current(newRows)
+  }, [])
+
+  const handleDeleteRow = useCallback(() => {
+    setContextMenu((current) => {
+      if (!current) return null
+      const row = rowsRef.current[current.rowIndex]
+      if (row) {
+        if (row._savedSku) setDeleteTarget(row)
+        else removeRow(row)
+      }
+      return null
+    })
+  }, [removeRow])
+
+  const confirmDeleteRow = useCallback(() => {
+    if (!deleteTarget) return
+    const target = deleteTarget
+    deleteMutation.mutate(target._savedSku!, {
+      onSuccess: () => {
+        toast.success(t("sku.grid.deleteRowSuccess"))
+        removeRow(target)
+        setDeleteTarget(null)
+      },
+      onError: () => {
+        toast.error(t("sku.grid.deleteRowFailed"))
+        setDeleteTarget(null)
+      },
+    })
+  }, [deleteTarget, deleteMutation, removeRow, t])
+
+  // Close the menu on any outside click, scroll, or Escape
+  useEffect(() => {
+    if (!contextMenu) return
+
+    const close = (e: Event) => {
+      if (e instanceof MouseEvent && contextMenuRef.current?.contains(e.target as Node)) return
+      setContextMenu(null)
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setContextMenu(null)
+    }
+
+    document.addEventListener("mousedown", close)
+    document.addEventListener("scroll", close, true)
+    document.addEventListener("keydown", onKey, true)
+    return () => {
+      document.removeEventListener("mousedown", close)
+      document.removeEventListener("scroll", close, true)
+      document.removeEventListener("keydown", onKey, true)
+    }
+  }, [contextMenu])
+
   // Cell-range mutations (Delete / Ctrl+X / Ctrl+D) — one undo step each
   const clearRange = useCallback(() => {
     const rect = selectionRect()
@@ -1542,7 +1739,7 @@ export function SkuSheetCeramic({
           ;(next as Record<string, unknown>)[col.field] = ""
           changed = true
         } else if (col.type === "image-multi") {
-          next.product_image_urls = []
+          ;(next as Record<string, unknown>)[col.field] = []
           changed = true
         } else if (col.type === "image-single") {
           ;(next as Record<string, unknown>)[col.field] = ""
@@ -1598,7 +1795,9 @@ export function SkuSheetCeramic({
           )
           changed = true
         } else if (col.type === "image-multi") {
-          next.product_image_urls = [...(sourceRow.product_image_urls ?? [])]
+          ;(next as Record<string, unknown>)[col.field] = [
+            ...((sourceRow[col.field as keyof SkuMetadataRow] as string[] | undefined) ?? []),
+          ]
           changed = true
         } else if (col.type === "image-single") {
           ;(next as Record<string, unknown>)[col.field] =
@@ -1728,6 +1927,15 @@ export function SkuSheetCeramic({
       setSelection(anchor, rc)
     }
 
+    // Right-click anywhere in a row opens the row's "Delete row" menu at
+    // the cursor, like a desktop file manager / browser context menu
+    const onContextMenu = (e: MouseEvent) => {
+      const rowIndex = rowIndexFromElement(e.target as Element)
+      if (rowIndex == null) return
+      e.preventDefault()
+      setContextMenu({ x: e.clientX, y: e.clientY, rowIndex })
+    }
+
     // Undo/redo listen on the DOCUMENT in capture phase so they work no
     // matter where focus is (inside a cell, on a button, on the page body)
     // and always beat the browser's native input undo. If a cell edit is in
@@ -1825,11 +2033,13 @@ export function SkuSheetCeramic({
     document.addEventListener("keydown", onUndoRedo, true)
     container.addEventListener("focusin", onFocusIn)
     container.addEventListener("mousedown", onMouseDown, true)
+    container.addEventListener("contextmenu", onContextMenu)
     container.addEventListener("keydown", handleKeyDown)
     return () => {
       document.removeEventListener("keydown", onUndoRedo, true)
       container.removeEventListener("focusin", onFocusIn)
       container.removeEventListener("mousedown", onMouseDown, true)
+      container.removeEventListener("contextmenu", onContextMenu)
       container.removeEventListener("keydown", handleKeyDown)
     }
   }, [
@@ -1860,8 +2070,17 @@ export function SkuSheetCeramic({
           }}
         >
           {/* Header row */}
-          {columns.map((col) => (
-            <div key={`h-${col.field}`} className="ceramic-head">
+          {columns.map((col, colIndex) => (
+            <div
+              key={`h-${col.field}`}
+              className={
+                colIndex === 0
+                  ? "ceramic-head ceramic-cell-sticky ceramic-cell-sticky-0"
+                  : colIndex === 1
+                    ? "ceramic-head ceramic-cell-sticky ceramic-cell-sticky-1"
+                    : "ceramic-head"
+              }
+            >
               {col.field === "rowNumber" ? "#" : t(getHeaderKey(col.field))}
             </div>
           ))}
@@ -1886,6 +2105,45 @@ export function SkuSheetCeramic({
           ))}
         </div>
       </div>
+
+      {contextMenu && (
+        <div
+          ref={contextMenuRef}
+          className="ceramic-context-menu"
+          style={{ left: contextMenu.x, top: contextMenu.y }}
+        >
+          <button
+            type="button"
+            className="ceramic-context-menu-item ceramic-context-menu-item-danger"
+            onClick={handleDeleteRow}
+          >
+            {t("sku.grid.deleteRow")}
+          </button>
+        </div>
+      )}
+
+      <AlertDialog open={!!deleteTarget} onOpenChange={(open) => !open && setDeleteTarget(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t("sku.grid.deleteRowConfirmTitle")}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {t("sku.grid.deleteRowConfirmDescription", { sku: deleteTarget?._savedSku ?? deleteTarget?.sku })}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleteMutation.isPending}>
+              {t("common.cancel")}
+            </AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              disabled={deleteMutation.isPending}
+              onClick={confirmDeleteRow}
+            >
+              {deleteMutation.isPending ? t("common.deleting") : t("common.delete")}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }

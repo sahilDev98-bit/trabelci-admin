@@ -12,7 +12,7 @@ const MAX_VISIBLE_THUMBS = 1
 
 interface CeramicImageCellProps {
   row: SkuMetadataRow
-  field: "product_image_urls" | "cover_image_url" | "ambience_image_url"
+  field: "product_image_urls" | "gallery_image_urls"
   imageType: SkuImageType
   multiple: boolean
   rowIndex: number
@@ -75,12 +75,7 @@ export function CeramicImageCell({
   const [galleryOpen, setGalleryOpen] = useState(false)
   const [galleryRect, setGalleryRect] = useState<DOMRect | null>(null)
 
-  const urls: string[] =
-    field === "product_image_urls"
-      ? (row.product_image_urls ?? [])
-      : row[field]
-        ? [row[field] as string]
-        : []
+  const urls: string[] = (row[field] as string[] | undefined) ?? []
 
   const hasImages = urls.length > 0
 
@@ -96,21 +91,12 @@ export function CeramicImageCell({
           const { url } = await uploadSkuImage(file, imageType, row.sku || undefined)
           uploaded.push(url)
         }
-        if (field === "product_image_urls") {
-          onRowChange({
-            ...row,
-            product_image_urls: [...(row.product_image_urls ?? []), ...uploaded],
-            _isDirty: true,
-            _validationStatus: "unchecked",
-          })
-        } else {
-          onRowChange({
-            ...row,
-            [field]: uploaded[uploaded.length - 1],
-            _isDirty: true,
-            _validationStatus: "unchecked",
-          })
-        }
+        onRowChange({
+          ...row,
+          [field]: [...((row[field] as string[] | undefined) ?? []), ...uploaded],
+          _isDirty: true,
+          _validationStatus: "unchecked",
+        })
       } catch {
         toast.error(t("sku.grid.imageUploadFailed"))
       } finally {
@@ -123,23 +109,14 @@ export function CeramicImageCell({
 
   const handleRemove = useCallback(
     (urlToRemove: string) => {
-      if (field === "product_image_urls") {
-        onRowChange({
-          ...row,
-          product_image_urls: (row.product_image_urls ?? []).filter(
-            (u) => u !== urlToRemove,
-          ),
-          _isDirty: true,
-          _validationStatus: "unchecked",
-        })
-      } else {
-        onRowChange({
-          ...row,
-          [field]: "",
-          _isDirty: true,
-          _validationStatus: "unchecked",
-        })
-      }
+      onRowChange({
+        ...row,
+        [field]: ((row[field] as string[] | undefined) ?? []).filter(
+          (u) => u !== urlToRemove,
+        ),
+        _isDirty: true,
+        _validationStatus: "unchecked",
+      })
     },
     [row, field, onRowChange],
   )

@@ -152,7 +152,7 @@ export async function generateSkuName(
   })
 }
 
-export type SkuImageType = "product" | "cover" | "ambience"
+export type SkuImageType = "product" | "gallery"
 
 export async function uploadSkuImage(
   file: File,

@@ -42,15 +42,14 @@ function makeEmptyRow(): SkuMetadataRow {
 const MIN_TRAILING_EMPTY_ROWS = 40
 
 const USER_DATA_FIELDS = [
-  "sku", "company", "supplier", "supplier_code", "series", "model", "color",
-  "size", "finish", "surface_type", "r_rating", "thickness",
-  "country_of_origin", "category", "subcategory", "product_type",
-  "display_name_en", "display_name_he", "sap_item_name", "internal_notes",
-  "cover_image_url", "ambience_image_url",
+  "sku", "supplier", "series", "color", "size", "finish",
+  "country_of_origin", "qty_per_carton", "qty_per_pallet", "shade",
+  "supplier_code", "display_name_en", "series_en", "color_en", "supplier_sku",
 ] as const
 
 function isRowEmpty(row: SkuMetadataRow): boolean {
   if (row.product_image_urls?.length) return false
+  if (row.gallery_image_urls?.length) return false
   return USER_DATA_FIELDS.every((field) => !String(row[field] ?? "").trim())
 }
 

@@ -82,7 +82,7 @@ interface SkuGridProps {
 
 // Image columns hold URLs managed by the upload cells; product images are an
 // array. Clipboard copy/paste round-trips them as comma-joined text.
-const ARRAY_FIELDS = new Set(["product_image_urls"])
+const ARRAY_FIELDS = new Set(["product_image_urls", "gallery_image_urls"])
 const READONLY_FIELDS = new Set(["rowNumber", "status", "original_sap_name"])
 
 // Stable identity for a row: the client-side id assigned when the row was
@@ -171,30 +171,24 @@ function buildColumnDefs(
           },
         ] satisfies ColDef<SkuMetadataRow>[])
       : []),
-    // Image fields are uploads (spec point 4) — file goes to R2, the cell
-    // stores only the returned URL. Not text-editable, not sortable.
-    { field: "product_image_urls", headerName: t("sku.fields.product_image_urls"), flex: 16, minWidth: 170, editable: false, sortable: false, filter: false, cellRenderer: ImageUploadCellRenderer, cellRendererParams: { imageType: "product", multiple: true } },
-    { field: "cover_image_url",    headerName: t("sku.fields.cover_image_url"),    flex: 14, minWidth: 150, editable: false, sortable: false, filter: false, cellRenderer: ImageUploadCellRenderer, cellRendererParams: { imageType: "cover" } },
-    { field: "ambience_image_url", headerName: t("sku.fields.ambience_image_url"), flex: 14, minWidth: 150, editable: false, sortable: false, filter: false, cellRenderer: ImageUploadCellRenderer, cellRendererParams: { imageType: "ambience" } },
-    { field: "company",           headerName: t("sku.fields.company"),           flex: 15, minWidth: 140, editable: true },
+    { field: "supplier",          headerName: t("sku.fields.supplier"),          flex: 13, minWidth: 120, editable: true },
     { field: "series",            headerName: t("sku.fields.series"),            flex: 13, minWidth: 120, editable: true },
-    { field: "color",             headerName: t("sku.fields.color"),             flex: 12, minWidth: 110, editable: true },
+    { field: "color",              headerName: t("sku.fields.color"),             flex: 12, minWidth: 110, editable: true },
     { field: "size",              headerName: t("sku.fields.size"),              flex: 10, minWidth: 90,  editable: true, ...makeDropdownCellEditor("size", dropdowns) },
     { field: "finish",            headerName: t("sku.fields.finish"),            flex: 11, minWidth: 100, editable: true, ...makeDropdownCellEditor("finish", dropdowns) },
+    // Image fields are uploads (spec point 4) — file goes to R2, the cell
+    // stores only the returned URL(s). Not text-editable, not sortable.
+    { field: "product_image_urls", headerName: t("sku.fields.product_image_urls"), flex: 16, minWidth: 170, editable: false, sortable: false, filter: false, cellRenderer: ImageUploadCellRenderer, cellRendererParams: { imageType: "product", multiple: true } },
+    { field: "gallery_image_urls", headerName: t("sku.fields.gallery_image_urls"), flex: 16, minWidth: 170, editable: false, sortable: false, filter: false, cellRenderer: ImageUploadCellRenderer, cellRendererParams: { imageType: "gallery", multiple: true } },
     { field: "country_of_origin", headerName: t("sku.fields.country_of_origin"), flex: 11, minWidth: 110, editable: true, ...makeDropdownCellEditor("country_of_origin", dropdowns) },
-    { field: "thickness",         headerName: t("sku.fields.thickness"),         flex: 10, minWidth: 90,  editable: true, ...makeDropdownCellEditor("thickness", dropdowns) },
-    { field: "surface_type",      headerName: t("sku.fields.surface_type"),      flex: 11, minWidth: 100, editable: true, ...makeDropdownCellEditor("surface_type", dropdowns) },
-    { field: "r_rating",          headerName: t("sku.fields.r_rating"),          flex: 9,  minWidth: 80,  editable: true, ...makeDropdownCellEditor("r_rating", dropdowns) },
-    { field: "product_type",      headerName: t("sku.fields.product_type"),      flex: 11, minWidth: 100, editable: true, ...makeDropdownCellEditor("product_type", dropdowns) },
-    { field: "supplier",          headerName: t("sku.fields.supplier"),          flex: 13, minWidth: 120, editable: true },
+    { field: "qty_per_carton",    headerName: t("sku.fields.qty_per_carton"),    flex: 10, minWidth: 100, editable: true },
+    { field: "qty_per_pallet",    headerName: t("sku.fields.qty_per_pallet"),    flex: 10, minWidth: 100, editable: true },
+    { field: "shade",              headerName: t("sku.fields.shade"),            flex: 10, minWidth: 100, editable: true, ...makeDropdownCellEditor("shade", dropdowns) },
     { field: "supplier_code",     headerName: t("sku.fields.supplier_code"),     flex: 11, minWidth: 110, editable: true },
-    { field: "model",             headerName: t("sku.fields.model"),             flex: 11, minWidth: 100, editable: true },
-    { field: "sap_item_name",     headerName: t("sku.fields.sap_item_name"),     flex: 20, minWidth: 180, editable: true },
     { field: "display_name_en",   headerName: t("sku.fields.display_name_en"),   flex: 20, minWidth: 180, editable: true },
-    { field: "display_name_he",   headerName: t("sku.fields.display_name_he"),   flex: 18, minWidth: 160, editable: true },
-    { field: "category",          headerName: t("sku.fields.category"),          flex: 13, minWidth: 120, editable: true },
-    { field: "subcategory",       headerName: t("sku.fields.subcategory"),       flex: 13, minWidth: 120, editable: true },
-    { field: "internal_notes",    headerName: t("sku.fields.internal_notes"),    flex: 16, minWidth: 140, editable: true },
+    { field: "series_en",         headerName: t("sku.fields.series_en"),         flex: 13, minWidth: 120, editable: true },
+    { field: "color_en",          headerName: t("sku.fields.color_en"),          flex: 12, minWidth: 110, editable: true },
+    { field: "supplier_sku",      headerName: t("sku.fields.supplier_sku"),      flex: 13, minWidth: 130, editable: true },
     {
       field: "status",
       headerName: t("sku.fields.status"),

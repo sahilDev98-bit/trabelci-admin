@@ -15,32 +15,26 @@ export interface SkuMetadataRow {
   workflow_type: SkuWorkflowType;
   status: SkuStatus;
 
-  company?: string;
   supplier?: string;
   supplier_code?: string;
+  supplier_sku?: string;
   series?: string;
-  model?: string;
+  series_en?: string;
   color?: string;
+  color_en?: string;
   size?: string;
   finish?: string;
-  surface_type?: string;
-  r_rating?: string;
-  thickness?: string;
   country_of_origin?: string;
-  category?: string;
-  subcategory?: string;
-  product_type?: string;
+  shade?: string;
+  qty_per_carton?: string;
+  qty_per_pallet?: string;
 
   display_name_en?: string;
-  display_name_he?: string;
-  sap_item_name?: string;
-  internal_notes?: string;
 
-  // Image URLs — files live in Cloudflare R2; product images are multiple
+  // Image URLs — files live in Cloudflare R2; both fields hold multiple URLs
   // (mirrors the product table's cover_url + images pattern)
   product_image_urls?: string[];
-  cover_image_url?: string;
-  ambience_image_url?: string;
+  gallery_image_urls?: string[];
 
   original_sap_name?: string;
   original_sap_description?: string;
@@ -77,7 +71,7 @@ export interface SkuDuplicate {
     | 'exact_sku'           // same SKU in sku_metadata, or repeated within the batch
     | 'existing_product'    // SKU exists in the synced product table
     | 'sap_itemcode'        // ItemCode exists in SAP (OITM, direct check)
-    | 'structural'          // same company/series/color/size/finish within the batch
+    | 'structural'          // same series/color/size/finish within the batch
     | 'structural_existing' // same structure as an already-saved record
     | 'supplier_code'       // same supplier code (secondary signal, never blocks)
   message: string;
@@ -160,7 +154,7 @@ export interface SkuCleanupStats {
   total: number;
   cleaned: number;
   pending: number;
-  byCompany: Record<string, { total: number; cleaned: number }>;
+  bySupplier: Record<string, { total: number; cleaned: number }>;
   productTotal?: number;
   importable?: number;
 }
