@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import { useNavigate } from "@tanstack/react-router"
 import { useTranslation } from "react-i18next"
-import { ArrowLeft, Save, Send, Loader2, CheckSquare } from "lucide-react"
+import { ArrowLeft, Save, Send, Loader2, CheckSquare, Maximize2 } from "lucide-react"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -15,6 +15,7 @@ import {
 } from "@/features/skuManagement/api"
 import type { SkuMetadataRow } from "@/features/skuManagement/types"
 import { SkuSheetCeramic } from "./components/SkuSheetCeramic"
+import { SkuFullPageModal } from "./components/SkuFullPageModal"
 // Rollback to the AG Grid sheet: import { SkuGrid } from "./components/SkuGrid"
 // Right-side details panel — temporarily hidden (doc point 29 lists it as
 // optional). Uncomment the related blocks below to bring it back.
@@ -143,6 +144,7 @@ function CreationSheet({ initialRows }: { initialRows: SkuMetadataRow[] }) {
   // bulk-upsert mutation, so isPending alone would put both buttons in a
   // loading state at once.
   const [activeAction, setActiveAction] = useState<"save" | "approve" | null>(null)
+  const [fullPageOpen, setFullPageOpen] = useState(false)
 
   // Undo/redo history (Ctrl+Z / Ctrl+Y) — snapshots of the sheet before each
   // edit/paste/clear/fill. Server actions (save/approve/submit) are not
@@ -426,6 +428,15 @@ function CreationSheet({ initialRows }: { initialRows: SkuMetadataRow[] }) {
 
         <div className="ml-auto flex items-center gap-2">
           <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setFullPageOpen(true)}
+            title="Open grid in full page"
+          >
+            <Maximize2 className="mr-1 h-4 w-4" />
+            View in Full Page
+          </Button>
+          <Button
             variant="outline"
             size="sm"
             onClick={handleSaveDraft}
@@ -488,6 +499,64 @@ function CreationSheet({ initialRows }: { initialRows: SkuMetadataRow[] }) {
         )}
         */}
       </div>
+
+      <SkuFullPageModal
+        open={fullPageOpen}
+        onClose={() => setFullPageOpen(false)}
+        title={t("sku.workflowA")}
+        statusLine={t("sku.grid.rowsStatus", { total: filledRows.length, unsaved: unsavedCount })}
+        mode="creation"
+        rows={rows}
+        onRowsChange={handleRowsChange}
+        dropdowns={dropdowns}
+        createEmptyRow={makeEmptyRow}
+        onUndo={undo}
+        onRedo={redo}
+        actions={
+          <>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleSaveDraft}
+              disabled={activeAction !== null}
+            >
+              {activeAction === "save" ? (
+                <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+              ) : (
+                <Save className="mr-1 h-4 w-4" />
+              )}
+              {t("sku.grid.saveDraft")}
+            </Button>
+            {flowMode === "approve" ? (
+              <Button
+                size="sm"
+                onClick={handleApprove}
+                disabled={activeAction !== null || approvableCount === 0}
+              >
+                {activeAction === "approve" ? (
+                  <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+                ) : (
+                  <CheckSquare className="mr-1 h-4 w-4" />
+                )}
+                {t("sku.grid.approveCount", { count: approvableCount })}
+              </Button>
+            ) : (
+              <Button
+                size="sm"
+                onClick={handleSubmitToSap}
+                disabled={submitToSap.isPending || submittableCount === 0}
+              >
+                {submitToSap.isPending ? (
+                  <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+                ) : (
+                  <Send className="mr-1 h-4 w-4" />
+                )}
+                {t("sku.grid.submitToSapCount", { count: submittableCount })}
+              </Button>
+            )}
+          </>
+        }
+      />
     </div>
   )
 }

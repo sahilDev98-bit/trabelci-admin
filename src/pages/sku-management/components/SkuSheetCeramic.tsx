@@ -100,30 +100,12 @@ const COLUMNS: CeramicColumn[] = [
   { field: "status",             type: "readonly",     minWidth: 110 },
 ]
 
-// Cleanup mode: checkbox column after #, readonly SKU, original SAP name
-// (readonly, italic) right after it — mirrors the old grid's cleanup layout
+// Cleanup mode: SKU column is readonly (cannot be renamed in cleanup workflow)
 function buildColumns(mode: "creation" | "cleanup"): CeramicColumn[] {
   if (mode !== "cleanup") return COLUMNS
-  const out: CeramicColumn[] = []
-  for (const col of COLUMNS) {
-    if (col.field === "rowNumber") {
-      out.push(col)
-      continue
-    }
-    if (col.field === "sku") {
-      out.push({ ...col, readOnly: true })
-      out.push({
-        field: "original_sap_name",
-        type: "text",
-        minWidth: 200,
-        readOnly: true,
-        italic: true,
-      })
-      continue
-    }
-    out.push(col)
-  }
-  return out
+  return COLUMNS.map((col) =>
+    col.field === "sku" ? { ...col, readOnly: true } : col
+  )
 }
 
 function getHeaderKey(field: string): string {
@@ -220,7 +202,7 @@ const CERAMIC_CSS = `
     --ceramic-shadow-rest: 0 1px 1px rgba(0,0,0,.45), 0 10px 22px -10px rgba(0,0,0,.6), inset 0 1px 0 rgba(255,255,255,.85);
     --ceramic-shadow-hover: 0 2px 4px rgba(0,0,0,.5), 0 18px 34px -12px rgba(0,0,0,.65), inset 0 1px 0 rgba(255,255,255,.95);
     --ceramic-menu-shadow: 0 2px 4px rgba(0,0,0,.5), 0 18px 34px -12px rgba(0,0,0,.65);
-    --ceramic-rect-border: none;
+    --ceramic-rect-border: 1px solid rgba(255,255,255,.10);
     --ceramic-menu-hover: rgba(255,255,255,.08);
   }
 
@@ -291,16 +273,23 @@ const CERAMIC_CSS = `
     position: sticky;
     z-index: 3;
     background: var(--ceramic-sticky-bg);
-    /* Extend the cell's background over the 8px grid column-gap so a
-       horizontally-scrolling column header can't peek through behind it */
-    box-shadow: 8px 0 0 0 var(--ceramic-sticky-bg);
+    /* outline: none suppresses the browser's native focus ring (black border)
+       that appears on Windows when pressing ALT or navigating with keyboard */
+    outline: none;
+    /* 8px fills the grid column-gap; the faint separator shadow makes the
+       frozen edge crisp so any minor card-shadow bleed is imperceptible */
+    box-shadow:
+      8px 0 0 0 var(--ceramic-sticky-bg),
+      2px 0 6px -1px rgba(20, 24, 48, 0.07);
   }
   .ceramic-cell-sticky-0 {
     /* inset-inline-start: left edge in LTR (English), right edge in RTL
        (Hebrew) — keeps "#" pinned to the leading edge in both directions */
     inset-inline-start: 0;
     /* Also cover the panel's leading-edge padding next to "#" */
-    box-shadow: -4px 0 0 0 var(--ceramic-sticky-bg), 8px 0 0 0 var(--ceramic-sticky-bg);
+    box-shadow:
+      -4px 0 0 0 var(--ceramic-sticky-bg),
+      8px 0 0 0 var(--ceramic-sticky-bg);
   }
   /* 44px "#" column + 8px grid column-gap, so column 1 sticks at the same
      spot it occupies unscrolled (no jump when it engages) */
@@ -316,6 +305,7 @@ const CERAMIC_CSS = `
     z-index: 6;
     box-shadow:
       8px 0 0 0 var(--ceramic-sticky-bg),
+      2px 0 6px -1px rgba(20, 24, 48, 0.07),
       0 -4px 0 0 var(--ceramic-sticky-bg),
       0 10px 0 0 var(--ceramic-sticky-bg);
   }
@@ -332,7 +322,9 @@ const CERAMIC_CSS = `
      extend toward the left (column-gap / rest of the grid) instead of
      the right, and cover the panel's right padding instead of its left */
   html[dir="rtl"] .ceramic-cell-sticky {
-    box-shadow: -8px 0 0 0 var(--ceramic-sticky-bg);
+    box-shadow:
+      -8px 0 0 0 var(--ceramic-sticky-bg),
+      -2px 0 6px -1px rgba(20, 24, 48, 0.07);
   }
   html[dir="rtl"] .ceramic-cell-sticky-0 {
     box-shadow: 4px 0 0 0 var(--ceramic-sticky-bg), -8px 0 0 0 var(--ceramic-sticky-bg);
@@ -340,6 +332,7 @@ const CERAMIC_CSS = `
   html[dir="rtl"] .ceramic-head.ceramic-cell-sticky {
     box-shadow:
       -8px 0 0 0 var(--ceramic-sticky-bg),
+      -2px 0 6px -1px rgba(20, 24, 48, 0.07),
       0 -4px 0 0 var(--ceramic-sticky-bg),
       0 10px 0 0 var(--ceramic-sticky-bg);
   }
@@ -357,18 +350,17 @@ const CERAMIC_CSS = `
     border-radius: var(--ceramic-radius);
     background: linear-gradient(180deg, #ffffff, var(--ceramic-cell-soft));
     border: var(--ceramic-rect-border);
-    box-shadow: var(--ceramic-shadow-rest);
+    box-shadow: none;
     display: flex;
     align-items: center;
     justify-content: center;
-    transition: transform .22s cubic-bezier(.22,.8,.32,1), box-shadow .22s ease;
+    transition: transform .22s cubic-bezier(.22,.8,.32,1);
     cursor: text;
     position: relative;
   }
   .ceramic-rect:hover,
   .ceramic-rect:focus-within {
     transform: translateY(-3px);
-    box-shadow: var(--ceramic-shadow-hover);
   }
 
   .ceramic-rect[data-validation-tint] {
@@ -388,7 +380,7 @@ const CERAMIC_CSS = `
     outline: none;
   }
   .ceramic-field:focus {
-    box-shadow: 0 0 0 3px var(--ceramic-accent-soft), var(--ceramic-shadow-hover);
+    box-shadow: 0 0 0 3px var(--ceramic-accent-soft);
   }
   .ceramic-field::placeholder {
     color: #c7cbdc;
@@ -404,11 +396,11 @@ const CERAMIC_CSS = `
     border-radius: var(--ceramic-radius);
     background: linear-gradient(180deg, #ffffff, var(--ceramic-cell-soft));
     border: var(--ceramic-rect-border);
-    box-shadow: var(--ceramic-shadow-rest);
+    box-shadow: none;
     display: flex;
     align-items: center;
     justify-content: center;
-    transition: transform .22s cubic-bezier(.22,.8,.32,1), box-shadow .22s ease;
+    transition: transform .22s cubic-bezier(.22,.8,.32,1);
     cursor: pointer;
     position: relative;
     font: 600 14px/1 'DM Sans', 'Heebo', sans-serif;
@@ -421,10 +413,9 @@ const CERAMIC_CSS = `
   .ceramic-dropdown-trigger:hover,
   .ceramic-dropdown-trigger:focus {
     transform: translateY(-3px);
-    box-shadow: var(--ceramic-shadow-hover);
   }
   .ceramic-dropdown-trigger:focus {
-    box-shadow: 0 0 0 3px var(--ceramic-accent-soft), var(--ceramic-shadow-hover);
+    box-shadow: 0 0 0 3px var(--ceramic-accent-soft);
   }
   .ceramic-dropdown-trigger::after {
     content: "";
@@ -514,12 +505,11 @@ const CERAMIC_CSS = `
     border-radius: var(--ceramic-radius);
     position: relative;
     overflow: hidden;
-    box-shadow: var(--ceramic-shadow-rest);
-    transition: transform .22s ease, box-shadow .22s ease;
+    box-shadow: none;
+    transition: transform .22s ease;
   }
   .ceramic-thumb:hover {
     transform: translateY(-3px) scale(1.04);
-    box-shadow: var(--ceramic-shadow-hover);
   }
   .ceramic-thumb::after {
     content: "";
@@ -614,12 +604,12 @@ const CERAMIC_CSS = `
   .ceramic-rect[data-issue="error"],
   .ceramic-dropdown-trigger[data-issue="error"] {
     background: linear-gradient(180deg, #fff3f3, #fbdcdc);
-    box-shadow: 0 0 0 2px rgba(239,68,68,.55), var(--ceramic-shadow-rest);
+    box-shadow: 0 0 0 2px rgba(239,68,68,.55);
   }
   .ceramic-rect[data-issue="warning"],
   .ceramic-dropdown-trigger[data-issue="warning"] {
     background: linear-gradient(180deg, #fffaf0, #fbeed3);
-    box-shadow: 0 0 0 2px rgba(217,119,6,.45), var(--ceramic-shadow-rest);
+    box-shadow: 0 0 0 2px rgba(217,119,6,.45);
   }
 
   /* Fill handle — a bare "v" chevron on the cell corner (no background,
@@ -705,10 +695,10 @@ const CERAMIC_CSS = `
   /* Cells covered by an in-progress fill drag: soft ring + the incoming
      value shown as a faded "ghost" inside the box (Excel-style preview) */
   .ceramic-fill-target {
-    box-shadow: inset 0 0 0 1.5px rgba(24,24,27,.4), var(--ceramic-shadow-rest) !important;
+    box-shadow: inset 0 0 0 1.5px rgba(24,24,27,.4) !important;
   }
   .dark .ceramic-fill-target {
-    box-shadow: inset 0 0 0 1.5px rgba(255,255,255,.5), var(--ceramic-shadow-rest) !important;
+    box-shadow: inset 0 0 0 1.5px rgba(255,255,255,.5) !important;
   }
   .ceramic-fill-ghost {
     position: absolute;
@@ -743,12 +733,12 @@ const CERAMIC_CSS = `
 
   /* Multi-cell range selection (Shift+Click / Shift+↑↓ / Ctrl+A) */
   .ceramic-sel-cell {
-    box-shadow: inset 0 0 0 2px rgba(24,26,34,.45), var(--ceramic-shadow-rest) !important;
+    box-shadow: inset 0 0 0 2px rgba(24,26,34,.45) !important;
     background-image: linear-gradient(rgba(24,26,34,.07), rgba(24,26,34,.07)),
       linear-gradient(180deg, #ffffff, var(--ceramic-cell-soft)) !important;
   }
   .dark .ceramic-sel-cell {
-    box-shadow: inset 0 0 0 2px rgba(255,255,255,.55), var(--ceramic-shadow-rest) !important;
+    box-shadow: inset 0 0 0 2px rgba(255,255,255,.55) !important;
   }
   .ceramic-img-group.ceramic-sel-cell {
     box-shadow: none !important;

@@ -10,6 +10,7 @@ import {
   Save,
   Loader2,
   Search,
+  Maximize2,
 } from "lucide-react"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
@@ -40,6 +41,7 @@ import { skuQueryKeys } from "@/features/skuManagement/queryKeys"
 import type { SkuCleanupStatusTab, SkuMetadataRow } from "@/features/skuManagement/types"
 import { cn } from "@/lib/utils"
 import { SkuSheetCeramic } from "./components/SkuSheetCeramic"
+import { SkuFullPageModal } from "./components/SkuFullPageModal"
 // Rollback to the AG Grid sheet: import { SkuGrid } from "./components/SkuGrid"
 // Right-side details panel — temporarily hidden (same convention as SkuNewCreationPage).
 // import { SkuDetailPanel } from "./components/SkuDetailPanel"
@@ -80,6 +82,7 @@ export function SkuCleanupPage() {
   const [importInput, setImportInput] = useState("")
   const [showImport, setShowImport] = useState(false)
   const [showImportAllConfirm, setShowImportAllConfirm] = useState(false)
+  const [fullPageOpen, setFullPageOpen] = useState(false)
   const [localRows, setLocalRows] = useState<SkuMetadataRow[]>([])
   const [isSaving, setIsSaving] = useState(false)
   // Details panel state — temporarily hidden
@@ -344,6 +347,15 @@ export function SkuCleanupPage() {
             {t("sku.grid.importSapItems")}
           </Button>
           <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setFullPageOpen(true)}
+            title="Open grid in full page"
+          >
+            <Maximize2 className="mr-1 h-4 w-4" />
+            View in Full Page
+          </Button>
+          <Button
             size="sm"
             onClick={handleSave}
             disabled={isSaving || bulkUpsert.isPending}
@@ -531,6 +543,31 @@ export function SkuCleanupPage() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <SkuFullPageModal
+        open={fullPageOpen}
+        onClose={() => setFullPageOpen(false)}
+        title={t("sku.workflowB")}
+        subtitle={t("sku.cleanup.subtitle")}
+        mode="cleanup"
+        rows={mergedRows}
+        onRowsChange={handleRowsChange}
+        dropdowns={dropdowns}
+        actions={
+          <Button
+            size="sm"
+            onClick={handleSave}
+            disabled={isSaving || bulkUpsert.isPending}
+          >
+            {isSaving || bulkUpsert.isPending ? (
+              <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+            ) : (
+              <Save className="mr-1 h-4 w-4" />
+            )}
+            {t("sku.grid.saveCount", { count: dirtyCount })}
+          </Button>
+        }
+      />
     </div>
   )
 }
