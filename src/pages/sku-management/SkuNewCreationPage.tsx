@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import { useNavigate } from "@tanstack/react-router"
 import { useTranslation } from "react-i18next"
-import { ArrowLeft, Save, Send, Loader2, CheckSquare, Maximize2 } from "lucide-react"
+import { ArrowLeft, Save, Send, Loader2, CheckSquare, Maximize2, Trash2 } from "lucide-react"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -14,7 +14,7 @@ import {
   useSkuSubmitToSapMutation,
 } from "@/features/skuManagement/api"
 import type { SkuMetadataRow } from "@/features/skuManagement/types"
-import { SkuSheetCeramic } from "./components/SkuSheetCeramic"
+import { SkuSheetCeramic, type SkuSheetCeramicHandle } from "./components/SkuSheetCeramic"
 import { SkuFullPageModal } from "./components/SkuFullPageModal"
 // Rollback to the AG Grid sheet: import { SkuGrid } from "./components/SkuGrid"
 // Right-side details panel — temporarily hidden (doc point 29 lists it as
@@ -145,6 +145,10 @@ function CreationSheet({ initialRows }: { initialRows: SkuMetadataRow[] }) {
   // loading state at once.
   const [activeAction, setActiveAction] = useState<"save" | "approve" | null>(null)
   const [fullPageOpen, setFullPageOpen] = useState(false)
+  const sheetRef = useRef<SkuSheetCeramicHandle>(null)
+  const [selectedCount, setSelectedCount] = useState(0)
+  const [pageFullySelected, setPageFullySelected] = useState(false)
+  const [selectAllMode, setSelectAllMode] = useState(false)
 
   // Undo/redo history (Ctrl+Z / Ctrl+Y) — snapshots of the sheet before each
   // edit/paste/clear/fill. Server actions (save/approve/submit) are not
@@ -270,10 +274,10 @@ function CreationSheet({ initialRows }: { initialRows: SkuMetadataRow[] }) {
             ...row,
             ...(v
               ? {
-                  _validationStatus: v.status,
-                  _validationErrors: v.errors,
-                  _validationWarnings: v.warnings,
-                }
+                _validationStatus: v.status,
+                _validationErrors: v.errors,
+                _validationWarnings: v.warnings,
+              }
               : {}),
             ...(d ? { _duplicates: d.duplicates } : {}),
           }
@@ -427,6 +431,18 @@ function CreationSheet({ initialRows }: { initialRows: SkuMetadataRow[] }) {
         </div>
 
         <div className="ml-auto flex items-center gap-2">
+          {(selectedCount > 0 || selectAllMode) && (
+            <Button
+              variant="destructive"
+              size="sm"
+              onClick={() => sheetRef.current?.deleteSelected()}
+            >
+              <Trash2 className="mr-1 h-4 w-4" />
+              {selectAllMode
+                ? `Delete All (${filledRows.length})`
+                : `Delete Selected (${selectedCount})`}
+            </Button>
+          )}
           <Button
             variant="ghost"
             size="sm"
@@ -479,16 +495,59 @@ function CreationSheet({ initialRows }: { initialRows: SkuMetadataRow[] }) {
         </div>
       </div>
 
+      {/* Select-all banner */}
+      {(pageFullySelected || selectAllMode) && (
+        <div className="flex items-center justify-center gap-1 border-b bg-blue-50 px-4 py-2 text-xs text-blue-800 dark:bg-blue-950/30 dark:text-blue-300">
+          {selectAllMode ? (
+            <>
+              All {filledRows.length} item{filledRows.length !== 1 ? "s" : ""} are selected.{" "}
+              <button
+                type="button"
+                className="cursor-pointer font-semibold underline underline-offset-2"
+                onClick={() => { setSelectAllMode(false); sheetRef.current?.clearSelection() }}
+              >
+                Clear selection
+              </button>
+            </>
+          ) : (
+            <>
+              All {selectedCount} item{selectedCount !== 1 ? "s" : ""} on this page are selected.
+              {filledRows.length > selectedCount && (
+                <>
+                  {" "}
+                  <button
+                    type="button"
+                    className="cursor-pointer font-semibold underline underline-offset-2"
+                    onClick={() => setSelectAllMode(true)}
+                  >
+                    Select all {filledRows.length} available item{filledRows.length !== 1 ? "s" : ""}
+                  </button>
+                </>
+              )}
+            </>
+          )}
+        </div>
+      )}
+
       {/* Grid + detail panel */}
       <div className="flex flex-1 overflow-hidden">
         <div className="flex-1 overflow-hidden p-4">
           <SkuSheetCeramic
+            ref={sheetRef}
             rows={rows}
             onRowsChange={handleRowsChange}
             dropdowns={dropdowns}
             createEmptyRow={makeEmptyRow}
             onUndo={undo}
             onRedo={redo}
+            showCheckbox
+            isMeaningfulRow={(row) => !isRowEmpty(row)}
+            totalCount={filledRows.length}
+            onSelectionChange={({ count, pageFullySelected: pfs }) => {
+              setSelectedCount(count)
+              setPageFullySelected(pfs)
+              if (!pfs) setSelectAllMode(false)
+            }}
           />
         </div>
         {/* Right-side details panel — temporarily hidden

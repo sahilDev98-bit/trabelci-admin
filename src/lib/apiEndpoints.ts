@@ -34,6 +34,7 @@ export const API_ENDPOINTS = {
   // SKU Management Platform
   SKU_METADATA: "/sku/metadata",
   SKU_METADATA_BULK: "/sku/metadata/bulk",
+  SKU_METADATA_BULK_DELETE: "/sku/metadata/bulk",
   SKU_DROPDOWNS: "/sku/dropdowns",
   SKU_TEMPLATES: "/sku/templates",
   SKU_VALIDATE: "/sku/validate",

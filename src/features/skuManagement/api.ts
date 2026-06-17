@@ -195,6 +195,30 @@ export async function importAllSapItemsToCleanup(): Promise<SkuImportAllResult> 
   return apiFetch(API_ENDPOINTS.SKU_IMPORT_ALL_SAP_ITEMS, { method: "POST" })
 }
 
+export interface SkuBulkDeleteParams {
+  /** Explicit SKU list (page-level selection). If provided, filters are ignored. */
+  skus?: string[]
+  /** Filter-based delete (select-all mode). Requires at least workflowType. */
+  workflowType?: "new_creation" | "cleanup"
+  status?: string
+  search?: string
+  /** In select-all mode: SKUs to exclude from the filter-based delete. */
+  excludedSkus?: string[]
+}
+
+export interface SkuBulkDeleteResult {
+  deleted: number
+}
+
+export async function bulkDeleteSkuMetadataItems(
+  params: SkuBulkDeleteParams
+): Promise<SkuBulkDeleteResult> {
+  return apiFetch(API_ENDPOINTS.SKU_METADATA_BULK_DELETE, {
+    method: "DELETE",
+    body: JSON.stringify(params),
+  })
+}
+
 // ─── React Query hooks ───────────────────────────────────────────────────────
 
 export function useSkuMetadataListQuery(filters: SkuMetadataFilters = {}) {
@@ -260,6 +284,17 @@ export function useSkuDeleteMutation() {
     mutationFn: (sku: string) => deleteSkuMetadata(sku),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: skuQueryKeys.metadata.all })
+    },
+  })
+}
+
+export function useSkuBulkDeleteMutation() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (params: SkuBulkDeleteParams) => bulkDeleteSkuMetadataItems(params),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: skuQueryKeys.metadata.all })
+      qc.invalidateQueries({ queryKey: skuQueryKeys.cleanupStats })
     },
   })
 }

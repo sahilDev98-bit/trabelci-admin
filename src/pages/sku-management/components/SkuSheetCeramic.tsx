@@ -1,7 +1,9 @@
 import {
+  forwardRef,
   memo,
   useCallback,
   useEffect,
+  useImperativeHandle,
   useMemo,
   useRef,
   useState,
@@ -38,6 +40,11 @@ import { CeramicImageCell } from "./CeramicImageCell"
 
 // ─── Props ────────────────────────────────────────────────────────────────────
 
+export interface SkuSheetCeramicHandle {
+  deleteSelected: () => void
+  clearSelection: () => void
+}
+
 export interface SkuSheetCeramicProps {
   rows: SkuMetadataRow[]
   onRowsChange: (rows: SkuMetadataRow[]) => void
@@ -49,12 +56,34 @@ export interface SkuSheetCeramicProps {
   createEmptyRow?: () => SkuMetadataRow
   onUndo?: () => void
   onRedo?: () => void
+  /** Show per-row checkboxes for multi-select bulk delete */
+  showCheckbox?: boolean
+  /** A row is "meaningful" for select-all purposes (excludes blank padding rows).
+   *  Defaults to every row being meaningful. */
+  isMeaningfulRow?: (row: SkuMetadataRow) => boolean
+  /** Total record count across all pages — used for the "Select all X" banner text */
+  totalCount?: number
+  /** Called whenever the selection count or page-full-selection state changes */
+  onSelectionChange?: (info: { count: number; pageFullySelected: boolean }) => void
+
+  // ── Controlled selection (cleanup page lifts state to parent) ──────────────
+  /** If provided, determines whether a row is checked (bypasses internal selectedKeys) */
+  isRowSelected?: (row: SkuMetadataRow) => boolean
+  /** If provided, called when a row checkbox is toggled */
+  onRowToggle?: (key: string) => void
+  /** Controlled header checkbox checked state */
+  headerChecked?: boolean
+  /** Controlled header checkbox indeterminate state */
+  headerIndeterminate?: boolean
+  /** Controlled header checkbox onChange */
+  onHeaderToggle?: () => void
 }
 
 // ─── Column definitions ───────────────────────────────────────────────────────
 
 type ColType =
   | "index"
+  | "checkbox"
   | "text"
   | "dropdown"
   | "image-multi"
@@ -101,11 +130,14 @@ const COLUMNS: CeramicColumn[] = [
 ]
 
 // Cleanup mode: SKU column is readonly (cannot be renamed in cleanup workflow)
-function buildColumns(mode: "creation" | "cleanup"): CeramicColumn[] {
-  if (mode !== "cleanup") return COLUMNS
-  return COLUMNS.map((col) =>
-    col.field === "sku" ? { ...col, readOnly: true } : col
-  )
+function buildColumns(mode: "creation" | "cleanup", showCheckbox?: boolean): CeramicColumn[] {
+  let cols = mode === "cleanup"
+    ? COLUMNS.map((col) => col.field === "sku" ? { ...col, readOnly: true } : col)
+    : COLUMNS
+  if (showCheckbox) {
+    cols = [{ field: "__checkbox__", type: "checkbox" as const, minWidth: 36 }, ...cols]
+  }
+  return cols
 }
 
 function getHeaderKey(field: string): string {
@@ -786,6 +818,86 @@ const CERAMIC_CSS = `
     background: rgba(239,68,68,.12);
   }
 
+  /* ── Per-column text expand / truncate ───────────────────────────────────── */
+
+  /* Truncate when not focused (browser already clips inputs, this adds "…") */
+  .ceramic-field:not(:focus) {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  /* Dropdown trigger: clip the label with ellipsis at column boundary */
+  .ceramic-dropdown-trigger {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* Expanded column: column track is widened to fit — just un-clip the text */
+  .ceramic-rect.ceramic-col-expanded .ceramic-field,
+  .ceramic-rect.ceramic-col-expanded .ceramic-field:not(:focus) {
+    overflow: visible;
+    text-overflow: clip;
+    white-space: nowrap;
+  }
+  .ceramic-dropdown-trigger.ceramic-col-expanded {
+    overflow: visible;
+    text-overflow: clip;
+    white-space: nowrap;
+    max-width: none;
+  }
+
+  /* Clickable column header toggle */
+  .ceramic-head-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    width: 100%;
+    height: 100%;
+    background: none;
+    border: none;
+    color: var(--ceramic-head-text);
+    font: 700 13.5px/1 'DM Sans', 'Heebo', sans-serif;
+    letter-spacing: .01em;
+    cursor: pointer;
+    padding: 0 2px;
+    border-radius: 3px;
+    transition: background .12s, color .12s;
+  }
+  .ceramic-head-btn:hover {
+    background: rgba(30,36,60,.06);
+  }
+  .dark .ceramic-head-btn:hover {
+    background: rgba(255,255,255,.06);
+  }
+  .ceramic-head-btn-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+  }
+  .ceramic-head-btn-icon {
+    flex-shrink: 0;
+    font-size: 9px;
+    opacity: 0.3;
+    line-height: 1;
+  }
+  .ceramic-head.ceramic-head-col-expanded .ceramic-head-btn {
+    color: #2563eb;
+  }
+  .dark .ceramic-head.ceramic-head-col-expanded .ceramic-head-btn {
+    color: #60a5fa;
+  }
+  .ceramic-head.ceramic-head-col-expanded .ceramic-head-btn-icon {
+    opacity: 0.75;
+  }
+  .ceramic-head.ceramic-head-col-expanded .ceramic-head-btn:hover {
+    background: rgba(37,99,235,.07);
+  }
+  .dark .ceramic-head.ceramic-head-col-expanded .ceramic-head-btn:hover {
+    background: rgba(96,165,250,.09);
+  }
+
   /* Reduced motion */
   @media (prefers-reduced-motion: reduce) {
     .ceramic-rect,
@@ -798,6 +910,51 @@ const CERAMIC_CSS = `
 
   @keyframes spin {
     to { transform: rotate(360deg); }
+  }
+
+  /* ── Checkbox column ─────────────────────────────────────────────────────── */
+  .ceramic-checkbox {
+    width: 16px;
+    height: 16px;
+    cursor: pointer;
+    accent-color: var(--ceramic-ink);
+    border-radius: 3px;
+    flex-shrink: 0;
+  }
+  .ceramic-checkbox:focus-visible {
+    outline: 2px solid var(--ceramic-accent);
+    outline-offset: 2px;
+  }
+
+  /* Third sticky column (sku) when checkbox is present: position is set directly,
+     only rendered when showCheckbox=true so no conflict with the non-checkbox layout */
+  .ceramic-cell-sticky-2 {
+    inset-inline-start: 96px; /* 36px checkbox + 8px gap + 44px # + 8px gap */
+  }
+  /* Shift "#" column right to make room for the checkbox column */
+  .ceramic-has-checkbox .ceramic-cell-sticky-1 {
+    inset-inline-start: 44px; /* 36px checkbox + 8px gap */
+  }
+
+  /* Selected-row blue tint on card elements */
+  .ceramic-row-selected .ceramic-rect,
+  .ceramic-row-selected .ceramic-dropdown-trigger {
+    background: linear-gradient(180deg, #eff6ff, #dbeafe) !important;
+    border-color: rgba(59,130,246,.25) !important;
+  }
+  .dark .ceramic-row-selected .ceramic-rect,
+  .dark .ceramic-row-selected .ceramic-dropdown-trigger {
+    background: linear-gradient(180deg, rgba(59,130,246,.12), rgba(59,130,246,.08)) !important;
+    border-color: rgba(59,130,246,.35) !important;
+  }
+  .ceramic-row-selected .ceramic-idx {
+    background: linear-gradient(150deg, #dbeafe, #bfdbfe);
+    color: #1d4ed8;
+    box-shadow: none;
+  }
+  .dark .ceramic-row-selected .ceramic-idx {
+    background: linear-gradient(150deg, rgba(59,130,246,.2), rgba(59,130,246,.12));
+    color: #93c5fd;
   }
 `
 
@@ -856,6 +1013,10 @@ interface CeramicRowProps {
   onNavigate: (rowIndex: number, colIndex: number, direction: "down" | "up") => void
   onFillStart: (startRow: number, field: string, value: string | string[], e: React.MouseEvent) => void
   sheetMode?: "creation" | "cleanup"
+  showCheckbox?: boolean
+  isSelected?: boolean
+  onToggleSelect?: (key: string) => void
+  expandedCols?: Set<string>
 }
 
 type CellIssue = { kind: "error" | "warning"; message: string } | undefined
@@ -879,6 +1040,10 @@ const CeramicRow = memo(function CeramicRow({
   onNavigate,
   onFillStart,
   sheetMode = "creation",
+  showCheckbox = false,
+  isSelected = false,
+  onToggleSelect,
+  expandedCols,
 }: CeramicRowProps) {
   const validationTint = getValidationTint(row._validationStatus)
   const validationErrors = row._validationErrors ?? []
@@ -894,17 +1059,46 @@ const CeramicRow = memo(function CeramicRow({
     return undefined
   }
 
-  // Columns 0 ("#") and 1 ("sku") are frozen in place while scrolling
+  const rowKey = row._clientId ?? row.sku ?? ""
+  const sel = isSelected ? " ceramic-row-selected" : ""
+
+  // Sticky column positions shift when the checkbox column is prepended:
+  // showCheckbox=false: 0=# (sticky-0), 1=sku (sticky-1)
+  // showCheckbox=true:  0=checkbox (sticky-0), 1=# (sticky-1), 2=sku (sticky-2)
   const cellClassName = (colIndex: number): string => {
-    if (colIndex === 0) return "ceramic-cell ceramic-cell-sticky ceramic-cell-sticky-0"
-    if (colIndex === 1) return "ceramic-cell ceramic-cell-sticky ceramic-cell-sticky-1"
-    return "ceramic-cell"
+    if (showCheckbox) {
+      if (colIndex === 0) return `ceramic-cell ceramic-cell-sticky ceramic-cell-sticky-0${sel}`
+      if (colIndex === 1) return `ceramic-cell ceramic-cell-sticky ceramic-cell-sticky-1${sel}`
+      if (colIndex === 2) return `ceramic-cell ceramic-cell-sticky ceramic-cell-sticky-2${sel}`
+      return `ceramic-cell${sel}`
+    }
+    if (colIndex === 0) return `ceramic-cell ceramic-cell-sticky ceramic-cell-sticky-0${sel}`
+    if (colIndex === 1) return `ceramic-cell ceramic-cell-sticky ceramic-cell-sticky-1${sel}`
+    return `ceramic-cell${sel}`
   }
 
   return (
     <>
       {columns.map((col, colIndex) => {
         const issue = getFieldIssue(col.field)
+
+        if (col.type === "checkbox") {
+          return (
+            <div
+              key="__checkbox__"
+              className={`ceramic-cell ceramic-cell-sticky ceramic-cell-sticky-0${sel}`}
+              data-row-index={rowIndex}
+            >
+              <input
+                type="checkbox"
+                className="ceramic-checkbox"
+                checked={isSelected}
+                onChange={() => onToggleSelect?.(rowKey)}
+                onClick={(e) => e.stopPropagation()}
+              />
+            </div>
+          )
+        }
 
         if (col.type === "index") {
           return (
@@ -969,6 +1163,7 @@ const CeramicRow = memo(function CeramicRow({
                 validationTint={col.field !== "rowNumber" ? validationTint : undefined}
                 onCommit={onCellCommit}
                 onFillStart={onFillStart}
+                isExpanded={expandedCols?.has(col.field) ?? false}
               />
             </div>
           )
@@ -996,6 +1191,7 @@ const CeramicRow = memo(function CeramicRow({
               onCommit={onCellCommit}
               onNavigate={onNavigate}
               onFillStart={onFillStart}
+              isExpanded={expandedCols?.has(col.field) ?? false}
             />
           </div>
         )
@@ -1018,6 +1214,7 @@ interface TextCellWrapperProps {
   validationTint?: string
   readOnly?: boolean
   italic?: boolean
+  isExpanded?: boolean
   onCommit: (clientId: string, field: string, value: unknown) => void
   onNavigate: (rowIndex: number, colIndex: number, direction: "down" | "up") => void
   onFillStart: (startRow: number, field: string, value: string | string[], e: React.MouseEvent) => void
@@ -1035,6 +1232,7 @@ function TextCellWrapper({
   validationTint,
   readOnly,
   italic,
+  isExpanded,
   onCommit,
   onNavigate,
   onFillStart,
@@ -1097,7 +1295,7 @@ function TextCellWrapper({
 
   return (
     <div
-      className="ceramic-rect"
+      className={`ceramic-rect${isExpanded ? " ceramic-col-expanded" : ""}`}
       data-duplicate={isDuplicate || undefined}
       data-issue={issue}
       data-fill-cell
@@ -1150,6 +1348,7 @@ interface DropdownCellWrapperProps {
   colIndex: number
   issue?: "error" | "warning"
   validationTint?: string
+  isExpanded?: boolean
   onCommit: (clientId: string, field: string, value: unknown) => void
   onFillStart: (startRow: number, field: string, value: string | string[], e: React.MouseEvent) => void
 }
@@ -1164,6 +1363,7 @@ function DropdownCellWrapper({
   colIndex,
   issue,
   validationTint,
+  isExpanded,
   onCommit,
   onFillStart,
 }: DropdownCellWrapperProps) {
@@ -1212,7 +1412,7 @@ function DropdownCellWrapper({
       <button
         ref={triggerRef}
         type="button"
-        className="ceramic-dropdown-trigger"
+        className={`ceramic-dropdown-trigger${isExpanded ? " ceramic-col-expanded" : ""}`}
         data-empty={!value || undefined}
         data-issue={issue}
         data-fill-cell
@@ -1249,20 +1449,133 @@ function DropdownCellWrapper({
 
 // ─── Main component ───────────────────────────────────────────────────────────
 
-export function SkuSheetCeramic({
-  rows,
-  onRowsChange,
-  dropdowns,
-  mode = "creation",
-  createEmptyRow,
-  onUndo,
-  onRedo,
-}: SkuSheetCeramicProps) {
+export const SkuSheetCeramic = forwardRef<SkuSheetCeramicHandle, SkuSheetCeramicProps>(
+  function SkuSheetCeramic({
+    rows,
+    onRowsChange,
+    dropdowns,
+    mode = "creation",
+    createEmptyRow,
+    onUndo,
+    onRedo,
+    showCheckbox = false,
+    isMeaningfulRow,
+    totalCount: _totalCount,
+    onSelectionChange,
+    isRowSelected: isRowSelectedProp,
+    onRowToggle,
+    headerChecked,
+    headerIndeterminate,
+    onHeaderToggle,
+  }, ref) {
   const { t, i18n } = useTranslation()
   const isHe = i18n.language === "he"
   const containerRef = useRef<HTMLDivElement>(null)
 
-  const columns = useMemo(() => buildColumns(mode), [mode])
+  const columns = useMemo(() => buildColumns(mode, showCheckbox), [mode, showCheckbox])
+
+  // ── Per-column expand / truncate toggle ───────────────────────────────────
+  const [expandedCols, setExpandedCols] = useState<Set<string>>(new Set())
+  // Pixel width overrides for expanded columns (measured from DOM scrollWidth)
+  const [colWidthOverrides, setColWidthOverrides] = useState<Record<string, number>>({})
+
+  // Measure the content width of all visible cells in a column so the grid
+  // track can be widened to exactly fit the longest value.
+  const measureColWidth = useCallback((field: string): number => {
+    const container = containerRef.current
+    if (!container) return 0
+    const col = columnsRef.current.find((c) => c.field === field)
+    const minW = col?.minWidth ?? 100
+    // scrollWidth gives the full content width even when overflow:hidden clips it
+    let maxCellScroll = 0
+    container.querySelectorAll<HTMLElement>(`[data-field="${field}"]`).forEach((el) => {
+      if (el.scrollWidth > maxCellScroll) maxCellScroll = el.scrollWidth
+    })
+    // Also account for the header label so the header text is never clipped
+    const headerLabel = container.querySelector<HTMLElement>(
+      `[data-col-field="${field}"] .ceramic-head-btn-label`,
+    )
+    // +28: icon (~13px) + gap (4px) + button padding (4px each side) + buffer
+    const headerNeeded = headerLabel ? headerLabel.scrollWidth + 28 : 0
+    // .ceramic-rect is 86% of the column track; add 40px for cell padding + room
+    const cellNeeded = maxCellScroll > 0 ? Math.ceil(maxCellScroll / 0.86) + 40 : 0
+    return Math.max(minW, cellNeeded, headerNeeded)
+  }, [])
+
+  const toggleColExpand = useCallback((field: string) => {
+    setExpandedCols((prev) => {
+      const next = new Set(prev)
+      if (next.has(field)) {
+        next.delete(field)
+        setColWidthOverrides((w) => { const n = { ...w }; delete n[field]; return n })
+      } else {
+        next.add(field)
+        // Measure BEFORE expanding so overflow:hidden is still in effect
+        const w = measureColWidth(field)
+        setColWidthOverrides((o) => ({ ...o, [field]: w }))
+      }
+      return next
+    })
+  }, [measureColWidth])
+
+  // ── Row-checkbox selection state ──────────────────────────────────────────
+  const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set())
+
+  const getRowKey = (row: SkuMetadataRow) => row._clientId ?? row.sku ?? ""
+
+  // Meaningful rows = non-padding rows used for header checkbox / select-all.
+  // Stale-key cleanup uses ALL rows to avoid keeping deleted-page keys around.
+  const meaningfulKeys = useMemo(
+    () => (isMeaningfulRow ? rows.filter(isMeaningfulRow) : rows)
+        .map(getRowKey)
+        .filter(Boolean),
+    [rows, isMeaningfulRow],
+  )
+  const pageFullySelected =
+    meaningfulKeys.length > 0 && meaningfulKeys.every((k) => selectedKeys.has(k))
+  const pagePartiallySelected = meaningfulKeys.some((k) => selectedKeys.has(k))
+
+  const toggleSelectRow = useCallback((key: string) => {
+    setSelectedKeys((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }, [])
+
+  const toggleSelectAll = useCallback(() => {
+    if (pageFullySelected) setSelectedKeys(new Set())
+    else setSelectedKeys(new Set(meaningfulKeys))
+  }, [pageFullySelected, meaningfulKeys])
+
+  // Remove keys that no longer exist in the current row set (page change etc.)
+  useEffect(() => {
+    const validKeys = new Set(rows.map(getRowKey))
+    setSelectedKeys((prev) => {
+      if (prev.size === 0) return prev
+      const next = new Set([...prev].filter((k) => validKeys.has(k)))
+      return next.size === prev.size ? prev : next
+    })
+  }, [rows])
+
+  // Notify parent whenever the selection count or page-selection state changes
+  useEffect(() => {
+    onSelectionChange?.({ count: selectedKeys.size, pageFullySelected })
+  }, [selectedKeys.size, pageFullySelected, onSelectionChange])
+
+  // ── Bulk delete ───────────────────────────────────────────────────────────
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false)
+
+  const handleDeleteSelected = useCallback(() => {
+    if (selectedKeys.size === 0) return
+    setBulkDeleteOpen(true)
+  }, [selectedKeys])
+
+  useImperativeHandle(ref, () => ({
+    deleteSelected: handleDeleteSelected,
+    clearSelection: () => setSelectedKeys(new Set()),
+  }), [handleDeleteSelected])
 
   // Fresh references for document-level drag listeners (avoid stale closures)
   const rowsRef = useRef(rows)
@@ -1491,18 +1804,19 @@ export function SkuSheetCeramic({
   const gridTemplateColumns = useMemo(
     () =>
       columns
-        .map((c) =>
-          c.type === "index"
-            ? `${c.minWidth}px`
-            : `minmax(${c.minWidth}px, ${c.minWidth < 120 ? "1fr" : "1.2fr"})`,
-        )
+        .map((c) => {
+          if (c.type === "index" || c.type === "checkbox") return `${c.minWidth}px`
+          const override = colWidthOverrides[c.field]
+          if (override) return `${override}px`
+          return `minmax(${c.minWidth}px, ${c.minWidth < 120 ? "1fr" : "1.2fr"})`
+        })
         .join(" "),
-    [columns],
+    [columns, colWidthOverrides],
   )
 
   const gridMinWidth = useMemo(
-    () => columns.reduce((sum, c) => sum + c.minWidth + 8, 0),
-    [columns],
+    () => columns.reduce((sum, c) => sum + (colWidthOverrides[c.field] ?? c.minWidth) + 8, 0),
+    [columns, colWidthOverrides],
   )
 
   // ── Duplicate SKU detection ───────────────────────────────────────────
@@ -1691,6 +2005,42 @@ export function SkuSheetCeramic({
       },
     })
   }, [deleteTarget, deleteMutation, removeRow, t])
+
+  const confirmBulkDelete = useCallback(async () => {
+    const toDelete = rowsRef.current.filter((r) => selectedKeys.has(getRowKey(r)))
+    const saved = toDelete.filter((r) => r._savedSku)
+    const unsaved = toDelete.filter((r) => !r._savedSku)
+
+    const unsavedKeys = new Set(unsaved.map(getRowKey))
+    const results = await Promise.allSettled(
+      saved.map((r) => deleteMutation.mutateAsync(r._savedSku!))
+    )
+
+    const deletedSavedKeys = new Set<string>()
+    results.forEach((result, i) => {
+      if (result.status === "fulfilled") deletedSavedKeys.add(getRowKey(saved[i]))
+    })
+
+    const allDeletedKeys = new Set([...unsavedKeys, ...deletedSavedKeys])
+    if (allDeletedKeys.size > 0) {
+      const newRows = rowsRef.current.filter((r) => !allDeletedKeys.has(getRowKey(r)))
+      onRowsChangeRef.current(newRows)
+      setSelectedKeys((prev) => {
+        const next = new Set(prev)
+        for (const k of allDeletedKeys) next.delete(k)
+        return next
+      })
+    }
+
+    const failedCount = results.filter((r) => r.status === "rejected").length
+    if (failedCount > 0) {
+      toast.error(`Failed to delete ${failedCount} saved row${failedCount !== 1 ? "s" : ""}`)
+    }
+    if (allDeletedKeys.size > 0) {
+      toast.success(`Deleted ${allDeletedKeys.size} row${allDeletedKeys.size !== 1 ? "s" : ""}`)
+    }
+    setBulkDeleteOpen(false)
+  }, [selectedKeys, deleteMutation])
 
   // Close the menu on any outside click, scroll, or Escape
   useEffect(() => {
@@ -1881,7 +2231,7 @@ export function SkuSheetCeramic({
       .map((col, i) => ({ col, i }))
       .filter(
         ({ col }) =>
-          col.type !== "index" && col.type !== "readonly",
+          col.type !== "index" && col.type !== "readonly" && col.type !== "checkbox",
       )
       .map(({ i }) => i)
     const firstCol = selectableCols[0]
@@ -2048,7 +2398,7 @@ export function SkuSheetCeramic({
   // the browser's native copy/paste for plain text only.)
 
   return (
-    <div ref={containerRef} className="ceramic-sheet-root">
+    <div ref={containerRef} className={`ceramic-sheet-root${showCheckbox ? " ceramic-has-checkbox" : ""}`}>
       <style>{CERAMIC_CSS}</style>
 
       <div className="ceramic-panel">
@@ -2060,20 +2410,61 @@ export function SkuSheetCeramic({
           }}
         >
           {/* Header row */}
-          {columns.map((col, colIndex) => (
-            <div
-              key={`h-${col.field}`}
-              className={
-                colIndex === 0
-                  ? "ceramic-head ceramic-cell-sticky ceramic-cell-sticky-0"
-                  : colIndex === 1
-                    ? "ceramic-head ceramic-cell-sticky ceramic-cell-sticky-1"
-                    : "ceramic-head"
-              }
-            >
-              {col.field === "rowNumber" ? "#" : t(getHeaderKey(col.field))}
-            </div>
-          ))}
+          {columns.map((col, colIndex) => {
+            const isSticky0 = colIndex === 0
+            const isSticky1 = colIndex === 1
+            const isSticky2 = showCheckbox && colIndex === 2
+            const headClass = isSticky0
+              ? "ceramic-head ceramic-cell-sticky ceramic-cell-sticky-0"
+              : isSticky1
+                ? "ceramic-head ceramic-cell-sticky ceramic-cell-sticky-1"
+                : isSticky2
+                  ? "ceramic-head ceramic-cell-sticky ceramic-cell-sticky-2"
+                  : "ceramic-head"
+
+            if (col.type === "checkbox") {
+              const checkedState = headerChecked !== undefined ? headerChecked : pageFullySelected
+              const indetermState = headerIndeterminate !== undefined
+                ? headerIndeterminate
+                : (pagePartiallySelected && !pageFullySelected)
+              return (
+                <div key="h-__checkbox__" className={headClass}>
+                  <input
+                    type="checkbox"
+                    className="ceramic-checkbox"
+                    ref={(el) => {
+                      if (el) el.indeterminate = indetermState
+                    }}
+                    checked={checkedState}
+                    onChange={onHeaderToggle ?? toggleSelectAll}
+                  />
+                </div>
+              )
+            }
+
+            const colIsExpanded = expandedCols.has(col.field)
+            return (
+              <div
+                key={`h-${col.field}`}
+                className={`${headClass}${colIsExpanded ? " ceramic-head-col-expanded" : ""}`}
+                data-col-field={col.field}
+              >
+                {col.field === "rowNumber" ? (
+                  "#"
+                ) : (
+                  <button
+                    type="button"
+                    className="ceramic-head-btn"
+                    onClick={() => toggleColExpand(col.field)}
+                    title={colIsExpanded ? "Click to truncate" : "Click to expand"}
+                  >
+                    <span className="ceramic-head-btn-label">{t(getHeaderKey(col.field))}</span>
+                    <span className="ceramic-head-btn-icon">{colIsExpanded ? "↙" : "↔"}</span>
+                  </button>
+                )}
+              </div>
+            )
+          })}
 
           {/* Data rows */}
           {rows.map((row, rowIndex) => (
@@ -2091,6 +2482,10 @@ export function SkuSheetCeramic({
               onNavigate={onNavigate}
               onFillStart={handleFillStart}
               sheetMode={mode}
+              showCheckbox={showCheckbox}
+              isSelected={isRowSelectedProp ? isRowSelectedProp(row) : selectedKeys.has(getRowKey(row))}
+              onToggleSelect={isRowSelectedProp ? onRowToggle : toggleSelectRow}
+              expandedCols={expandedCols}
             />
           ))}
         </div>
@@ -2134,6 +2529,37 @@ export function SkuSheetCeramic({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <AlertDialog open={bulkDeleteOpen} onOpenChange={(open) => !open && setBulkDeleteOpen(false)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              Delete {selectedKeys.size} row{selectedKeys.size !== 1 ? "s" : ""}?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              This will permanently delete {selectedKeys.size} selected row{selectedKeys.size !== 1 ? "s" : ""}. Rows already saved to the database will be deleted from the server.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleteMutation.isPending}>
+              {t("common.cancel")}
+            </AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              disabled={deleteMutation.isPending}
+              onClick={(e) => {
+                e.preventDefault()
+                void confirmBulkDelete()
+              }}
+            >
+              {deleteMutation.isPending
+                ? t("common.deleting")
+                : `Delete ${selectedKeys.size} row${selectedKeys.size !== 1 ? "s" : ""}`}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
-}
+  }
+)

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react"
+import React, { useCallback, useEffect, useMemo, useState } from "react"
 import { useNavigate } from "@tanstack/react-router"
 import { useTranslation } from "react-i18next"
 import { useQueryClient } from "@tanstack/react-query"
@@ -11,6 +11,7 @@ import {
   Loader2,
   Search,
   Maximize2,
+  Trash2,
 } from "lucide-react"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
@@ -36,15 +37,13 @@ import {
   useImportSapItemsMutation,
   useImportAllSapItemsMutation,
   useCleanupStatsQuery,
+  useSkuBulkDeleteMutation,
 } from "@/features/skuManagement/api"
 import { skuQueryKeys } from "@/features/skuManagement/queryKeys"
 import type { SkuCleanupStatusTab, SkuMetadataRow } from "@/features/skuManagement/types"
 import { cn } from "@/lib/utils"
 import { SkuSheetCeramic } from "./components/SkuSheetCeramic"
 import { SkuFullPageModal } from "./components/SkuFullPageModal"
-// Rollback to the AG Grid sheet: import { SkuGrid } from "./components/SkuGrid"
-// Right-side details panel — temporarily hidden (same convention as SkuNewCreationPage).
-// import { SkuDetailPanel } from "./components/SkuDetailPanel"
 
 const PAGE_SIZE = 100
 
@@ -54,9 +53,6 @@ function statusFilterForTab(tab: SkuCleanupStatusTab): SkuMetadataRow["status"] 
   return undefined
 }
 
-// No _clientId here on purpose: cleanup SKUs are unique and immutable, so the
-// grid keys fall back to the stable `sku` — regenerating ids per refetch would
-// remount rows and could discard in-progress (uncommitted) typing.
 function toGridRow(row: SkuMetadataRow): SkuMetadataRow {
   return {
     ...row,
@@ -68,6 +64,121 @@ function toGridRow(row: SkuMetadataRow): SkuMetadataRow {
 
 function errorMessage(err: unknown): string | null {
   return err instanceof Error && err.message ? err.message : null
+}
+
+const getRowKey = (row: SkuMetadataRow) => row._clientId ?? row.sku ?? ""
+
+// ─── Skeleton ─────────────────────────────────────────────────────────────────
+// Column template mirrors buildColumns("cleanup", showCheckbox=true) exactly:
+// checkbox(36) + index(44) + 18 data columns with their minWidths
+const SKELETON_GRID_COLS =
+  "36px 44px minmax(140px,1fr) minmax(130px,1fr) minmax(120px,1fr) minmax(110px,1fr) " +
+  "minmax(130px,1fr) minmax(125px,1fr) minmax(170px,1fr) minmax(170px,1fr) minmax(130px,1fr) " +
+  "minmax(110px,1fr) minmax(110px,1fr) minmax(110px,1fr) minmax(110px,1fr) minmax(180px,1fr) " +
+  "minmax(120px,1fr) minmax(110px,1fr) minmax(130px,1fr) minmax(110px,1fr)"
+const SKELETON_MIN_W = 2547 // sum of all minWidths + (20-1)*8px gaps
+const SKELETON_COLS = 20
+const SKELETON_ROWS = 15
+
+function colStickyStyle(ci: number): React.CSSProperties {
+  const base: React.CSSProperties = { background: "var(--background)" }
+  if (ci === 0) return { ...base, position: "sticky", insetInlineStart: 0, zIndex: 3 }
+  if (ci === 1) return { ...base, position: "sticky", insetInlineStart: 44, zIndex: 3 }
+  if (ci === 2) return { ...base, position: "sticky", insetInlineStart: 96, zIndex: 3 }
+  return {}
+}
+
+function SkuCleanupSkeleton() {
+  return (
+    <div style={{ height: "100%", overflow: "auto", padding: "4px 4px 16px" }}>
+      <div
+        style={{
+          display: "grid",
+          gap: "10px 8px",
+          gridTemplateColumns: SKELETON_GRID_COLS,
+          minWidth: SKELETON_MIN_W,
+        }}
+      >
+        {/* Header row */}
+        {Array.from({ length: SKELETON_COLS }).map((_, ci) => (
+          <div
+            key={`sh-${ci}`}
+            style={{
+              ...colStickyStyle(ci),
+              zIndex: ci < 3 ? 6 : 5,
+              position: "sticky",
+              top: 0,
+              padding: "14px 6px 12px",
+              borderBottom: "1px solid rgba(30,36,60,.10)",
+              background: "var(--background)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              // Matches ceramic-head box-shadow to cover the panel gap
+              boxShadow: "0 -4px 0 0 var(--background), 0 10px 0 0 var(--background)",
+            }}
+          >
+            {ci > 0 && (
+              <div
+                className="animate-pulse"
+                style={{
+                  height: 9,
+                  width: "55%",
+                  borderRadius: 5,
+                  background: "color-mix(in srgb, currentColor 12%, transparent)",
+                }}
+              />
+            )}
+          </div>
+        ))}
+
+        {/* Data rows */}
+        {Array.from({ length: SKELETON_ROWS }).map((_, ri) =>
+          Array.from({ length: SKELETON_COLS }).map((_, ci) => (
+            <div
+              key={`sr-${ri}-${ci}`}
+              style={{
+                ...colStickyStyle(ci),
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                padding: "5px 4px",
+              }}
+            >
+              {ci === 0 ? (
+                // Matches ceramic-checkbox: 16×16, 3px radius
+                <div
+                  className="animate-pulse"
+                  style={{
+                    width: 16, height: 16, borderRadius: 3,
+                    background: "color-mix(in srgb, currentColor 10%, transparent)",
+                  }}
+                />
+              ) : ci === 1 ? (
+                // Matches ceramic-idx chip: 44×44, 12px radius
+                <div
+                  className="animate-pulse"
+                  style={{
+                    width: 44, height: 44, borderRadius: 12,
+                    background: "color-mix(in srgb, currentColor 8%, transparent)",
+                  }}
+                />
+              ) : (
+                // Matches ceramic-rect: 86% width, 44px height, 14px radius
+                <div
+                  className="animate-pulse"
+                  style={{
+                    width: "86%", height: 44, borderRadius: 14,
+                    background: "color-mix(in srgb, currentColor 6%, transparent)",
+                  }}
+                />
+              )}
+            </div>
+          ))
+        )}
+      </div>
+    </div>
+  )
 }
 
 export function SkuCleanupPage() {
@@ -85,13 +196,26 @@ export function SkuCleanupPage() {
   const [fullPageOpen, setFullPageOpen] = useState(false)
   const [localRows, setLocalRows] = useState<SkuMetadataRow[]>([])
   const [isSaving, setIsSaving] = useState(false)
-  // Details panel state — temporarily hidden
-  // const [activeRow, setActiveRow] = useState<SkuMetadataRow | null>(null)
+
+  // ── Selection state (mirrors ProductGroups two-set pattern) ────────────────
+  const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set())
+  const [excludedKeys, setExcludedKeys] = useState<Set<string>>(new Set())
+  const [isSelectAllMode, setIsSelectAllMode] = useState(false)
+  const [showBulkDeleteAllConfirm, setShowBulkDeleteAllConfirm] = useState(false)
+  const [showDeleteSelectedConfirm, setShowDeleteSelectedConfirm] = useState(false)
 
   useEffect(() => {
     const timer = window.setTimeout(() => setDebouncedSearch(search.trim()), 300)
     return () => window.clearTimeout(timer)
   }, [search])
+
+  // Reset selection only when the dataset changes (tab or search), NOT on page change —
+  // selection must persist as the user paginates through the same result set
+  useEffect(() => {
+    setIsSelectAllMode(false)
+    setSelectedKeys(new Set())
+    setExcludedKeys(new Set())
+  }, [statusTab, debouncedSearch])
 
   const listFilters = useMemo(
     () => ({
@@ -112,6 +236,7 @@ export function SkuCleanupPage() {
   const checkDuplicates = useSkuCheckDuplicatesMutation()
   const importItems = useImportSapItemsMutation()
   const importAllItems = useImportAllSapItemsMutation()
+  const bulkDelete = useSkuBulkDeleteMutation()
 
   const localBySku = useMemo(
     () => new Map(localRows.map((r) => [r.sku, r])),
@@ -138,6 +263,128 @@ export function SkuCleanupPage() {
     cleaned: stats?.cleaned ?? 0,
     all: stats?.total ?? 0,
   }
+
+  // ── Controlled selection helpers (mirrors ProductGroups pattern exactly) ───
+
+  // Mirrors isProductSelected — single source of truth for "is this row checked?"
+  const isRowSelected = useCallback((row: SkuMetadataRow): boolean => {
+    const key = getRowKey(row)
+    return isSelectAllMode ? !excludedKeys.has(key) : selectedKeys.has(key)
+  }, [isSelectAllMode, excludedKeys, selectedKeys])
+
+  // Mirrors allPageSelected — true only when every row on current page is checked
+  const allPageSelected = useMemo(
+    () => mergedRows.length > 0 && mergedRows.every((r) => isRowSelected(r)),
+    [mergedRows, isRowSelected],
+  )
+
+
+  // What the user sees as the count to act on
+  const selectedCount = isSelectAllMode
+    ? totalItems - excludedKeys.size
+    : selectedKeys.size
+
+  // Mirrors toggleProduct — toggle a single row's checked state
+  const onRowToggle = useCallback((key: string) => {
+    if (isSelectAllMode) {
+      setExcludedKeys((prev) => {
+        const next = new Set(prev)
+        if (next.has(key)) next.delete(key)
+        else next.add(key)
+        return next
+      })
+    } else {
+      setSelectedKeys((prev) => {
+        const next = new Set(prev)
+        if (next.has(key)) next.delete(key)
+        else next.add(key)
+        return next
+      })
+    }
+  }, [isSelectAllMode])
+
+  // Mirrors toggleSelectAllPage — header checkbox toggles the entire current page
+  const onHeaderToggle = useCallback(() => {
+    if (isSelectAllMode) {
+      if (allPageSelected) {
+        // Deselect this page by adding its keys to the exclusion set
+        setExcludedKeys((prev) => {
+          const next = new Set(prev)
+          for (const r of mergedRows) next.add(getRowKey(r))
+          return next
+        })
+      } else {
+        // Re-select this page by removing its keys from the exclusion set
+        setExcludedKeys((prev) => {
+          const next = new Set(prev)
+          for (const r of mergedRows) next.delete(getRowKey(r))
+          return next
+        })
+      }
+    } else {
+      if (allPageSelected) {
+        setSelectedKeys((prev) => {
+          const next = new Set(prev)
+          for (const r of mergedRows) next.delete(getRowKey(r))
+          return next
+        })
+      } else {
+        setSelectedKeys((prev) => {
+          const next = new Set(prev)
+          for (const r of mergedRows) next.add(getRowKey(r))
+          return next
+        })
+      }
+    }
+  }, [isSelectAllMode, allPageSelected, mergedRows])
+
+  // Mirrors handleSelectAllProducts — enter select-all mode
+  const handleSelectAll = useCallback(() => {
+    setIsSelectAllMode(true)
+    setExcludedKeys(new Set())
+    setSelectedKeys(new Set())
+  }, [])
+
+  // Mirrors handleClearSelection — exit select-all mode
+  const handleClearSelection = useCallback(() => {
+    setIsSelectAllMode(false)
+    setExcludedKeys(new Set())
+    setSelectedKeys(new Set())
+  }, [])
+
+  // Delete explicitly selected rows (normal mode)
+  const confirmDeleteSelected = useCallback(async () => {
+    const skus = Array.from(selectedKeys).filter(Boolean)
+    if (!skus.length) return
+    try {
+      const result = await bulkDelete.mutateAsync({ skus })
+      toast.success(`Deleted ${result.deleted} item${result.deleted !== 1 ? "s" : ""}`)
+      setLocalRows((prev) => prev.filter((r) => !selectedKeys.has(getRowKey(r))))
+      handleClearSelection()
+      setShowDeleteSelectedConfirm(false)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to delete items")
+    }
+  }, [bulkDelete, selectedKeys, handleClearSelection])
+
+  // Delete all matching items server-side, minus any exclusions (select-all mode)
+  const confirmBulkDeleteAll = useCallback(async () => {
+    try {
+      const result = await bulkDelete.mutateAsync({
+        workflowType: "cleanup",
+        status: listFilters.status,
+        search: listFilters.search,
+        excludedSkus: excludedKeys.size > 0 ? Array.from(excludedKeys) : undefined,
+      })
+      toast.success(`Deleted ${result.deleted} item${result.deleted !== 1 ? "s" : ""}`)
+      handleClearSelection()
+      setShowBulkDeleteAllConfirm(false)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to delete items")
+    }
+  }, [bulkDelete, listFilters, excludedKeys, handleClearSelection])
+
+  // ── Data handlers ──────────────────────────────────────────────────────────
 
   const handleRowsChange = useCallback((updated: SkuMetadataRow[]) => {
     setLocalRows((prev) => {
@@ -175,10 +422,10 @@ export function SkuCleanupPage() {
           ...row,
           ...(v
             ? {
-                _validationStatus: v.status,
-                _validationErrors: v.errors,
-                _validationWarnings: v.warnings,
-              }
+              _validationStatus: v.status,
+              _validationErrors: v.errors,
+              _validationWarnings: v.warnings,
+            }
             : {}),
           ...(d ? { _duplicates: d.duplicates } : {}),
         }
@@ -216,8 +463,6 @@ export function SkuCleanupPage() {
       ])
 
       if (blockedCount > 0) {
-        // Amber warning, not green success — rows with red fields were saved
-        // but NOT approved, and the user must see that distinction clearly
         const blockedSkus = toSave
           .filter((r) => r.status === "cleanup_only")
           .map((r) => r.sku)
@@ -346,6 +591,22 @@ export function SkuCleanupPage() {
             <Download className="mr-1 h-4 w-4" />
             {t("sku.grid.importSapItems")}
           </Button>
+          {(selectedCount > 0 || isSelectAllMode) && (
+            <Button
+              variant="destructive"
+              size="sm"
+              onClick={
+                isSelectAllMode
+                  ? () => setShowBulkDeleteAllConfirm(true)
+                  : () => setShowDeleteSelectedConfirm(true)
+              }
+            >
+              <Trash2 className="mr-1 h-4 w-4" />
+              {isSelectAllMode
+                ? `Delete All (${selectedCount})`
+                : `Delete Selected (${selectedCount})`}
+            </Button>
+          )}
           <Button
             variant="ghost"
             size="sm"
@@ -443,12 +704,46 @@ export function SkuCleanupPage() {
         </div>
       </div>
 
+      {/* Select-all banner (mirrors ProductGroups banner pattern) */}
+      {(allPageSelected || isSelectAllMode) && !isLoading && mergedRows.length > 0 && (
+        <div className="flex items-center justify-center gap-1 border-b bg-blue-50 px-4 py-2 text-xs text-blue-800 dark:bg-blue-950/30 dark:text-blue-300">
+          {isSelectAllMode ? (
+            <>
+              All {selectedCount} item{selectedCount !== 1 ? "s" : ""} are selected.{" "}
+              <button
+                type="button"
+                className="cursor-pointer font-semibold underline underline-offset-2"
+                onClick={handleClearSelection}
+              >
+                Clear selection
+              </button>
+            </>
+          ) : (
+            <>
+              All {selectedCount} item{selectedCount !== 1 ? "s" : ""} on this page are selected.
+              {totalItems > selectedCount && (
+                <>
+                  {" "}
+                  <button
+                    type="button"
+                    className="cursor-pointer font-semibold underline underline-offset-2"
+                    onClick={handleSelectAll}
+                  >
+                    Select all {totalItems} available item{totalItems !== 1 ? "s" : ""}
+                  </button>
+                </>
+              )}
+            </>
+          )}
+        </div>
+      )}
+
       {/* Grid + detail panel */}
       <div className="flex flex-1 flex-col overflow-hidden">
         <div className="flex flex-1 overflow-hidden p-4 pb-2">
-          {isLoading ? (
-            <div className="flex h-32 w-full items-center justify-center">
-              <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+          {(isLoading || (isFetching && mergedRows.length === 0)) ? (
+            <div className="flex-1 overflow-hidden">
+              <SkuCleanupSkeleton />
             </div>
           ) : mergedRows.length === 0 ? (
             <div className="flex h-40 w-full flex-col items-center justify-center gap-3 text-muted-foreground">
@@ -460,16 +755,17 @@ export function SkuCleanupPage() {
             </div>
           ) : (
             <div className="relative flex-1 overflow-hidden">
-              {isFetching && !isLoading && (
-                <div className="pointer-events-none absolute inset-x-0 top-0 z-10 flex justify-center pt-2">
-                  <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-                </div>
-              )}
               <SkuSheetCeramic
                 rows={mergedRows}
                 onRowsChange={handleRowsChange}
                 dropdowns={dropdowns}
                 mode="cleanup"
+                showCheckbox
+                isRowSelected={isRowSelected}
+                onRowToggle={onRowToggle}
+                headerChecked={allPageSelected}
+                headerIndeterminate={false}
+                onHeaderToggle={onHeaderToggle}
               />
             </div>
           )}
@@ -507,15 +803,78 @@ export function SkuCleanupPage() {
             </Button>
           </div>
         )}
-        {/* Right-side details panel — temporarily hidden
-        {activeRow && (
-          <div className="w-80 shrink-0 overflow-y-auto border-l bg-background">
-            <SkuDetailPanel row={activeRow} />
-          </div>
-        )}
-        */}
       </div>
 
+      {/* Delete Selected confirmation */}
+      <AlertDialog open={showDeleteSelectedConfirm} onOpenChange={setShowDeleteSelectedConfirm}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              Delete {selectedCount} selected item{selectedCount !== 1 ? "s" : ""}?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              This will permanently delete {selectedCount} selected item{selectedCount !== 1 ? "s" : ""}.
+              This cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={bulkDelete.isPending}>
+              {t("common.cancel")}
+            </AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              disabled={bulkDelete.isPending}
+              onClick={(e) => {
+                e.preventDefault()
+                void confirmDeleteSelected()
+              }}
+            >
+              {bulkDelete.isPending ? (
+                <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+              ) : null}
+              Delete {selectedCount} item{selectedCount !== 1 ? "s" : ""}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Delete All confirmation (select-all mode) */}
+      <AlertDialog open={showBulkDeleteAllConfirm} onOpenChange={setShowBulkDeleteAllConfirm}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              Delete all {selectedCount} item{selectedCount !== 1 ? "s" : ""}?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              This will permanently delete all {selectedCount} matching item{selectedCount !== 1 ? "s" : ""}
+              {listFilters.search ? ` matching "${listFilters.search}"` : ""}
+              {listFilters.status ? ` with status "${listFilters.status}"` : ""}
+              {excludedKeys.size > 0 ? ` (${excludedKeys.size} item${excludedKeys.size !== 1 ? "s" : ""} excluded)` : ""}.
+              This cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={bulkDelete.isPending}>
+              {t("common.cancel")}
+            </AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              disabled={bulkDelete.isPending}
+              onClick={(e) => {
+                e.preventDefault()
+                void confirmBulkDeleteAll()
+              }}
+            >
+              {bulkDelete.isPending ? (
+                <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+              ) : null}
+              Delete {selectedCount} item{selectedCount !== 1 ? "s" : ""}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Import All confirmation */}
       <AlertDialog open={showImportAllConfirm} onOpenChange={setShowImportAllConfirm}>
         <AlertDialogContent size="sm">
           <AlertDialogHeader>
