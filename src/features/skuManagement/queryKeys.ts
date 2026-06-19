@@ -20,4 +20,7 @@ export const skuQueryKeys = {
   },
 
   cleanupStats: ['sku', 'cleanup-stats'] as const,
+
+  importableSapItems: (params?: { search?: string; page?: number; pageSize?: number }) =>
+    ['sku', 'importable-sap-items', params ?? {}] as const,
 };

@@ -2,6 +2,7 @@ import { useState } from "react"
 import { useTranslation } from "react-i18next"
 
 import { ErrorMessage } from "@/components/ErrorMessage"
+import { useCheckboxDragSelect } from "@/lib/useCheckboxDragSelect"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -63,6 +64,21 @@ export function SapProductSearchDialog({ open, onOpenChange }: SapProductSearchD
 
   const isSelected = (sku: string) => Boolean(selected[sku])
 
+  const searchResults = results ?? []
+
+  // Click-and-drag multi-select across the checkbox column (Excel/Gmail
+  // style) — mousedown on one checkbox, drag over others, they all flip to
+  // the same checked state as the first click.
+  const { startDrag: startCheckboxDrag, handleNativeChange: handleCheckboxChange } = useCheckboxDragSelect({
+    items: searchResults,
+    getKey: (p) => p.sku,
+    isSelected: (p) => isSelected(p.sku),
+    toggle: (key) => {
+      const product = searchResults.find((p) => p.sku === key)
+      if (product) toggleSelection(product)
+    },
+  })
+
   return (
     <Dialog
       open={open}
@@ -75,19 +91,22 @@ export function SapProductSearchDialog({ open, onOpenChange }: SapProductSearchD
         onOpenChange(next)
       }}
     >
-      <DialogContent className="max-w-3xl">
-        <DialogHeader>
+      <DialogContent className="inset-0 top-0 left-0 flex h-screen w-screen max-w-none translate-x-0 translate-y-0 flex-col gap-0 rounded-none p-0">
+
+        <DialogHeader className="shrink-0 gap-1 border-b px-6 py-4">
           <DialogTitle>{t("products.searchProductsInSap")}</DialogTitle>
           <DialogDescription>
             {t("products.searchProductsInSapDesc")}
           </DialogDescription>
         </DialogHeader>
 
-        <div className="flex items-center gap-2">
+        <div className="flex shrink-0 items-center gap-2 border-b px-6 py-3">
           <Input
+            className="max-w-md"
             placeholder={t("products.searchPlaceholder")}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
+            autoFocus
           />
           <Button
             type="button"
@@ -98,25 +117,30 @@ export function SapProductSearchDialog({ open, onOpenChange }: SapProductSearchD
           </Button>
         </div>
 
-        {submitError ? <ErrorMessage>{submitError}</ErrorMessage> : null}
+        {submitError ? (
+          <div className="shrink-0 px-6 pt-3">
+            <ErrorMessage>{submitError}</ErrorMessage>
+          </div>
+        ) : null}
 
-        <div className="mt-4 max-h-80 overflow-auto rounded-md border">
-          <Table>
+        <div className="flex-1 min-h-0 overflow-hidden px-6 py-4">
+          <Table containerClassName="h-full">
             <TableHeader>
               <TableRow>
-                <TableHead className="w-[40px]"></TableHead>
-                <TableHead>{t("products.sku")}</TableHead>
-                <TableHead>{t("common.name")}</TableHead>
-                <TableHead>{t("products.size")}</TableHead>
-                <TableHead>{t("products.unitPrice")}</TableHead>
-                <TableHead>{t("products.dealerPrice")}</TableHead>
-                <TableHead>{t("products.stock")}</TableHead>
+                <TableHead className="sticky top-0 z-10 w-[40px] bg-background"></TableHead>
+                <TableHead className="sticky top-0 z-10 bg-background">{t("products.sku")}</TableHead>
+                <TableHead className="sticky top-0 z-10 bg-background">{t("common.name")}</TableHead>
+                <TableHead className="sticky top-0 z-10 bg-background">{t("products.size")}</TableHead>
+                <TableHead className="sticky top-0 z-10 bg-background">{t("products.unitPrice")}</TableHead>
+                <TableHead className="sticky top-0 z-10 bg-background">{t("products.dealerPrice")}</TableHead>
+                <TableHead className="sticky top-0 z-10 bg-background">{t("products.stock")}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {(results ?? []).map((p) => (
+              {searchResults.map((p, idx) => (
                 <TableRow
                   key={p.sku}
+                  data-row-index={idx}
                   onClick={() => toggleSelection(p)}
                   className="cursor-pointer"
                 >
@@ -125,7 +149,11 @@ export function SapProductSearchDialog({ open, onOpenChange }: SapProductSearchD
                       type="checkbox"
                       className="h-4 w-4"
                       checked={isSelected(p.sku)}
-                      onChange={() => toggleSelection(p)}
+                      onChange={() => handleCheckboxChange(p.sku)}
+                      onMouseDown={(e) => {
+                        e.stopPropagation()
+                        startCheckboxDrag(idx, e)
+                      }}
                       onClick={(e) => e.stopPropagation()}
                     />
                   </TableCell>
@@ -148,7 +176,7 @@ export function SapProductSearchDialog({ open, onOpenChange }: SapProductSearchD
           </Table>
         </div>
 
-        <DialogFooter>
+        <DialogFooter className="mt-0 shrink-0 border-t px-6 py-4">
           <Button
             type="button"
             variant="outline"

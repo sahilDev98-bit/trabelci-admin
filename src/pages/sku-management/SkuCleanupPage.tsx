@@ -17,7 +17,6 @@ import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -34,8 +33,6 @@ import {
   useSkuBulkUpsertMutation,
   useSkuValidateMutation,
   useSkuCheckDuplicatesMutation,
-  useImportSapItemsMutation,
-  useImportAllSapItemsMutation,
   useCleanupStatsQuery,
   useSkuBulkDeleteMutation,
 } from "@/features/skuManagement/api"
@@ -44,6 +41,7 @@ import type { SkuCleanupStatusTab, SkuMetadataRow } from "@/features/skuManageme
 import { cn } from "@/lib/utils"
 import { SkuSheetCeramic } from "./components/SkuSheetCeramic"
 import { SkuFullPageModal } from "./components/SkuFullPageModal"
+import { SkuSapImportModal } from "./components/SkuSapImportModal"
 
 const PAGE_SIZE = 100
 
@@ -70,14 +68,15 @@ const getRowKey = (row: SkuMetadataRow) => row._clientId ?? row.sku ?? ""
 
 // ─── Skeleton ─────────────────────────────────────────────────────────────────
 // Column template mirrors buildColumns("cleanup", showCheckbox=true) exactly:
-// checkbox(36) + index(44) + 18 data columns with their minWidths
+// checkbox(36) + index(44) + 19 data columns with their minWidths
+// (includes the cleanup-only "Original SAP Name" column right after SKU)
 const SKELETON_GRID_COLS =
-  "36px 44px minmax(140px,1fr) minmax(130px,1fr) minmax(120px,1fr) minmax(110px,1fr) " +
+  "36px 44px minmax(140px,1fr) minmax(180px,1fr) minmax(130px,1fr) minmax(120px,1fr) minmax(110px,1fr) " +
   "minmax(130px,1fr) minmax(125px,1fr) minmax(170px,1fr) minmax(170px,1fr) minmax(130px,1fr) " +
   "minmax(110px,1fr) minmax(110px,1fr) minmax(110px,1fr) minmax(110px,1fr) minmax(180px,1fr) " +
   "minmax(120px,1fr) minmax(110px,1fr) minmax(130px,1fr) minmax(110px,1fr)"
-const SKELETON_MIN_W = 2547 // sum of all minWidths + (20-1)*8px gaps
-const SKELETON_COLS = 20
+const SKELETON_MIN_W = 2735 // sum of all minWidths + (21-1)*8px gaps
+const SKELETON_COLS = 21
 const SKELETON_ROWS = 15
 
 function colStickyStyle(ci: number): React.CSSProperties {
@@ -190,9 +189,7 @@ export function SkuCleanupPage() {
   const [debouncedSearch, setDebouncedSearch] = useState("")
   const [statusTab, setStatusTab] = useState<SkuCleanupStatusTab>("pending")
   const [page, setPage] = useState(1)
-  const [importInput, setImportInput] = useState("")
-  const [showImport, setShowImport] = useState(false)
-  const [showImportAllConfirm, setShowImportAllConfirm] = useState(false)
+  const [showSapImportModal, setShowSapImportModal] = useState(false)
   const [fullPageOpen, setFullPageOpen] = useState(false)
   const [localRows, setLocalRows] = useState<SkuMetadataRow[]>([])
   const [isSaving, setIsSaving] = useState(false)
@@ -234,8 +231,6 @@ export function SkuCleanupPage() {
   const bulkUpsert = useSkuBulkUpsertMutation()
   const validate = useSkuValidateMutation()
   const checkDuplicates = useSkuCheckDuplicatesMutation()
-  const importItems = useImportSapItemsMutation()
-  const importAllItems = useImportAllSapItemsMutation()
   const bulkDelete = useSkuBulkDeleteMutation()
 
   const localBySku = useMemo(
@@ -256,8 +251,6 @@ export function SkuCleanupPage() {
   const dirtyCount = localRows.filter((r) => r._isDirty).length
   const totalItems = listData?.total ?? 0
   const totalPages = Math.max(1, Math.ceil(totalItems / PAGE_SIZE))
-  const importableCount = stats?.importable ?? stats?.productTotal ?? 0
-
   const tabCounts = {
     pending: stats?.pending ?? 0,
     cleaned: stats?.cleaned ?? 0,
@@ -277,12 +270,14 @@ export function SkuCleanupPage() {
     () => mergedRows.length > 0 && mergedRows.every((r) => isRowSelected(r)),
     [mergedRows, isRowSelected],
   )
+  const showSelectionBanner = (allPageSelected || isSelectAllMode) && !isLoading && mergedRows.length > 0
 
 
   // What the user sees as the count to act on
   const selectedCount = isSelectAllMode
     ? totalItems - excludedKeys.size
     : selectedKeys.size
+  const hasSelection = selectedCount > 0 || isSelectAllMode
 
   // Mirrors toggleProduct — toggle a single row's checked state
   const onRowToggle = useCallback((key: string) => {
@@ -494,47 +489,39 @@ export function SkuCleanupPage() {
     }
   }, [localRows, validate, checkDuplicates, bulkUpsert, queryClient, t])
 
-  const handleImport = useCallback(async () => {
-    const codes = importInput
-      .split(/[\n,;]+/)
-      .map((s) => s.trim())
-      .filter(Boolean)
-    if (!codes.length) return
-    try {
-      const result = await importItems.mutateAsync(codes)
-      toast.success(
-        t("sku.import.result", {
-          imported: result.imported.length,
-          skipped: result.skipped.length,
-          failed: result.failed.length,
-        }),
-      )
-      setImportInput("")
-      setShowImport(false)
-    } catch {
-      toast.error(t("sku.import.failed"))
-    }
-  }, [importInput, importItems, t])
-
-  const handleImportAll = useCallback(async () => {
-    try {
-      const result = await importAllItems.mutateAsync()
-      toast.success(
-        t("sku.import.resultAll", {
-          imported: result.imported,
-          skipped: result.skipped,
-          failed: result.failed,
-        }),
-      )
-      setShowImportAllConfirm(false)
-      setShowImport(false)
-    } catch {
-      toast.error(t("sku.import.failed"))
-    }
-  }, [importAllItems, t])
-
   const cleanedPct =
     stats && stats.total > 0 ? Math.round((stats.cleaned / stats.total) * 100) : 0
+
+  // Shared between the xl+ inline placement (same row as the tabs) and the
+  // <xl placement (its own row below the tabs) — same content, two spots.
+  const selectionBannerContent = !showSelectionBanner ? null : isSelectAllMode ? (
+    <>
+      All {selectedCount} item{selectedCount !== 1 ? "s" : ""} are selected.{" "}
+      <button
+        type="button"
+        className="cursor-pointer font-semibold underline underline-offset-2"
+        onClick={handleClearSelection}
+      >
+        Clear selection
+      </button>
+    </>
+  ) : (
+    <>
+      All {selectedCount} item{selectedCount !== 1 ? "s" : ""} on this page are selected.
+      {totalItems > selectedCount && (
+        <>
+          {" "}
+          <button
+            type="button"
+            className="cursor-pointer font-semibold underline underline-offset-2"
+            onClick={handleSelectAll}
+          >
+            Select all {totalItems} available item{totalItems !== 1 ? "s" : ""}
+          </button>
+        </>
+      )}
+    </>
+  )
 
   const statusTabs: { key: SkuCleanupStatusTab; label: string; count: number }[] = [
     { key: "pending", label: t("sku.cleanup.tabs.pending"), count: tabCounts.pending },
@@ -587,26 +574,10 @@ export function SkuCleanupPage() {
               }}
             />
           </div>
-          <Button variant="outline" size="sm" onClick={() => setShowImport(!showImport)}>
+          <Button variant="outline" size="sm" onClick={() => setShowSapImportModal(true)}>
             <Download className="mr-1 h-4 w-4" />
             {t("sku.grid.importSapItems")}
           </Button>
-          {(selectedCount > 0 || isSelectAllMode) && (
-            <Button
-              variant="destructive"
-              size="sm"
-              onClick={
-                isSelectAllMode
-                  ? () => setShowBulkDeleteAllConfirm(true)
-                  : () => setShowDeleteSelectedConfirm(true)
-              }
-            >
-              <Trash2 className="mr-1 h-4 w-4" />
-              {isSelectAllMode
-                ? `Delete All (${selectedCount})`
-                : `Delete Selected (${selectedCount})`}
-            </Button>
-          )}
           <Button
             variant="ghost"
             size="sm"
@@ -631,51 +602,8 @@ export function SkuCleanupPage() {
         </div>
       </div>
 
-      {/* Import panel */}
-      {showImport && (
-        <div className="border-b bg-muted/30 px-4 py-3">
-          <Card className="max-w-lg">
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm">{t("sku.import.title")}</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              <p className="text-xs text-muted-foreground">{t("sku.import.description")}</p>
-              <textarea
-                className="w-full rounded-md border bg-background px-3 py-2 font-mono text-xs"
-                rows={4}
-                placeholder={t("sku.import.placeholder")}
-                value={importInput}
-                onChange={(e) => setImportInput(e.target.value)}
-              />
-              <div className="flex flex-wrap gap-2">
-                <Button size="sm" onClick={handleImport} disabled={importItems.isPending}>
-                  {importItems.isPending && (
-                    <Loader2 className="mr-1 h-3 w-3 animate-spin" />
-                  )}
-                  {t("sku.grid.importSapItems")}
-                </Button>
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  onClick={() => setShowImportAllConfirm(true)}
-                  disabled={importAllItems.isPending || importableCount === 0}
-                >
-                  {importAllItems.isPending && (
-                    <Loader2 className="mr-1 h-3 w-3 animate-spin" />
-                  )}
-                  {t("sku.import.importAll", { count: importableCount })}
-                </Button>
-                <Button variant="ghost" size="sm" onClick={() => setShowImport(false)}>
-                  {t("common.cancel")}
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-        </div>
-      )}
-
       {/* Status tabs */}
-      <div className="border-b bg-background/80 px-4 py-2 backdrop-blur-sm">
+      <div className="flex items-center justify-between border-b bg-background/80 px-4 py-2 backdrop-blur-sm">
         <div className="inline-flex gap-1 rounded-lg bg-muted/80 p-1">
           {statusTabs.map((tab) => (
             <button
@@ -702,41 +630,53 @@ export function SkuCleanupPage() {
             </button>
           ))}
         </div>
+
+        {/* xl+ only: selection text lives in the leftover space of this same
+            row, so it never adds height. Below xl there isn't enough room
+            for tabs + text + button on one line, so it moves to its own
+            row instead (rendered right after this one). */}
+        <div
+          className="hidden flex-1 truncate px-4 text-center text-xs text-blue-700 xl:block dark:text-blue-300"
+          aria-hidden={!showSelectionBanner}
+        >
+          {selectionBannerContent}
+        </div>
+
+        {/* Always mounted so its slot is reserved — toggling visibility (not
+            presence) keeps the tabs from jumping when a selection starts or ends. */}
+        <Button
+          variant="destructive"
+          size="sm"
+          className={cn(!hasSelection && "invisible")}
+          tabIndex={hasSelection ? 0 : -1}
+          aria-hidden={!hasSelection}
+          onClick={
+            isSelectAllMode
+              ? () => setShowBulkDeleteAllConfirm(true)
+              : () => setShowDeleteSelectedConfirm(true)
+          }
+        >
+          <Trash2 className="mr-1 h-4 w-4" />
+          {isSelectAllMode
+            ? `Delete All (${selectedCount})`
+            : `Delete Selected (${selectedCount})`}
+        </Button>
       </div>
 
-      {/* Select-all banner (mirrors ProductGroups banner pattern) */}
-      {(allPageSelected || isSelectAllMode) && !isLoading && mergedRows.length > 0 && (
-        <div className="flex items-center justify-center gap-1 border-b bg-blue-50 px-4 py-2 text-xs text-blue-800 dark:bg-blue-950/30 dark:text-blue-300">
-          {isSelectAllMode ? (
-            <>
-              All {selectedCount} item{selectedCount !== 1 ? "s" : ""} are selected.{" "}
-              <button
-                type="button"
-                className="cursor-pointer font-semibold underline underline-offset-2"
-                onClick={handleClearSelection}
-              >
-                Clear selection
-              </button>
-            </>
-          ) : (
-            <>
-              All {selectedCount} item{selectedCount !== 1 ? "s" : ""} on this page are selected.
-              {totalItems > selectedCount && (
-                <>
-                  {" "}
-                  <button
-                    type="button"
-                    className="cursor-pointer font-semibold underline underline-offset-2"
-                    onClick={handleSelectAll}
-                  >
-                    Select all {totalItems} available item{totalItems !== 1 ? "s" : ""}
-                  </button>
-                </>
-              )}
-            </>
-          )}
-        </div>
-      )}
+      {/* <xl: selection banner gets its own reserved-height row below the
+          tabs (the original placement) since the tabs row is too narrow to
+          fit tabs + text + button together at smaller widths. */}
+      <div
+        className={cn(
+          "flex h-9 shrink-0 items-center justify-center gap-1 border-b px-4 text-xs transition-colors xl:hidden",
+          showSelectionBanner
+            ? "border-border bg-blue-50 text-blue-800 dark:bg-blue-950/30 dark:text-blue-300"
+            : "border-transparent bg-transparent text-transparent",
+        )}
+        aria-hidden={!showSelectionBanner}
+      >
+        {selectionBannerContent}
+      </div>
 
       {/* Grid + detail panel */}
       <div className="flex flex-1 flex-col overflow-hidden">
@@ -748,7 +688,7 @@ export function SkuCleanupPage() {
           ) : mergedRows.length === 0 ? (
             <div className="flex h-40 w-full flex-col items-center justify-center gap-3 text-muted-foreground">
               <p className="text-sm">{t("sku.cleanup.noItems")}</p>
-              <Button variant="outline" size="sm" onClick={() => setShowImport(true)}>
+              <Button variant="outline" size="sm" onClick={() => setShowSapImportModal(true)}>
                 <Download className="mr-1 h-4 w-4" />
                 {t("sku.grid.importSapItems")}
               </Button>
@@ -874,34 +814,10 @@ export function SkuCleanupPage() {
         </AlertDialogContent>
       </AlertDialog>
 
-      {/* Import All confirmation */}
-      <AlertDialog open={showImportAllConfirm} onOpenChange={setShowImportAllConfirm}>
-        <AlertDialogContent size="sm">
-          <AlertDialogHeader>
-            <AlertDialogTitle>{t("sku.import.importAllTitle")}</AlertDialogTitle>
-            <AlertDialogDescription>
-              {t("sku.import.importAllDescription", { count: importableCount })}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={importAllItems.isPending}>
-              {t("common.cancel")}
-            </AlertDialogCancel>
-            <AlertDialogAction
-              disabled={importAllItems.isPending}
-              onClick={(e) => {
-                e.preventDefault()
-                void handleImportAll()
-              }}
-            >
-              {importAllItems.isPending ? (
-                <Loader2 className="mr-1 h-4 w-4 animate-spin" />
-              ) : null}
-              {t("sku.import.importAllConfirm")}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <SkuSapImportModal
+        open={showSapImportModal}
+        onClose={() => setShowSapImportModal(false)}
+      />
 
       <SkuFullPageModal
         open={fullPageOpen}

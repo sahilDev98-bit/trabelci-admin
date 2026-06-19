@@ -11,6 +11,7 @@ import type {
   SkuDropdownValue,
   SkuImportResult,
   SkuImportAllResult,
+  SkuImportableSapItemsResponse,
   SkuMetadataFilters,
   SkuMetadataListResponse,
   SkuMetadataRow,
@@ -191,8 +192,37 @@ export async function fetchCleanupStats(): Promise<SkuCleanupStats> {
   return apiFetch(API_ENDPOINTS.SKU_CLEANUP_STATS)
 }
 
-export async function importAllSapItemsToCleanup(): Promise<SkuImportAllResult> {
-  return apiFetch(API_ENDPOINTS.SKU_IMPORT_ALL_SAP_ITEMS, { method: "POST" })
+export interface SkuImportAllParams {
+  /** Scope to products matching this sku/name term — mirrors the importable-items preview filter */
+  search?: string
+  /** Skip these SKUs even though they're otherwise importable (deselected in the picker) */
+  excludedSkus?: string[]
+}
+
+export async function importAllSapItemsToCleanup(
+  params: SkuImportAllParams = {}
+): Promise<SkuImportAllResult> {
+  return apiFetch(API_ENDPOINTS.SKU_IMPORT_ALL_SAP_ITEMS, {
+    method: "POST",
+    body: JSON.stringify(params),
+  })
+}
+
+export interface SkuImportableSapItemsParams {
+  search?: string
+  page?: number
+  pageSize?: number
+}
+
+export async function fetchImportableSapItems(
+  params: SkuImportableSapItemsParams = {}
+): Promise<SkuImportableSapItemsResponse> {
+  const qs = new URLSearchParams()
+  if (params.search) qs.set("search", params.search)
+  if (params.page) qs.set("page", String(params.page))
+  if (params.pageSize) qs.set("pageSize", String(params.pageSize))
+  const query = qs.toString()
+  return apiFetch(`${API_ENDPOINTS.SKU_IMPORTABLE_SAP_ITEMS}${query ? `?${query}` : ""}`)
 }
 
 export interface SkuBulkDeleteParams {
@@ -264,6 +294,14 @@ export function useCleanupStatsQuery() {
   return useQuery({
     queryKey: skuQueryKeys.cleanupStats,
     queryFn: fetchCleanupStats,
+  })
+}
+
+export function useImportableSapItemsQuery(params: SkuImportableSapItemsParams, enabled = true) {
+  return useQuery({
+    queryKey: skuQueryKeys.importableSapItems(params),
+    queryFn: () => fetchImportableSapItems(params),
+    enabled,
   })
 }
 
@@ -346,6 +384,7 @@ export function useImportSapItemsMutation() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: skuQueryKeys.metadata.all })
       qc.invalidateQueries({ queryKey: skuQueryKeys.cleanupStats })
+      qc.invalidateQueries({ queryKey: ["sku", "importable-sap-items"] })
     },
   })
 }
@@ -353,10 +392,11 @@ export function useImportSapItemsMutation() {
 export function useImportAllSapItemsMutation() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: () => importAllSapItemsToCleanup(),
+    mutationFn: (params: SkuImportAllParams = {}) => importAllSapItemsToCleanup(params),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: skuQueryKeys.metadata.all })
       qc.invalidateQueries({ queryKey: skuQueryKeys.cleanupStats })
+      qc.invalidateQueries({ queryKey: ["sku", "importable-sap-items"] })
     },
   })
 }

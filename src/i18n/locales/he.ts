@@ -740,6 +740,8 @@ const he = {
       deleteRowConfirmDescription: 'פעולה זו תמחק לצמיתות את "{{sku}}" מהמסד נתונים. לא ניתן לבטל פעולה זו.',
       deleteRowSuccess: "השורה נמחקה",
       deleteRowFailed: "מחיקת השורה נכשלה",
+      clickToExpandColumn: "לחץ להרחבה",
+      clickToTruncateColumn: "לחץ לקיצור",
     },
 
     fields: {

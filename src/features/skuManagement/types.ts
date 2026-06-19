@@ -165,6 +165,22 @@ export interface SkuImportAllResult {
   failed: number;
 }
 
+export interface SkuImportableSapItem {
+  sku: string;
+  name: string | null;
+  size?: string | null;
+  unitPrice?: number | null;
+  dealerPrice?: number | null;
+  stockQuantity?: number | null;
+}
+
+export interface SkuImportableSapItemsResponse {
+  items: SkuImportableSapItem[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
 export type SkuCleanupStatusTab = 'pending' | 'cleaned' | 'all';
 
 export interface SkuMetadataFilters {

@@ -756,6 +756,8 @@ const en = {
       deleteRowConfirmDescription: 'This will permanently delete "{{sku}}" from the database. This cannot be undone.',
       deleteRowSuccess: "Row deleted",
       deleteRowFailed: "Failed to delete row",
+      clickToExpandColumn: "Click to expand",
+      clickToTruncateColumn: "Click to truncate",
     },
 
     fields: {
