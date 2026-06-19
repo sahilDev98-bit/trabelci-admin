@@ -139,9 +139,9 @@ export function SupplierAutocompleteCell({
           zIndex: 0,
         }}
       >
-        <span style={{ color: "var(--ceramic-ink)" }}>{typedValue}</span>
+        <span style={{ color: "var(--ceramic-rect-text)" }}>{typedValue}</span>
         {ghostSuffix && (
-          <span style={{ color: "var(--ceramic-muted-text)", opacity: 0.45 }}>
+          <span style={{ color: "var(--ceramic-rect-text)", opacity: 0.45 }}>
             {ghostSuffix}
           </span>
         )}
@@ -161,7 +161,7 @@ export function SupplierAutocompleteCell({
           position: "relative",
           zIndex: 1,
           color: "transparent",
-          caretColor: "var(--ceramic-ink)",
+          caretColor: "var(--ceramic-rect-text)",
           background: "transparent",
         }}
         onInput={(e) => setTypedValue(e.currentTarget.value)}

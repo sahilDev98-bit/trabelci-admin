@@ -118,25 +118,23 @@ const COLUMNS: CeramicColumn[] = [
   // cleaning up against; filtered out for the New Creation grid in
   // buildColumns since a not-yet-created row has no SAP name at all.
   { field: "original_sap_name",  type: "text",         minWidth: 180, readOnly: true, italic: true },
-  { field: "supplier",           type: "text",         minWidth: 130 },
-  { field: "series",             type: "text",         minWidth: 120 },
-  { field: "color",              type: "text",         minWidth: 110 },
-  // Dropdown widths leave room for the longest vocabulary label on ONE line
-  // (e.g. "120×240 cm", "Floor + Wall", "Natural Stone") — no wrapping,
-  // no ellipsis, per design decision
-  { field: "size",               type: "dropdown",     minWidth: 130, dropdownKey: "size"              },
-  { field: "finish",             type: "dropdown",     minWidth: 125, dropdownKey: "finish"            },
-  { field: "product_image_urls", type: "image-multi",  minWidth: 170, imageType: "product" },
-  { field: "gallery_image_urls", type: "image-multi",  minWidth: 170, imageType: "gallery" },
-  { field: "country_of_origin",  type: "dropdown",     minWidth: 130, dropdownKey: "country_of_origin" },
-  { field: "qty_per_carton",     type: "text",         minWidth: 110 },
-  { field: "qty_per_pallet",     type: "text",         minWidth: 110 },
-  { field: "shade",              type: "dropdown",     minWidth: 110, dropdownKey: "shade" },
-  { field: "supplier_code",      type: "text",         minWidth: 110 },
-  { field: "display_name_en",    type: "text",         minWidth: 180 },
-  { field: "series_en",          type: "text",         minWidth: 120 },
-  { field: "color_en",           type: "text",         minWidth: 110 },
-  { field: "supplier_sku",       type: "text",         minWidth: 130 },
+  { field: "supplier",           type: "supplier-autocomplete", minWidth: 130 },
+  { field: "series",             type: "supplier-autocomplete", minWidth: 120 },
+  { field: "color",              type: "supplier-autocomplete", minWidth: 110 },
+  // size / shade / country_of_origin / finish keep controlled-vocabulary dropdowns
+  { field: "size",               type: "dropdown",              minWidth: 130, dropdownKey: "size"              },
+  { field: "finish",             type: "dropdown",              minWidth: 125, dropdownKey: "finish"            },
+  { field: "product_image_urls", type: "image-multi",           minWidth: 170, imageType: "product" },
+  { field: "gallery_image_urls", type: "image-multi",           minWidth: 170, imageType: "gallery" },
+  { field: "country_of_origin",  type: "dropdown",              minWidth: 130, dropdownKey: "country_of_origin" },
+  { field: "qty_per_carton",     type: "supplier-autocomplete", minWidth: 110 },
+  { field: "qty_per_pallet",     type: "supplier-autocomplete", minWidth: 110 },
+  { field: "shade",              type: "dropdown",              minWidth: 110, dropdownKey: "shade" },
+  { field: "supplier_code",      type: "supplier-autocomplete", minWidth: 110 },
+  { field: "display_name_en",    type: "supplier-autocomplete", minWidth: 180 },
+  { field: "series_en",          type: "supplier-autocomplete", minWidth: 120 },
+  { field: "color_en",           type: "supplier-autocomplete", minWidth: 110 },
+  { field: "supplier_sku",       type: "text",                  minWidth: 130 },
   { field: "status",             type: "readonly",     minWidth: 110 },
 ]
 
