@@ -183,6 +183,31 @@ export interface SkuImportableSapItemsResponse {
 
 export type SkuCleanupStatusTab = 'pending' | 'cleaned' | 'all';
 
+export interface SkuSupplierHints {
+  supplier_code:     string | null;
+  country_of_origin: string | null;
+  series:            string[];
+  seriesEnMap:       Record<string, string>;
+  colors:            string[];
+  colorEnMap:        Record<string, string>;
+  finishes:          string[];
+  displayNames:      string[];
+  qtyPerCarton:      string[];
+  qtyPerPallet:      string[];
+  combinations: Array<{
+    series:          string;
+    color:           string;
+    series_en:       string | null;
+    color_en:        string | null;
+    display_name_en: string;
+  }>;
+}
+
+export interface SkuAutocompleteHints {
+  suppliers:  string[];
+  bySupplier: Record<string, SkuSupplierHints>;
+}
+
 export interface SkuMetadataFilters {
   workflowType?: SkuWorkflowType;
   status?: SkuStatus;

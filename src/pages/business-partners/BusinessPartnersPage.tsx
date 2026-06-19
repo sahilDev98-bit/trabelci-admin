@@ -41,6 +41,14 @@ import type { BusinessPartner, CreateBusinessPartnerInput, SapBpLookupResult } f
 
 type FormValues = CreateBusinessPartnerInput
 
+type EditFormValues = {
+  name: string
+  email: string
+  skuDefaultCountry: string
+  skuDefaultDisplayNameEn: string
+  skuDefaultSupplierSku: string
+}
+
 export function BusinessPartnersPage() {
   const { t } = useTranslation()
   const navigate = useNavigate()
@@ -49,8 +57,8 @@ export function BusinessPartnersPage() {
     defaultValues: { name: "", email: "" },
   })
 
-  const editForm = useForm<FormValues>({
-    defaultValues: { name: "", email: "" },
+  const editForm = useForm<EditFormValues>({
+    defaultValues: { name: "", email: "", skuDefaultCountry: "", skuDefaultDisplayNameEn: "", skuDefaultSupplierSku: "" },
   })
 
   const { data, isLoading, isError, error, refetch, isFetching } = useBusinessPartnersQuery()
@@ -110,12 +118,25 @@ export function BusinessPartnersPage() {
 
   const openEdit = (bp: BusinessPartner) => {
     setEditTarget(bp)
-    editForm.reset({ name: bp.name, email: bp.email ?? "" })
+    editForm.reset({
+      name: bp.name,
+      email: bp.email ?? "",
+      skuDefaultCountry: bp.skuDefaultCountry ?? "",
+      skuDefaultDisplayNameEn: bp.skuDefaultDisplayNameEn ?? "",
+      skuDefaultSupplierSku: bp.skuDefaultSupplierSku ?? "",
+    })
   }
 
-  const onEditSubmit = async (values: FormValues) => {
+  const onEditSubmit = async (values: EditFormValues) => {
     if (!editTarget) return
-    await updateMutation.mutateAsync({ id: editTarget.id, name: values.name, email: values.email })
+    await updateMutation.mutateAsync({
+      id: editTarget.id,
+      name: values.name,
+      email: values.email,
+      sku_default_country: values.skuDefaultCountry.trim() || null,
+      sku_default_display_name_en: values.skuDefaultDisplayNameEn.trim() || null,
+      sku_default_supplier_sku: values.skuDefaultSupplierSku.trim() || null,
+    })
     setEditTarget(null)
     toast.success(t("businessPartners.bpUpdated"))
   }
@@ -358,6 +379,18 @@ export function BusinessPartnersPage() {
             <div className="grid gap-1">
               <Label htmlFor="edit-email">{t("common.email")}</Label>
               <Input id="edit-email" type="email" required {...editForm.register("email")} />
+            </div>
+            <div className="grid gap-1">
+              <Label htmlFor="edit-sku-country">SKU Default Country</Label>
+              <Input id="edit-sku-country" placeholder="e.g. Spain" {...editForm.register("skuDefaultCountry")} />
+            </div>
+            <div className="grid gap-1">
+              <Label htmlFor="edit-sku-display-name">SKU Default Display Name (EN)</Label>
+              <Input id="edit-sku-display-name" placeholder="e.g. La Fabrica Tile" {...editForm.register("skuDefaultDisplayNameEn")} />
+            </div>
+            <div className="grid gap-1">
+              <Label htmlFor="edit-sku-supplier-sku">SKU Default Supplier SKU</Label>
+              <Input id="edit-sku-supplier-sku" placeholder="e.g. LF-001" {...editForm.register("skuDefaultSupplierSku")} />
             </div>
             <DialogFooter>
               <Button type="button" variant="outline" onClick={() => setEditTarget(null)}>

@@ -18,6 +18,9 @@ type BusinessPartnerRow = {
   synced_at: string | null
   created_by: string | null
   created_at: string | null
+  sku_default_country: string | null
+  sku_default_display_name_en: string | null
+  sku_default_supplier_sku: string | null
 }
 
 type UserProfileRow = {
@@ -51,6 +54,9 @@ const mapBusinessPartnerRow = (row: BusinessPartnerRow): BusinessPartner => ({
   syncedAt: row.synced_at,
   createdBy: row.created_by,
   createdAt: row.created_at,
+  skuDefaultCountry: row.sku_default_country,
+  skuDefaultDisplayNameEn: row.sku_default_display_name_en,
+  skuDefaultSupplierSku: row.sku_default_supplier_sku,
 })
 
 async function fetchBusinessPartners(): Promise<BusinessPartner[]> {

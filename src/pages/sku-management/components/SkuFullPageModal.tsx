@@ -2,6 +2,7 @@ import { useEffect } from "react"
 import { Minimize2 } from "lucide-react"
 import { SkuSheetCeramic } from "./SkuSheetCeramic"
 import type { SkuMetadataRow, SkuDropdownMap } from "@/features/skuManagement/types"
+import type { SkuAutocompleteAPI } from "@/hooks/useSkuAutocomplete"
 
 interface SkuFullPageModalProps {
   open: boolean
@@ -19,6 +20,7 @@ interface SkuFullPageModalProps {
   actions?: React.ReactNode
   /** Status line shown below the title (e.g. "12 rows · 3 unsaved") */
   statusLine?: React.ReactNode
+  autocomplete?: SkuAutocompleteAPI
 }
 
 export function SkuFullPageModal({
@@ -35,6 +37,7 @@ export function SkuFullPageModal({
   onRedo,
   actions,
   statusLine,
+  autocomplete,
 }: SkuFullPageModalProps) {
   // Close on Escape
   useEffect(() => {
@@ -240,6 +243,7 @@ export function SkuFullPageModal({
             createEmptyRow={createEmptyRow}
             onUndo={onUndo}
             onRedo={onRedo}
+            autocomplete={autocomplete}
           />
         </div>
       </div>
