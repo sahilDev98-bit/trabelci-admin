@@ -25,6 +25,7 @@ import type {
   SkuValidationStatus,
 } from "@/features/skuManagement/types"
 import { useSkuDeleteMutation } from "@/features/skuManagement/api"
+import { useCheckboxDragSelect } from "@/lib/useCheckboxDragSelect"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -112,31 +113,39 @@ interface CeramicColumn {
 const COLUMNS: CeramicColumn[] = [
   { field: "rowNumber",          type: "index",        minWidth: 44  },
   { field: "sku",                type: "text",         minWidth: 140 },
-  { field: "supplier",           type: "supplier-autocomplete", minWidth: 130 },
-  { field: "series",             type: "supplier-autocomplete", minWidth: 120 },
-  { field: "color",              type: "supplier-autocomplete", minWidth: 110 },
-  // size / shade / country_of_origin keep controlled-vocabulary dropdowns
-  { field: "size",               type: "dropdown",              minWidth: 130, dropdownKey: "size"              },
-  { field: "finish",             type: "dropdown",              minWidth: 125, dropdownKey: "finish" },
-  { field: "product_image_urls", type: "image-multi",           minWidth: 170, imageType: "product" },
-  { field: "gallery_image_urls", type: "image-multi",           minWidth: 170, imageType: "gallery" },
-  { field: "country_of_origin",  type: "dropdown",              minWidth: 130, dropdownKey: "country_of_origin" },
-  { field: "qty_per_carton",     type: "supplier-autocomplete", minWidth: 110 },
-  { field: "qty_per_pallet",     type: "supplier-autocomplete", minWidth: 110 },
-  { field: "shade",              type: "dropdown",              minWidth: 110, dropdownKey: "shade" },
-  { field: "supplier_code",      type: "supplier-autocomplete", minWidth: 110 },
-  { field: "display_name_en",    type: "supplier-autocomplete", minWidth: 180 },
-  { field: "series_en",          type: "supplier-autocomplete", minWidth: 120 },
-  { field: "color_en",           type: "supplier-autocomplete", minWidth: 110 },
-  { field: "supplier_sku",       type: "text",                  minWidth: 130 },
+  // Cleanup-only — the raw, unedited name SAP already has for this item.
+  // Shown for reference (muted italic) so the user can see what they're
+  // cleaning up against; filtered out for the New Creation grid in
+  // buildColumns since a not-yet-created row has no SAP name at all.
+  { field: "original_sap_name",  type: "text",         minWidth: 180, readOnly: true, italic: true },
+  { field: "supplier",           type: "text",         minWidth: 130 },
+  { field: "series",             type: "text",         minWidth: 120 },
+  { field: "color",              type: "text",         minWidth: 110 },
+  // Dropdown widths leave room for the longest vocabulary label on ONE line
+  // (e.g. "120×240 cm", "Floor + Wall", "Natural Stone") — no wrapping,
+  // no ellipsis, per design decision
+  { field: "size",               type: "dropdown",     minWidth: 130, dropdownKey: "size"              },
+  { field: "finish",             type: "dropdown",     minWidth: 125, dropdownKey: "finish"            },
+  { field: "product_image_urls", type: "image-multi",  minWidth: 170, imageType: "product" },
+  { field: "gallery_image_urls", type: "image-multi",  minWidth: 170, imageType: "gallery" },
+  { field: "country_of_origin",  type: "dropdown",     minWidth: 130, dropdownKey: "country_of_origin" },
+  { field: "qty_per_carton",     type: "text",         minWidth: 110 },
+  { field: "qty_per_pallet",     type: "text",         minWidth: 110 },
+  { field: "shade",              type: "dropdown",     minWidth: 110, dropdownKey: "shade" },
+  { field: "supplier_code",      type: "text",         minWidth: 110 },
+  { field: "display_name_en",    type: "text",         minWidth: 180 },
+  { field: "series_en",          type: "text",         minWidth: 120 },
+  { field: "color_en",           type: "text",         minWidth: 110 },
+  { field: "supplier_sku",       type: "text",         minWidth: 130 },
   { field: "status",             type: "readonly",     minWidth: 110 },
 ]
 
-// Cleanup mode: SKU column is readonly (cannot be renamed in cleanup workflow)
+// Cleanup mode: SKU column is readonly (cannot be renamed in cleanup workflow);
+// New Creation mode never has an original SAP name, so that column is dropped.
 function buildColumns(mode: "creation" | "cleanup", showCheckbox?: boolean): CeramicColumn[] {
   let cols = mode === "cleanup"
     ? COLUMNS.map((col) => col.field === "sku" ? { ...col, readOnly: true } : col)
-    : COLUMNS
+    : COLUMNS.filter((col) => col.field !== "original_sap_name")
   if (showCheckbox) {
     cols = [{ field: "__checkbox__", type: "checkbox" as const, minWidth: 36 }, ...cols]
   }
@@ -185,6 +194,9 @@ const CERAMIC_CSS = `
     --ceramic-radius: 14px;
     --ceramic-rect-h: 44px;
     --ceramic-rect-w: 86%;
+    /* Text/dropdown box surface — light theme keeps the ivory card look */
+    --ceramic-rect-bg: linear-gradient(180deg, #ffffff, var(--ceramic-cell-soft));
+    --ceramic-rect-text: var(--ceramic-ink);
 
     /* light theme surfaces */
     --ceramic-head-text: #1f2433;
@@ -228,6 +240,10 @@ const CERAMIC_CSS = `
     --ceramic-idx-bg: linear-gradient(150deg, #2b2b2f, #1c1c20);
     --ceramic-idx-text: #d4d4d8;
     --ceramic-idx-shadow: inset 0 2px 4px rgba(0,0,0,.55), inset 0 -1px 0 rgba(255,255,255,.05), 0 1px 0 rgba(255,255,255,.04);
+    /* Text/dropdown boxes match the "#" index chip exactly in dark mode —
+       same dark gradient, same light text — instead of staying ivory. */
+    --ceramic-rect-bg: var(--ceramic-idx-bg);
+    --ceramic-rect-text: #ffffff;
     --ceramic-scrollbar-thumb: rgba(255,255,255,.18);
     --ceramic-scrollbar-thumb-hover: rgba(255,255,255,.32);
     --ceramic-btn-shadow: 0 6px 14px -4px rgba(0,0,0,.6), inset 0 1px 0 rgba(255,255,255,.7);
@@ -383,7 +399,7 @@ const CERAMIC_CSS = `
     width: var(--ceramic-rect-w);
     height: var(--ceramic-rect-h);
     border-radius: var(--ceramic-radius);
-    background: linear-gradient(180deg, #ffffff, var(--ceramic-cell-soft));
+    background: var(--ceramic-rect-bg);
     border: var(--ceramic-rect-border);
     box-shadow: none;
     display: flex;
@@ -399,7 +415,7 @@ const CERAMIC_CSS = `
   }
 
   .ceramic-rect[data-validation-tint] {
-    background: linear-gradient(180deg, #ffffff, var(--ceramic-cell-soft));
+    background: var(--ceramic-rect-bg);
   }
 
   .ceramic-field {
@@ -408,7 +424,7 @@ const CERAMIC_CSS = `
     border: 0;
     background: transparent;
     text-align: center;
-    color: var(--ceramic-ink);
+    color: var(--ceramic-rect-text);
     border-radius: var(--ceramic-radius);
     font: 600 14px/1 'DM Sans', 'Heebo', sans-serif;
     padding: 0 8px;
@@ -429,7 +445,7 @@ const CERAMIC_CSS = `
     max-width: 100%;
     height: var(--ceramic-rect-h);
     border-radius: var(--ceramic-radius);
-    background: linear-gradient(180deg, #ffffff, var(--ceramic-cell-soft));
+    background: var(--ceramic-rect-bg);
     border: var(--ceramic-rect-border);
     box-shadow: none;
     display: flex;
@@ -439,7 +455,7 @@ const CERAMIC_CSS = `
     cursor: pointer;
     position: relative;
     font: 600 14px/1 'DM Sans', 'Heebo', sans-serif;
-    color: var(--ceramic-ink);
+    color: var(--ceramic-rect-text);
     padding: 0 22px 0 10px;
     text-align: center;
     outline: none;
@@ -572,7 +588,7 @@ const CERAMIC_CSS = `
   }
   .ceramic-rect:hover .ceramic-upload,
   .ceramic-rect:focus-within .ceramic-upload {
-    color: var(--ceramic-ink);
+    color: var(--ceramic-rect-text);
   }
 
   /* "+N more images" chip — opens the gallery popover (theme-aware: sits on
@@ -742,7 +758,7 @@ const CERAMIC_CSS = `
     align-items: center;
     justify-content: center;
     font: 600 14px/1 'DM Sans', 'Heebo', sans-serif;
-    color: var(--ceramic-ink);
+    color: var(--ceramic-rect-text);
     opacity: .38;
     pointer-events: none;
     white-space: nowrap;
@@ -1019,6 +1035,7 @@ interface CeramicRowProps {
   showCheckbox?: boolean
   isSelected?: boolean
   onToggleSelect?: (key: string) => void
+  onCheckboxDragStart?: (rowIndex: number, e: React.MouseEvent) => void
   expandedCols?: Set<string>
   autocomplete?: SkuAutocompleteAPI
 }
@@ -1047,6 +1064,7 @@ const CeramicRow = memo(function CeramicRow({
   showCheckbox = false,
   isSelected = false,
   onToggleSelect,
+  onCheckboxDragStart,
   expandedCols,
   autocomplete,
 }: CeramicRowProps) {
@@ -1099,6 +1117,10 @@ const CeramicRow = memo(function CeramicRow({
                 className="ceramic-checkbox"
                 checked={isSelected}
                 onChange={() => onToggleSelect?.(rowKey)}
+                onMouseDown={(e) => {
+                  e.stopPropagation()
+                  onCheckboxDragStart?.(rowIndex, e)
+                }}
                 onClick={(e) => e.stopPropagation()}
               />
             </div>
@@ -1329,7 +1351,7 @@ function TextCellWrapper({
   )
 
   const rectStyle: React.CSSProperties = validationTint
-    ? { background: `linear-gradient(180deg, ${validationTint}, ${validationTint}), linear-gradient(180deg, #ffffff, var(--ceramic-cell-soft))` }
+    ? { background: `linear-gradient(180deg, ${validationTint}, ${validationTint}), var(--ceramic-rect-bg)` }
     : {}
 
   return (
@@ -1351,7 +1373,7 @@ function TextCellWrapper({
         dir="auto"
         defaultValue={initialValue}
         readOnly={readOnly}
-        style={italic ? { fontStyle: "italic", color: "#8a8aa0", fontWeight: 500 } : undefined}
+        style={italic ? { fontStyle: "italic", color: "var(--ceramic-rect-text)", fontWeight: 500 } : undefined}
         onBlur={commit}
         onKeyDown={handleKeyDown}
         onInput={(e) => setTypedHasValue(Boolean(e.currentTarget.value.trim()))}
@@ -1443,7 +1465,7 @@ function DropdownCellWrapper({
   }, [])
 
   const triggerStyle: React.CSSProperties = validationTint
-    ? { background: `linear-gradient(180deg, ${validationTint}, ${validationTint}), linear-gradient(180deg, #ffffff, var(--ceramic-cell-soft))` }
+    ? { background: `linear-gradient(180deg, ${validationTint}, ${validationTint}), var(--ceramic-rect-bg)` }
     : {}
 
   return (
@@ -1583,6 +1605,26 @@ export const SkuSheetCeramic = forwardRef<SkuSheetCeramicHandle, SkuSheetCeramic
       return next
     })
   }, [])
+
+  // Resolves to whichever toggle/read pair is active — the parent's
+  // controlled callbacks (Cleanup/Creation lift selection state) or this
+  // component's own internal selectedKeys (uncontrolled usage elsewhere).
+  const getIsRowSelected = useCallback(
+    (row: SkuMetadataRow) =>
+      isRowSelectedProp ? isRowSelectedProp(row) : selectedKeys.has(getRowKey(row)),
+    [isRowSelectedProp, selectedKeys],
+  )
+  const applyCheckboxToggle = onRowToggle ?? toggleSelectRow
+
+  // Click-and-drag multi-select across the checkbox column (Excel/Gmail
+  // style) — mousedown on one checkbox, drag over others, they all flip to
+  // the same checked state as the first click.
+  const { startDrag: startCheckboxDrag, handleNativeChange: handleCheckboxChange } = useCheckboxDragSelect({
+    items: rows,
+    getKey: getRowKey,
+    isSelected: getIsRowSelected,
+    toggle: applyCheckboxToggle,
+  })
 
   const toggleSelectAll = useCallback(() => {
     if (pageFullySelected) setSelectedKeys(new Set())
@@ -2499,7 +2541,11 @@ export const SkuSheetCeramic = forwardRef<SkuSheetCeramicHandle, SkuSheetCeramic
                     type="button"
                     className="ceramic-head-btn"
                     onClick={() => toggleColExpand(col.field)}
-                    title={colIsExpanded ? "Click to truncate" : "Click to expand"}
+                    title={
+                      colIsExpanded
+                        ? t("sku.grid.clickToTruncateColumn")
+                        : t("sku.grid.clickToExpandColumn")
+                    }
                   >
                     <span className="ceramic-head-btn-label">{t(getHeaderKey(col.field))}</span>
                     <span className="ceramic-head-btn-icon">{colIsExpanded ? "↙" : "↔"}</span>
@@ -2526,8 +2572,9 @@ export const SkuSheetCeramic = forwardRef<SkuSheetCeramicHandle, SkuSheetCeramic
               onFillStart={handleFillStart}
               sheetMode={mode}
               showCheckbox={showCheckbox}
-              isSelected={isRowSelectedProp ? isRowSelectedProp(row) : selectedKeys.has(getRowKey(row))}
-              onToggleSelect={isRowSelectedProp ? onRowToggle : toggleSelectRow}
+              isSelected={getIsRowSelected(row)}
+              onToggleSelect={handleCheckboxChange}
+              onCheckboxDragStart={startCheckboxDrag}
               expandedCols={expandedCols}
               autocomplete={autocomplete}
             />

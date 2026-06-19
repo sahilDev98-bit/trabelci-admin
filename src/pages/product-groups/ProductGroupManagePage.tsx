@@ -32,6 +32,7 @@ import { useProductsListQuery, fetchProductsPage, type ProductsListResult } from
 import { productsQueryKeys } from "@/features/products/queryKeys"
 import { useCategoriesQuery } from "@/features/categories/api"
 import { ROUTES } from "@/lib/routes"
+import { useCheckboxDragSelect } from "@/lib/useCheckboxDragSelect"
 import { toast } from "sonner"
 
 const ADD_PAGE_SIZE = 10
@@ -221,6 +222,16 @@ export function ProductGroupManagePage() {
     if (isSelectAllMode) return !excludedProductIds.has(productId)
     return selectedProductIds.has(productId)
   }
+
+  // Click-and-drag multi-select across the checkbox column (Excel/Gmail
+  // style) — mousedown on one checkbox, drag over others, they all flip to
+  // the same checked state as the first click.
+  const { startDrag: startCheckboxDrag, handleNativeChange: handleCheckboxChange } = useCheckboxDragSelect({
+    items: pageProducts,
+    getKey: (p) => p.id,
+    isSelected: (p) => isProductSelected(p.id),
+    toggle: toggleProduct,
+  })
 
   const allPageSelected = pageProducts.length > 0 && pageProducts.every((p) => isProductSelected(p.id))
 
@@ -572,12 +583,13 @@ export function ProductGroupManagePage() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {pageProducts.map((p) => {
+                    {pageProducts.map((p, idx) => {
                       const isSelected = isProductSelected(p.id)
                       return (
                         <TableRow
                           key={p.id}
                           className="cursor-pointer"
+                          data-row-index={idx}
                           onClick={() => toggleProduct(p.id)}
                         >
                           <TableCell>
@@ -585,7 +597,11 @@ export function ProductGroupManagePage() {
                               type="checkbox"
                               className="size-4 rounded border-input accent-primary"
                               checked={isSelected}
-                              onChange={() => toggleProduct(p.id)}
+                              onChange={() => handleCheckboxChange(p.id)}
+                              onMouseDown={(e) => {
+                                e.stopPropagation()
+                                startCheckboxDrag(idx, e)
+                              }}
                               onClick={(e) => e.stopPropagation()}
                             />
                           </TableCell>

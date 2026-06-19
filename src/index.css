@@ -133,6 +133,14 @@ html[dir="rtl"] [data-slot="panel-left-icon"] {
   transform: scaleX(-1);
 }
 
+/* Checkbox drag-select (click-drag across multiple checkboxes): suppress
+   text selection for the duration of the drag so dragging over row text
+   doesn't highlight it instead of toggling checkboxes. */
+body.checkbox-drag-selecting,
+body.checkbox-drag-selecting * {
+  user-select: none;
+}
+
 /* RTL: flip chevron in dropdown/collapsible triggers */
 html[dir="rtl"] [data-slot="breadcrumb-separator"] svg {
   transform: scaleX(-1);
