@@ -4,6 +4,7 @@ import { API_ENDPOINTS } from "@/lib/apiEndpoints"
 import { skuQueryKeys } from "./queryKeys"
 import type {
   SkuAuditEntry,
+  SkuAutocompleteHints,
   SkuBulkUpsertResponse,
   SkuCleanupStats,
   SkuDuplicateResult,
@@ -393,6 +394,20 @@ export function useCreateSkuTemplateMutation() {
     mutationFn: (payload: Omit<SkuTemplate, "id" | "created_at">) =>
       createSkuTemplate(payload),
     onSuccess: () => qc.invalidateQueries({ queryKey: skuQueryKeys.templates.all }),
+  })
+}
+
+// ─── Autocomplete hints ───────────────────────────────────────────────────────
+
+export async function fetchSkuAutocompleteHints(): Promise<SkuAutocompleteHints> {
+  return apiFetch(API_ENDPOINTS.SKU_AUTOCOMPLETE_HINTS)
+}
+
+export function useSkuAutocompleteHintsQuery() {
+  return useQuery({
+    queryKey: skuQueryKeys.autocompleteHints,
+    queryFn:  fetchSkuAutocompleteHints,
+    staleTime: 5 * 60 * 1000,
   })
 }
 

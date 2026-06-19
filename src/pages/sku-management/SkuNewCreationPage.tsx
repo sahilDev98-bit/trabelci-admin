@@ -12,7 +12,9 @@ import {
   useSkuValidateMutation,
   useSkuCheckDuplicatesMutation,
   useSkuSubmitToSapMutation,
+  useSkuAutocompleteHintsQuery,
 } from "@/features/skuManagement/api"
+import { useSkuAutocomplete } from "@/hooks/useSkuAutocomplete"
 import type { SkuMetadataRow } from "@/features/skuManagement/types"
 import { SkuSheetCeramic, type SkuSheetCeramicHandle } from "./components/SkuSheetCeramic"
 import { SkuFullPageModal } from "./components/SkuFullPageModal"
@@ -140,6 +142,8 @@ function CreationSheet({ initialRows }: { initialRows: SkuMetadataRow[] }) {
   const { t } = useTranslation()
   const navigate = useNavigate()
   const [rows, setRows] = useState<SkuMetadataRow[]>(initialRows)
+  const { data: dbHints } = useSkuAutocompleteHintsQuery()
+  const autocomplete = useSkuAutocomplete(dbHints, rows)
   // Which toolbar action is running — Save Draft and Approve share the same
   // bulk-upsert mutation, so isPending alone would put both buttons in a
   // loading state at once.
@@ -548,6 +552,7 @@ function CreationSheet({ initialRows }: { initialRows: SkuMetadataRow[] }) {
               setPageFullySelected(pfs)
               if (!pfs) setSelectAllMode(false)
             }}
+            autocomplete={autocomplete}
           />
         </div>
         {/* Right-side details panel — temporarily hidden
@@ -571,6 +576,7 @@ function CreationSheet({ initialRows }: { initialRows: SkuMetadataRow[] }) {
         createEmptyRow={makeEmptyRow}
         onUndo={undo}
         onRedo={redo}
+        autocomplete={autocomplete}
         actions={
           <>
             <Button

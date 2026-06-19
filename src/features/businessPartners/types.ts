@@ -11,6 +11,9 @@ export interface BusinessPartner {
   syncedAt?: string | null
   createdBy?: string | null
   createdAt?: string | null
+  skuDefaultCountry?: string | null
+  skuDefaultDisplayNameEn?: string | null
+  skuDefaultSupplierSku?: string | null
 }
 
 export interface BPUser {
@@ -32,6 +35,9 @@ export interface CreateBusinessPartnerInput {
 export interface UpdateBusinessPartnerInput {
   name: string
   email: string
+  sku_default_country?: string | null
+  sku_default_display_name_en?: string | null
+  sku_default_supplier_sku?: string | null
 }
 
 export interface SapBpLookupResult {

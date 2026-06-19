@@ -38,7 +38,9 @@ import {
   useImportAllSapItemsMutation,
   useCleanupStatsQuery,
   useSkuBulkDeleteMutation,
+  useSkuAutocompleteHintsQuery,
 } from "@/features/skuManagement/api"
+import { useSkuAutocomplete } from "@/hooks/useSkuAutocomplete"
 import { skuQueryKeys } from "@/features/skuManagement/queryKeys"
 import type { SkuCleanupStatusTab, SkuMetadataRow } from "@/features/skuManagement/types"
 import { cn } from "@/lib/utils"
@@ -232,6 +234,7 @@ export function SkuCleanupPage() {
   const { data: dropdowns = {} } = useSkuDropdownsQuery()
   const { data: stats } = useCleanupStatsQuery()
   const bulkUpsert = useSkuBulkUpsertMutation()
+
   const validate = useSkuValidateMutation()
   const checkDuplicates = useSkuCheckDuplicatesMutation()
   const importItems = useImportSapItemsMutation()
@@ -395,6 +398,9 @@ export function SkuCleanupPage() {
       return Array.from(map.values())
     })
   }, [])
+
+  const { data: dbHints } = useSkuAutocompleteHintsQuery()
+  const autocomplete = useSkuAutocomplete(dbHints, mergedRows)
 
   const handleSave = useCallback(async () => {
     const dirty = localRows.filter((r) => r._isDirty && r.sku?.trim())
@@ -766,6 +772,7 @@ export function SkuCleanupPage() {
                 headerChecked={allPageSelected}
                 headerIndeterminate={false}
                 onHeaderToggle={onHeaderToggle}
+                autocomplete={autocomplete}
               />
             </div>
           )}
@@ -912,6 +919,7 @@ export function SkuCleanupPage() {
         rows={mergedRows}
         onRowsChange={handleRowsChange}
         dropdowns={dropdowns}
+        autocomplete={autocomplete}
         actions={
           <Button
             size="sm"
