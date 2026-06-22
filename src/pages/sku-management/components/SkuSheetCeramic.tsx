@@ -38,6 +38,8 @@ import {
 } from "@/components/ui/alert-dialog"
 import { CeramicDropdown } from "./CeramicDropdown"
 import { CeramicImageCell } from "./CeramicImageCell"
+import { SupplierAutocompleteCell } from "./SupplierAutocompleteCell"
+import type { SkuAutocompleteAPI } from "@/hooks/useSkuAutocomplete"
 
 // ─── Props ────────────────────────────────────────────────────────────────────
 
@@ -78,6 +80,8 @@ export interface SkuSheetCeramicProps {
   headerIndeterminate?: boolean
   /** Controlled header checkbox onChange */
   onHeaderToggle?: () => void
+  /** Autocomplete API — drives supplier ghost-text + series/color/finish dropdowns + cascade fill */
+  autocomplete?: SkuAutocompleteAPI
 }
 
 // ─── Column definitions ───────────────────────────────────────────────────────
@@ -87,6 +91,7 @@ type ColType =
   | "checkbox"
   | "text"
   | "dropdown"
+  | "supplier-autocomplete"
   | "image-multi"
   | "image-single"
   | "readonly"
@@ -113,25 +118,23 @@ const COLUMNS: CeramicColumn[] = [
   // cleaning up against; filtered out for the New Creation grid in
   // buildColumns since a not-yet-created row has no SAP name at all.
   { field: "original_sap_name",  type: "text",         minWidth: 180, readOnly: true, italic: true },
-  { field: "supplier",           type: "text",         minWidth: 130 },
-  { field: "series",             type: "text",         minWidth: 120 },
-  { field: "color",              type: "text",         minWidth: 110 },
-  // Dropdown widths leave room for the longest vocabulary label on ONE line
-  // (e.g. "120×240 cm", "Floor + Wall", "Natural Stone") — no wrapping,
-  // no ellipsis, per design decision
-  { field: "size",               type: "dropdown",     minWidth: 130, dropdownKey: "size"              },
-  { field: "finish",             type: "dropdown",     minWidth: 125, dropdownKey: "finish"            },
-  { field: "product_image_urls", type: "image-multi",  minWidth: 170, imageType: "product" },
-  { field: "gallery_image_urls", type: "image-multi",  minWidth: 170, imageType: "gallery" },
-  { field: "country_of_origin",  type: "dropdown",     minWidth: 130, dropdownKey: "country_of_origin" },
-  { field: "qty_per_carton",     type: "text",         minWidth: 110 },
-  { field: "qty_per_pallet",     type: "text",         minWidth: 110 },
-  { field: "shade",              type: "dropdown",     minWidth: 110, dropdownKey: "shade" },
-  { field: "supplier_code",      type: "text",         minWidth: 110 },
-  { field: "display_name_en",    type: "text",         minWidth: 180 },
-  { field: "series_en",          type: "text",         minWidth: 120 },
-  { field: "color_en",           type: "text",         minWidth: 110 },
-  { field: "supplier_sku",       type: "text",         minWidth: 130 },
+  { field: "supplier",           type: "supplier-autocomplete", minWidth: 130 },
+  { field: "series",             type: "supplier-autocomplete", minWidth: 120 },
+  { field: "color",              type: "supplier-autocomplete", minWidth: 110 },
+  // size / shade / country_of_origin / finish keep controlled-vocabulary dropdowns
+  { field: "size",               type: "dropdown",              minWidth: 130, dropdownKey: "size"              },
+  { field: "finish",             type: "dropdown",              minWidth: 125, dropdownKey: "finish"            },
+  { field: "product_image_urls", type: "image-multi",           minWidth: 170, imageType: "product" },
+  { field: "gallery_image_urls", type: "image-multi",           minWidth: 170, imageType: "gallery" },
+  { field: "country_of_origin",  type: "dropdown",              minWidth: 130, dropdownKey: "country_of_origin" },
+  { field: "qty_per_carton",     type: "supplier-autocomplete", minWidth: 110 },
+  { field: "qty_per_pallet",     type: "supplier-autocomplete", minWidth: 110 },
+  { field: "shade",              type: "dropdown",              minWidth: 110, dropdownKey: "shade" },
+  { field: "supplier_code",      type: "supplier-autocomplete", minWidth: 110 },
+  { field: "display_name_en",    type: "supplier-autocomplete", minWidth: 180 },
+  { field: "series_en",          type: "supplier-autocomplete", minWidth: 120 },
+  { field: "color_en",           type: "supplier-autocomplete", minWidth: 110 },
+  { field: "supplier_sku",       type: "text",                  minWidth: 130 },
   { field: "status",             type: "readonly",     minWidth: 110 },
 ]
 
@@ -184,7 +187,7 @@ function SortIcon({ direction }: { direction: "asc" | "desc" | null }) {
 /** May paste/clear/fill write into this column? */
 function isWritableCol(col: CeramicColumn | undefined): boolean {
   if (!col || col.readOnly) return false
-  return col.type === "text" || col.type === "dropdown"
+  return col.type === "text" || col.type === "supplier-autocomplete" || col.type === "dropdown"
 }
 
 // Readable on both light and dark app backgrounds
@@ -1169,6 +1172,7 @@ interface CeramicRowProps {
   onToggleSelect?: (key: string) => void
   onCheckboxDragStart?: (rowIndex: number, e: React.MouseEvent) => void
   expandedCols?: Set<string>
+  autocomplete?: SkuAutocompleteAPI
 }
 
 type CellIssue = { kind: "error" | "warning"; message: string } | undefined
@@ -1197,6 +1201,7 @@ const CeramicRow = memo(function CeramicRow({
   onToggleSelect,
   onCheckboxDragStart,
   expandedCols,
+  autocomplete,
 }: CeramicRowProps) {
   const validationTint = getValidationTint(row._validationStatus)
   const validationErrors = row._validationErrors ?? []
@@ -1296,6 +1301,40 @@ const CeramicRow = memo(function CeramicRow({
                 rowIndex={rowIndex}
                 colIndex={colIndex}
                 onRowChange={onRowChange}
+                onFillStart={onFillStart}
+              />
+            </div>
+          )
+        }
+
+        if (col.type === "supplier-autocomplete") {
+          const sup = row.supplier ?? ""
+          const suggestions =
+            col.field === "supplier"      ? (autocomplete?.supplierSuggestions ?? [])
+            : col.field === "series"      ? (autocomplete?.getSeriesSuggestions(sup)      ?? [])
+            : col.field === "color"       ? (autocomplete?.getColorSuggestions(sup)        ?? [])
+            : col.field === "finish"      ? (autocomplete?.getFinishSuggestions(sup)       ?? [])
+            : col.field === "series_en"   ? (autocomplete?.getSeriesEnSuggestions(sup)     ?? [])
+            : col.field === "color_en"    ? (autocomplete?.getColorEnSuggestions(sup)      ?? [])
+            : col.field === "display_name_en" ? (autocomplete?.getDisplayNameSuggestions(sup) ?? [])
+            : col.field === "qty_per_carton"  ? (autocomplete?.getQtyPerCartonSuggestions(sup)  ?? [])
+            : col.field === "qty_per_pallet"  ? (autocomplete?.getQtyPerPalletSuggestions(sup)  ?? [])
+            : col.field === "supplier_code"   ? (autocomplete?.getSupplierCodeSuggestions()      ?? [])
+            : []
+          return (
+            <div key={col.field} className={cellClassName(colIndex)} data-row-index={rowIndex} title={issue?.message}>
+              <SupplierAutocompleteCell
+                value={getFieldValue(row, col.field)}
+                clientId={row._clientId ?? row.sku}
+                field={col.field}
+                rowIndex={rowIndex}
+                colIndex={colIndex}
+                issue={issue?.kind}
+                validationTint={validationTint}
+                isExpanded={expandedCols?.has(col.field) ?? false}
+                suggestions={suggestions}
+                onCommit={onCellCommit}
+                onNavigate={onNavigate}
                 onFillStart={onFillStart}
               />
             </div>
@@ -1624,6 +1663,7 @@ export const SkuSheetCeramic = forwardRef<SkuSheetCeramicHandle, SkuSheetCeramic
     headerChecked,
     headerIndeterminate,
     onHeaderToggle,
+    autocomplete,
   }, ref) {
   const { t, i18n } = useTranslation()
   const isHe = i18n.language === "he"
@@ -2035,17 +2075,20 @@ export const SkuSheetCeramic = forwardRef<SkuSheetCeramicHandle, SkuSheetCeramic
       // A commit that matches no row means the typed text would stay visible
       // in the (uncontrolled) input while never reaching the data — that must
       // never pass silently (it once made "filled" cells validate as empty).
-      if (!rows.some((r) => (r._clientId ?? r.sku) === clientId)) {
+      const currentRow = rows.find((r) => (r._clientId ?? r.sku) === clientId)
+      if (!currentRow) {
         console.error(
           `[SkuSheetCeramic] dropped commit — no row matched key "${clientId}" (field: ${field})`,
         )
         return
       }
+      const fill = autocomplete?.getCascadeFill(field, String(value ?? ""), currentRow) ?? null
       const newRows = rows.map((r) =>
         (r._clientId ?? r.sku) === clientId
           ? {
               ...r,
               [field]: value,
+              ...(fill ?? {}),
               _isDirty: true,
               _validationStatus: "unchecked" as SkuValidationStatus,
             }
@@ -2053,7 +2096,7 @@ export const SkuSheetCeramic = forwardRef<SkuSheetCeramicHandle, SkuSheetCeramic
       )
       onRowsChange(newRows)
     },
-    [rows, onRowsChange],
+    [rows, onRowsChange, autocomplete],
   )
 
   // ── Image row change ──────────────────────────────────────────────────
@@ -2275,7 +2318,7 @@ export const SkuSheetCeramic = forwardRef<SkuSheetCeramicHandle, SkuSheetCeramic
       for (let c = rect.c1; c <= rect.c2; c++) {
         const col = columnsRef.current[c]
         if (!col || col.readOnly) continue
-        if (col.type === "text" || col.type === "dropdown") {
+        if (col.type === "text" || col.type === "dropdown" || col.type === "supplier-autocomplete") {
           ;(next as Record<string, unknown>)[col.field] = ""
           changed = true
         } else if (col.type === "image-multi") {
@@ -2326,7 +2369,7 @@ export const SkuSheetCeramic = forwardRef<SkuSheetCeramicHandle, SkuSheetCeramic
         // Blank source cells are skipped — filling "" downward would only
         // dirty rows without changing anything
         if (!getFieldValue(sourceRow, col.field).trim()) continue
-        if (col.type === "text" || col.type === "dropdown") {
+        if (col.type === "text" || col.type === "dropdown" || col.type === "supplier-autocomplete") {
           const base = getFieldValue(sourceRow, col.field)
           ;(next as Record<string, unknown>)[col.field] = fillValueAt(
             base,
@@ -2710,6 +2753,7 @@ export const SkuSheetCeramic = forwardRef<SkuSheetCeramicHandle, SkuSheetCeramic
               onToggleSelect={handleCheckboxChange}
               onCheckboxDragStart={startCheckboxDrag}
               expandedCols={expandedCols}
+              autocomplete={autocomplete}
             />
           ))}
         </div>

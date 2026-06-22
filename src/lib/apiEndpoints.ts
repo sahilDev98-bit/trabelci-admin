@@ -47,4 +47,5 @@ export const API_ENDPOINTS = {
   SKU_IMPORTABLE_SAP_ITEMS: "/sku/importable-sap-items",
   SKU_CLEANUP_STATS: "/sku/cleanup-stats",
   SKU_AUDIT_LOG: "/sku/audit-log",
+  SKU_AUTOCOMPLETE_HINTS: "/sku/autocomplete-hints",
 } as const
