@@ -152,6 +152,35 @@ function getHeaderKey(field: string): string {
   return `sku.fields.${field}`
 }
 
+/** Column types where row order can be meaningfully compared/sorted. */
+function isSortableCol(col: CeramicColumn | undefined): boolean {
+  if (!col) return false
+  return col.type === "text" || col.type === "dropdown" || col.type === "readonly"
+}
+
+// Classic spreadsheet-style sort glyph: a stacked up/down triangle pair,
+// faint by default, with whichever direction is active drawn solid.
+function SortIcon({ direction }: { direction: "asc" | "desc" | null }) {
+  return (
+    <svg
+      className="ceramic-sort-svg"
+      width="9"
+      height="13"
+      viewBox="0 0 9 13"
+      aria-hidden="true"
+    >
+      <path
+        d="M4.5 0 L9 4.6 L0 4.6 Z"
+        className={`ceramic-sort-arrow${direction === "asc" ? " is-active" : ""}`}
+      />
+      <path
+        d="M4.5 13 L9 8.4 L0 8.4 Z"
+        className={`ceramic-sort-arrow${direction === "desc" ? " is-active" : ""}`}
+      />
+    </svg>
+  )
+}
+
 /** May paste/clear/fill write into this column? */
 function isWritableCol(col: CeramicColumn | undefined): boolean {
   if (!col || col.readOnly) return false
@@ -403,6 +432,10 @@ const CERAMIC_CSS = `
     transition: transform .22s cubic-bezier(.22,.8,.32,1);
     cursor: text;
     position: relative;
+    /* The parent cell centers its content by default — pin this box to the
+       leading edge instead, so widening the column (e.g. expanding text)
+       only grows it rightward instead of jumping outward from the center */
+    margin-inline-end: auto;
   }
   .ceramic-rect:hover,
   .ceramic-rect:focus-within {
@@ -454,6 +487,9 @@ const CERAMIC_CSS = `
     padding: 0 22px 0 10px;
     text-align: center;
     outline: none;
+    /* Same leading-edge anchor as .ceramic-rect — don't recenter when the
+       column widens */
+    margin-inline-end: auto;
     white-space: nowrap;
   }
   .ceramic-dropdown-trigger:hover,
@@ -644,6 +680,14 @@ const CERAMIC_CSS = `
     color: #b91c1c;
     font-weight: 700;
   }
+  /* Dark theme: keep the card's own dark surface — a solid light-pink fill
+     would clash with the rest of the UI — flag the error with red text only */
+  .dark .ceramic-rect[data-duplicate="true"] {
+    background: var(--ceramic-rect-bg) !important;
+  }
+  .dark .ceramic-rect[data-duplicate="true"] .ceramic-field {
+    color: #f87171;
+  }
 
   /* Field-level validation (spec point 17): the exact failing cell gets a
      colored ring + tinted card; message shows as a tooltip on hover */
@@ -651,6 +695,16 @@ const CERAMIC_CSS = `
   .ceramic-dropdown-trigger[data-issue="error"] {
     background: linear-gradient(180deg, #fff3f3, #fbdcdc);
     box-shadow: 0 0 0 2px rgba(239,68,68,.55);
+  }
+  .dark .ceramic-rect[data-issue="error"],
+  .dark .ceramic-dropdown-trigger[data-issue="error"] {
+    background: var(--ceramic-rect-bg);
+  }
+  .dark .ceramic-rect[data-issue="error"] .ceramic-field {
+    color: #f87171;
+  }
+  .dark .ceramic-dropdown-trigger[data-issue="error"] {
+    color: #f87171;
   }
   .ceramic-rect[data-issue="warning"],
   .ceramic-dropdown-trigger[data-issue="warning"] {
@@ -776,6 +830,17 @@ const CERAMIC_CSS = `
   .ceramic-fill-target .ceramic-upload {
     opacity: .15;
   }
+  /* The ghost is a preview of the value that will REPLACE whatever's in the
+     cell — hide the current value underneath it instead of overlapping text */
+  .ceramic-fill-target .ceramic-field {
+    opacity: 0;
+  }
+  .ceramic-fill-target.ceramic-dropdown-trigger {
+    color: transparent;
+  }
+  .ceramic-fill-target .ceramic-thumb-wrap {
+    opacity: .15;
+  }
 
   /* Multi-cell range selection (Shift+Click / Shift+↑↓ / Ctrl+A) */
   .ceramic-sel-cell {
@@ -860,13 +925,28 @@ const CERAMIC_CSS = `
     max-width: none;
   }
 
-  /* Clickable column header toggle */
+  /* Clickable column header controls: a sort button (label + arrows) that
+     fills the available space, plus a small icon-only truncate/expand
+     button pinned to the end — two independent click targets, one header.
+     A divider + the expand button's own constant pill background keep the
+     two zones visually distinct instead of reading as one blurry cluster. */
   .ceramic-head-btn {
     display: flex;
     align-items: center;
-    justify-content: center;
-    gap: 4px;
     width: 100%;
+    height: 100%;
+    gap: 4px;
+  }
+  .ceramic-head-sort-btn {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    /* Shrinks to ellipsize in a narrow header, but never grows beyond its
+       own content — otherwise it swallows the extra space when a column
+       expands and shoves the expand button far away from the label */
+    flex: 0 1 auto;
+    max-width: 100%;
+    min-width: 0;
     height: 100%;
     background: none;
     border: none;
@@ -878,10 +958,13 @@ const CERAMIC_CSS = `
     border-radius: 3px;
     transition: background .12s, color .12s;
   }
-  .ceramic-head-btn:hover {
+  .ceramic-head-sort-btn:disabled {
+    cursor: default;
+  }
+  .ceramic-head-sort-btn:not(:disabled):hover {
     background: rgba(30,36,60,.06);
   }
-  .dark .ceramic-head-btn:hover {
+  .dark .ceramic-head-sort-btn:not(:disabled):hover {
     background: rgba(255,255,255,.06);
   }
   .ceramic-head-btn-label {
@@ -890,26 +973,80 @@ const CERAMIC_CSS = `
     white-space: nowrap;
     min-width: 0;
   }
+  /* Thin divider so the expand button reads as a separate control, not a
+     continuation of the sort arrows */
+  .ceramic-head-expand-btn {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 20px;
+    margin-block: auto;
+    background: rgba(30,36,60,.05);
+    border: none;
+    border-inline-start: 1px solid var(--ceramic-head-border);
+    border-radius: 5px;
+    padding: 0 6px 0 8px;
+    cursor: pointer;
+    transition: background .12s;
+  }
+  .dark .ceramic-head-expand-btn {
+    background: rgba(255,255,255,.05);
+  }
+  .ceramic-head-expand-btn:hover {
+    background: rgba(30,36,60,.11);
+  }
+  .dark .ceramic-head-expand-btn:hover {
+    background: rgba(255,255,255,.13);
+  }
   .ceramic-head-btn-icon {
     flex-shrink: 0;
-    font-size: 9px;
-    opacity: 0.3;
+    font-size: 11px;
+    opacity: 0.55;
     line-height: 1;
+    color: var(--ceramic-head-text);
   }
-  .ceramic-head.ceramic-head-col-expanded .ceramic-head-btn {
-    color: #2563eb;
+  .ceramic-head-expand-btn:hover .ceramic-head-btn-icon {
+    opacity: 0.85;
   }
-  .dark .ceramic-head.ceramic-head-col-expanded .ceramic-head-btn {
-    color: #60a5fa;
+  .ceramic-head.ceramic-head-col-expanded .ceramic-head-expand-btn {
+    background: rgba(37,99,235,.14);
+    border-inline-start-color: rgba(37,99,235,.3);
+  }
+  .dark .ceramic-head.ceramic-head-col-expanded .ceramic-head-expand-btn {
+    background: rgba(96,165,250,.16);
+    border-inline-start-color: rgba(96,165,250,.35);
   }
   .ceramic-head.ceramic-head-col-expanded .ceramic-head-btn-icon {
     opacity: 0.75;
+    color: #2563eb;
   }
-  .ceramic-head.ceramic-head-col-expanded .ceramic-head-btn:hover {
-    background: rgba(37,99,235,.07);
+  .dark .ceramic-head.ceramic-head-col-expanded .ceramic-head-btn-icon {
+    color: #60a5fa;
   }
-  .dark .ceramic-head.ceramic-head-col-expanded .ceramic-head-btn:hover {
-    background: rgba(96,165,250,.09);
+
+  /* Sort arrows: a faint stacked up/down pair on every sortable column —
+     hover brightens both, the active direction goes solid + accent-colored */
+  .ceramic-sort-arrow {
+    fill: var(--ceramic-head-text);
+    opacity: .28;
+    transition: opacity .12s, fill .12s;
+  }
+  .ceramic-head-sort-btn:not(:disabled):hover .ceramic-sort-arrow {
+    opacity: .55;
+  }
+  .ceramic-head-sorted .ceramic-head-sort-btn {
+    color: #2563eb;
+  }
+  .dark .ceramic-head-sorted .ceramic-head-sort-btn {
+    color: #60a5fa;
+  }
+  .ceramic-head-sorted .ceramic-sort-arrow.is-active {
+    fill: #2563eb;
+    opacity: 1;
+  }
+  .dark .ceramic-head-sorted .ceramic-sort-arrow.is-active {
+    fill: #60a5fa;
   }
 
   /* Reduced motion */
@@ -1515,8 +1652,9 @@ export const SkuSheetCeramic = forwardRef<SkuSheetCeramicHandle, SkuSheetCeramic
     const headerLabel = container.querySelector<HTMLElement>(
       `[data-col-field="${field}"] .ceramic-head-btn-label`,
     )
-    // +28: icon (~13px) + gap (4px) + button padding (4px each side) + buffer
-    const headerNeeded = headerLabel ? headerLabel.scrollWidth + 28 : 0
+    // +46: sort icon + gap (~14px) + inter-button gap (4px) + divider/padded
+    // expand button (~24px) + buffer — both header controls must stay clear
+    const headerNeeded = headerLabel ? headerLabel.scrollWidth + 46 : 0
     // .ceramic-rect is 86% of the column track; add 40px for cell padding + room
     const cellNeeded = maxCellScroll > 0 ? Math.ceil(maxCellScroll / 0.86) + 40 : 0
     return Math.max(minW, cellNeeded, headerNeeded)
@@ -1537,6 +1675,36 @@ export const SkuSheetCeramic = forwardRef<SkuSheetCeramicHandle, SkuSheetCeramic
       return next
     })
   }, [measureColWidth])
+
+  // ── Column sort — clicking a header sorts the actual row order (like
+  // Excel), so every index-based feature (fill-handle, drag-select, keyboard
+  // nav) keeps working against whatever order is currently on screen. A
+  // second click on the same column flips the direction; sorting a different
+  // column always starts from ascending. Blank values always sink to the
+  // bottom regardless of direction.
+  const [sortState, setSortState] = useState<{ field: string; direction: "asc" | "desc" } | null>(null)
+
+  const toggleColSort = useCallback(
+    (field: string) => {
+      const direction: "asc" | "desc" =
+        sortState?.field === field && sortState.direction === "asc" ? "desc" : "asc"
+
+      const collator = new Intl.Collator(isHe ? "he" : "en", { numeric: true, sensitivity: "base" })
+      const sorted = [...rows].sort((a, b) => {
+        const av = getFieldValue(a, field).trim()
+        const bv = getFieldValue(b, field).trim()
+        if (!av && !bv) return 0
+        if (!av) return 1
+        if (!bv) return -1
+        const cmp = collator.compare(av, bv)
+        return direction === "asc" ? cmp : -cmp
+      })
+
+      setSortState({ field, direction })
+      onRowsChange(sorted)
+    },
+    [rows, onRowsChange, sortState, isHe],
+  )
 
   // ── Row-checkbox selection state ──────────────────────────────────────────
   const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set())
@@ -1703,12 +1871,6 @@ export const SkuSheetCeramic = forwardRef<SkuSheetCeramicHandle, SkuSheetCeramic
 
       document.body.classList.add("ceramic-fill-dragging")
 
-      // Cells that already hold a value are never overwritten by a fill
-      const isOccupied = (rowIdx: number) => {
-        const row = rowsRef.current[rowIdx]
-        return Boolean(row && getFieldValue(row, field).trim())
-      }
-
       // Ghost preview: every covered cell already shows (faded) exactly what
       // will land in it on release — text, dropdown label, or thumbnail
       const makeGhost = (rowOffset: number): HTMLElement => {
@@ -1740,7 +1902,7 @@ export const SkuSheetCeramic = forwardRef<SkuSheetCeramicHandle, SkuSheetCeramic
         const lo = Math.min(startRow, endRow)
         const hi = Math.max(startRow, endRow)
         for (let r = lo; r <= hi; r++) {
-          if (r === startRow || isOccupied(r)) continue
+          if (r === startRow) continue
           const el = container.querySelector<HTMLElement>(
             `[data-fill-cell][data-row="${r}"][data-field="${field}"]`,
           )
@@ -1818,8 +1980,6 @@ export const SkuSheetCeramic = forwardRef<SkuSheetCeramicHandle, SkuSheetCeramic
         const hi = Math.max(startRow, endRow)
         const newRows = rowsRef.current.map((r, i) => {
           if (i < lo || i > hi || i === startRow) return r
-          // Skip cells that already have a value
-          if (getFieldValue(r, field).trim()) return r
           return {
             ...r,
             // Image cells copy the URL reference(s); SKU increments; rest copy
@@ -2483,6 +2643,8 @@ export const SkuSheetCeramic = forwardRef<SkuSheetCeramicHandle, SkuSheetCeramic
             }
 
             const colIsExpanded = expandedCols.has(col.field)
+            const colSortDirection = sortState?.field === col.field ? sortState.direction : null
+            const colCanSort = isSortableCol(col)
             return (
               <div
                 key={`h-${col.field}`}
@@ -2492,19 +2654,36 @@ export const SkuSheetCeramic = forwardRef<SkuSheetCeramicHandle, SkuSheetCeramic
                 {col.field === "rowNumber" ? (
                   "#"
                 ) : (
-                  <button
-                    type="button"
-                    className="ceramic-head-btn"
-                    onClick={() => toggleColExpand(col.field)}
-                    title={
-                      colIsExpanded
-                        ? t("sku.grid.clickToTruncateColumn")
-                        : t("sku.grid.clickToExpandColumn")
-                    }
-                  >
-                    <span className="ceramic-head-btn-label">{t(getHeaderKey(col.field))}</span>
-                    <span className="ceramic-head-btn-icon">{colIsExpanded ? "↙" : "↔"}</span>
-                  </button>
+                  <div className={`ceramic-head-btn${colSortDirection ? " ceramic-head-sorted" : ""}`}>
+                    <button
+                      type="button"
+                      className="ceramic-head-sort-btn"
+                      disabled={!colCanSort}
+                      onClick={() => colCanSort && toggleColSort(col.field)}
+                      title={
+                        !colCanSort
+                          ? undefined
+                          : colSortDirection === "asc"
+                            ? t("sku.grid.clickToSortDescending")
+                            : t("sku.grid.clickToSortAscending")
+                      }
+                    >
+                      <span className="ceramic-head-btn-label">{t(getHeaderKey(col.field))}</span>
+                      {colCanSort && <SortIcon direction={colSortDirection} />}
+                    </button>
+                    <button
+                      type="button"
+                      className="ceramic-head-expand-btn"
+                      onClick={() => toggleColExpand(col.field)}
+                      title={
+                        colIsExpanded
+                          ? t("sku.grid.clickToTruncateColumn")
+                          : t("sku.grid.clickToExpandColumn")
+                      }
+                    >
+                      <span className="ceramic-head-btn-icon">{colIsExpanded ? "↙" : "↔"}</span>
+                    </button>
+                  </div>
                 )}
               </div>
             )

@@ -243,10 +243,20 @@ export function SkuCleanupPage() {
     [listData?.rows],
   )
 
-  const mergedRows = useMemo(
-    () => serverRows.map((sr) => localBySku.get(sr.sku) ?? sr),
-    [serverRows, localBySku],
-  )
+  const mergedRows = useMemo(() => {
+    const serverSkus = new Set(serverRows.map((sr) => sr.sku))
+    // Row CONTENT always comes from the local cache when present (it may
+    // carry unsaved edits). Row ORDER prefers the local cache too — that's
+    // what lets in-grid sorting (which reorders localRows) actually stick —
+    // falling back to the server's own order for rows not cached yet (e.g.
+    // a page visited for the first time this session).
+    const ordered = localRows.filter((r) => r.sku && serverSkus.has(r.sku))
+    const seen = new Set(ordered.map((r) => r.sku))
+    for (const sr of serverRows) {
+      if (!seen.has(sr.sku)) ordered.push(localBySku.get(sr.sku) ?? sr)
+    }
+    return ordered
+  }, [serverRows, localBySku, localRows])
 
   const dirtyCount = localRows.filter((r) => r._isDirty).length
   const totalItems = listData?.total ?? 0
@@ -383,11 +393,13 @@ export function SkuCleanupPage() {
 
   const handleRowsChange = useCallback((updated: SkuMetadataRow[]) => {
     setLocalRows((prev) => {
-      const map = new Map(prev.map((r) => [r.sku, r]))
-      for (const r of updated) {
-        if (r.sku) map.set(r.sku, r)
-      }
-      return Array.from(map.values())
+      // `updated` is always the full current page, in whatever order the
+      // grid wants displayed (sorting reorders it; every other edit keeps
+      // the existing order) — that order wins. Rows cached from other
+      // pages/tabs are carried over unchanged, after this page's rows.
+      const updatedSkus = new Set(updated.filter((r) => r.sku).map((r) => r.sku))
+      const carryOver = prev.filter((r) => r.sku && !updatedSkus.has(r.sku))
+      return [...updated.filter((r) => r.sku), ...carryOver]
     })
   }, [])
 

@@ -742,6 +742,8 @@ const he = {
       deleteRowFailed: "מחיקת השורה נכשלה",
       clickToExpandColumn: "לחץ להרחבה",
       clickToTruncateColumn: "לחץ לקיצור",
+      clickToSortAscending: "לחץ למיון עולה",
+      clickToSortDescending: "לחץ למיון יורד",
     },
 
     fields: {

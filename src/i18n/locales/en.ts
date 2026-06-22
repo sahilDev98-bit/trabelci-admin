@@ -758,6 +758,8 @@ const en = {
       deleteRowFailed: "Failed to delete row",
       clickToExpandColumn: "Click to expand",
       clickToTruncateColumn: "Click to truncate",
+      clickToSortAscending: "Click to sort ascending",
+      clickToSortDescending: "Click to sort descending",
     },
 
     fields: {
