@@ -82,6 +82,14 @@ export interface SkuSheetCeramicProps {
   onHeaderToggle?: () => void
   /** Autocomplete API — drives supplier ghost-text + series/color/finish dropdowns + cascade fill */
   autocomplete?: SkuAutocompleteAPI
+
+  // ── Infinite scroll ─────────────────────────────────────────────────────
+  /** Called when the user scrolls within `nearEndOffset` rows of the bottom
+   *  of the currently loaded data — wire this to fetchNextPage() on pages
+   *  using infinite scroll. Omit for pages that load everything upfront. */
+  onNearEnd?: () => void
+  /** How many rows from the end to trigger onNearEnd. Default: 50. */
+  nearEndOffset?: number
 }
 
 // ─── Column definitions ───────────────────────────────────────────────────────
@@ -155,10 +163,17 @@ function getHeaderKey(field: string): string {
   return `sku.fields.${field}`
 }
 
-/** Column types where row order can be meaningfully compared/sorted. */
+/** Column types where row order can be meaningfully compared/sorted —
+ * every field except images (sorting by a file URL is meaningless) and the
+ * structural index/checkbox columns. */
 function isSortableCol(col: CeramicColumn | undefined): boolean {
   if (!col) return false
-  return col.type === "text" || col.type === "dropdown" || col.type === "readonly"
+  return (
+    col.type === "text" ||
+    col.type === "dropdown" ||
+    col.type === "readonly" ||
+    col.type === "supplier-autocomplete"
+  )
 }
 
 // Classic spreadsheet-style sort glyph: a stacked up/down triangle pair,
@@ -369,10 +384,13 @@ const CERAMIC_CSS = `
       -4px 0 0 0 var(--ceramic-sticky-bg),
       8px 0 0 0 var(--ceramic-sticky-bg);
   }
-  /* 44px "#" column + 8px grid column-gap, so column 1 sticks at the same
-     spot it occupies unscrolled (no jump when it engages) */
+  /* Offsets are computed in JS (--sticky-offset-N, set on .ceramic-grid)
+     from each preceding sticky column's ACTUAL rendered width — SKU's width
+     changes when the user expands it, so a hardcoded pixel value here would
+     overlap or gap as soon as that happens. The pixel fallback after each
+     var() only matters before the first render sets the variable. */
   .ceramic-cell-sticky-1 {
-    inset-inline-start: 52px;
+    inset-inline-start: var(--sticky-offset-1, 52px);
   }
   /* Corner cells (frozen header × frozen column) sit above everything.
      Re-declare the combined horizontal + vertical box-shadow coverage here —
@@ -494,6 +512,10 @@ const CERAMIC_CSS = `
        column widens */
     margin-inline-end: auto;
     white-space: nowrap;
+    /* Must stay visible — the fill-handle sits partly outside this button's
+       own box on purpose. Label clipping lives on .ceramic-dropdown-label
+       instead, never on the button itself. */
+    overflow: visible;
   }
   .ceramic-dropdown-trigger:hover,
   .ceramic-dropdown-trigger:focus {
@@ -908,10 +930,14 @@ const CERAMIC_CSS = `
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  /* Dropdown trigger: clip the label with ellipsis at column boundary */
-  .ceramic-dropdown-trigger {
+  /* Dropdown trigger: clip the LABEL with ellipsis at column boundary — this
+     must live on an inner span, not the button itself. The fill-handle sits
+     partly outside the button's box (bottom-right corner) on purpose; an
+     overflow:hidden on the button would silently clip it off-screen. */
+  .ceramic-dropdown-label {
     overflow: hidden;
     text-overflow: ellipsis;
+    min-width: 0;
   }
 
   /* Expanded column: column track is widened to fit — just un-clip the text */
@@ -921,9 +947,19 @@ const CERAMIC_CSS = `
     text-overflow: clip;
     white-space: nowrap;
   }
-  .ceramic-dropdown-trigger.ceramic-col-expanded {
+  /* The box itself stays at a fixed 86% of its column track (--ceramic-rect-w)
+     normally — fine when the track is narrow, but on an expanded column the
+     leftover 14% becomes a large, obvious gap before the next column. Use a
+     small fixed buffer instead of a percentage so the gap stays constant
+     regardless of how wide the column gets. */
+  .ceramic-rect.ceramic-col-expanded {
+    width: calc(100% - 16px);
+  }
+  .ceramic-dropdown-trigger.ceramic-col-expanded .ceramic-dropdown-label {
     overflow: visible;
     text-overflow: clip;
+  }
+  .ceramic-dropdown-trigger.ceramic-col-expanded {
     white-space: nowrap;
     max-width: none;
   }
@@ -1080,14 +1116,15 @@ const CERAMIC_CSS = `
     outline-offset: 2px;
   }
 
-  /* Third sticky column (sku) when checkbox is present: position is set directly,
-     only rendered when showCheckbox=true so no conflict with the non-checkbox layout */
+  /* Third/fourth sticky columns — SKU (or SKU + Original SAP Name in
+     cleanup mode) when the checkbox column is present. Same JS-computed
+     var() pattern as sticky-1; only rendered when actually needed, so
+     there's no conflict with layouts that don't use this slot. */
   .ceramic-cell-sticky-2 {
-    inset-inline-start: 96px; /* 36px checkbox + 8px gap + 44px # + 8px gap */
+    inset-inline-start: var(--sticky-offset-2, 96px);
   }
-  /* Shift "#" column right to make room for the checkbox column */
-  .ceramic-has-checkbox .ceramic-cell-sticky-1 {
-    inset-inline-start: 44px; /* 36px checkbox + 8px gap */
+  .ceramic-cell-sticky-3 {
+    inset-inline-start: var(--sticky-offset-3, 140px);
   }
 
   /* Selected-row blue tint on card elements */
@@ -1220,18 +1257,17 @@ const CeramicRow = memo(function CeramicRow({
   const rowKey = row._clientId ?? row.sku ?? ""
   const sel = isSelected ? " ceramic-row-selected" : ""
 
-  // Sticky column positions shift when the checkbox column is prepended:
-  // showCheckbox=false: 0=# (sticky-0), 1=sku (sticky-1)
-  // showCheckbox=true:  0=checkbox (sticky-0), 1=# (sticky-1), 2=sku (sticky-2)
+  // Sticky column positions shift when the checkbox column is prepended,
+  // and "Original SAP Name" joins the frozen set in cleanup mode (right
+  // after SKU, since it's the SKU's own reference text):
+  // creation, no checkbox: 0=# (sticky-0), 1=sku (sticky-1)
+  // creation, checkbox:    0=checkbox, 1=#, 2=sku
+  // cleanup,  no checkbox: 0=#, 1=sku, 2=original_sap_name
+  // cleanup,  checkbox:    0=checkbox, 1=#, 2=sku, 3=original_sap_name
+  const stickyColCount = (showCheckbox ? 1 : 0) + 2 + (sheetMode === "cleanup" ? 1 : 0)
   const cellClassName = (colIndex: number): string => {
-    if (showCheckbox) {
-      if (colIndex === 0) return `ceramic-cell ceramic-cell-sticky ceramic-cell-sticky-0${sel}`
-      if (colIndex === 1) return `ceramic-cell ceramic-cell-sticky ceramic-cell-sticky-1${sel}`
-      if (colIndex === 2) return `ceramic-cell ceramic-cell-sticky ceramic-cell-sticky-2${sel}`
-      return `ceramic-cell${sel}`
-    }
     if (colIndex === 0) return `ceramic-cell ceramic-cell-sticky ceramic-cell-sticky-0${sel}`
-    if (colIndex === 1) return `ceramic-cell ceramic-cell-sticky ceramic-cell-sticky-1${sel}`
+    if (colIndex < stickyColCount) return `ceramic-cell ceramic-cell-sticky ceramic-cell-sticky-${colIndex}${sel}`
     return `ceramic-cell${sel}`
   }
 
@@ -1436,18 +1472,6 @@ function TextCellWrapper({
   const inputRef = useRef<HTMLInputElement>(null)
   const committedRef = useRef(initialValue)
 
-  // The fill handle only shows on cells that have something to copy. The
-  // input is uncontrolled, so typing is tracked as an override that resets
-  // whenever the external value changes (React's adjust-state-during-render
-  // pattern — no effect involved).
-  const [prevInitial, setPrevInitial] = useState(initialValue)
-  const [typedHasValue, setTypedHasValue] = useState<boolean | null>(null)
-  if (prevInitial !== initialValue) {
-    setPrevInitial(initialValue)
-    setTypedHasValue(null)
-  }
-  const hasValue = typedHasValue ?? Boolean(initialValue.trim())
-
   // Sync when the external value changes (e.g. after undo, paste, save).
   // Setting the DOM input value is exactly what effects are for —
   // syncing React state with an external system (the DOM).
@@ -1511,18 +1535,18 @@ function TextCellWrapper({
         style={italic ? { fontStyle: "italic", color: "var(--ceramic-rect-text)", fontWeight: 500 } : undefined}
         onBlur={commit}
         onKeyDown={handleKeyDown}
-        onInput={(e) => setTypedHasValue(Boolean(e.currentTarget.value.trim()))}
         data-row={rowIndex}
         data-col={colIndex}
         data-field={field}
       />
-      {!readOnly && hasValue && (
+      {!readOnly && (
         <span
           className="ceramic-fill-handle"
           title="Drag to fill (same column)"
           onClick={(e) => e.stopPropagation()}
           onMouseDown={(e) => {
             // Commit what's being typed first, then fill with that value
+            // (a blank cell is a valid drag too — it clears rows below it)
             commit()
             onFillStart(rowIndex, field, inputRef.current?.value ?? "", e)
           }}
@@ -1620,15 +1644,13 @@ function DropdownCellWrapper({
         tabIndex={0}
         style={triggerStyle}
       >
-        {label || "\u00A0"}
-        {Boolean(value.trim()) && (
-          <span
-            className="ceramic-fill-handle"
-            title="Drag to fill (same column)"
-            onClick={(e) => e.stopPropagation()}
-            onMouseDown={(e) => onFillStart(rowIndex, field, value, e)}
-          />
-        )}
+        <span className="ceramic-dropdown-label">{label || "\u00A0"}</span>
+        <span
+          className="ceramic-fill-handle"
+          title="Drag to fill (same column)"
+          onClick={(e) => e.stopPropagation()}
+          onMouseDown={(e) => onFillStart(rowIndex, field, value, e)}
+        />
       </button>
       {open && triggerRect && (
         <CeramicDropdown
@@ -1664,6 +1686,8 @@ export const SkuSheetCeramic = forwardRef<SkuSheetCeramicHandle, SkuSheetCeramic
     headerIndeterminate,
     onHeaderToggle,
     autocomplete,
+    onNearEnd,
+    nearEndOffset = 50,
   }, ref) {
   const { t, i18n } = useTranslation()
   const isHe = i18n.language === "he"
@@ -1729,6 +1753,16 @@ export const SkuSheetCeramic = forwardRef<SkuSheetCeramicHandle, SkuSheetCeramic
       const direction: "asc" | "desc" =
         sortState?.field === field && sortState.direction === "asc" ? "desc" : "asc"
 
+      // eslint-disable-next-line no-console
+      console.log(`%c[SORT DEBUG] click on "${field}" → direction = ${direction}`, "color:#60a5fa;font-weight:bold")
+      // eslint-disable-next-line no-console
+      console.log("[SORT DEBUG] sortState BEFORE click:", sortState)
+      // eslint-disable-next-line no-console
+      console.log(
+        "[SORT DEBUG] rows BEFORE sort (in current order):",
+        rows.map((r, i) => ({ index: i, clientId: r._clientId, sku: r.sku, [field]: getFieldValue(r, field) })),
+      )
+
       const collator = new Intl.Collator(isHe ? "he" : "en", { numeric: true, sensitivity: "base" })
       const sorted = [...rows].sort((a, b) => {
         const av = getFieldValue(a, field).trim()
@@ -1737,11 +1771,23 @@ export const SkuSheetCeramic = forwardRef<SkuSheetCeramicHandle, SkuSheetCeramic
         if (!av) return 1
         if (!bv) return -1
         const cmp = collator.compare(av, bv)
-        return direction === "asc" ? cmp : -cmp
+        const result = direction === "asc" ? cmp : -cmp
+        // eslint-disable-next-line no-console
+        console.log(`[SORT DEBUG] compare "${av}" vs "${bv}" → cmp=${cmp} → result=${result}`)
+        return result
       })
+
+      // eslint-disable-next-line no-console
+      console.log(
+        "[SORT DEBUG] rows AFTER sort (about to call onRowsChange):",
+        sorted.map((r, i) => ({ index: i, clientId: r._clientId, sku: r.sku, [field]: getFieldValue(r, field) })),
+      )
 
       setSortState({ field, direction })
       onRowsChange(sorted)
+
+      // eslint-disable-next-line no-console
+      console.log("[SORT DEBUG] ── done. Check the NEXT render's rows prop to see what actually got displayed. ──")
     },
     [rows, onRowsChange, sortState, isHe],
   )
@@ -1790,6 +1836,7 @@ export const SkuSheetCeramic = forwardRef<SkuSheetCeramicHandle, SkuSheetCeramic
     getKey: getRowKey,
     isSelected: getIsRowSelected,
     toggle: applyCheckboxToggle,
+    getScrollContainer: () => containerRef.current?.querySelector<HTMLElement>(".ceramic-panel") ?? null,
   })
 
   const toggleSelectAll = useCallback(() => {
@@ -1829,11 +1876,80 @@ export const SkuSheetCeramic = forwardRef<SkuSheetCeramicHandle, SkuSheetCeramic
   const rowsRef = useRef(rows)
   const onRowsChangeRef = useRef(onRowsChange)
   const columnsRef = useRef(columns)
+  const sortStateRef = useRef(sortState)
   useEffect(() => {
     rowsRef.current = rows
     onRowsChangeRef.current = onRowsChange
     columnsRef.current = columns
+    sortStateRef.current = sortState
   })
+
+  // Infinite scroll — fire onNearEnd once the row `nearEndOffset` rows from
+  // the bottom of what's currently loaded scrolls into view, so the parent
+  // page can fetch the next batch before the user actually hits the end.
+  useEffect(() => {
+    if (!onNearEnd) return
+    const container = containerRef.current
+    if (!container) return
+
+    const targetIndex = Math.max(0, rows.length - nearEndOffset)
+    const targetEl = container.querySelector<HTMLElement>(`[data-row="${targetIndex}"]`)
+    if (!targetEl) return
+
+    const scrollPanel = container.querySelector<HTMLElement>(".ceramic-panel")
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) onNearEnd()
+      },
+      { root: scrollPanel ?? null, rootMargin: "200px" },
+    )
+    observer.observe(targetEl)
+    return () => observer.disconnect()
+  }, [rows.length, onNearEnd, nearEndOffset])
+
+  // Shared comparator so every edit path (single commit, fill, paste, clear)
+  // can re-place rows using the exact same rule toggleColSort uses.
+  const sortRowsByField = useCallback(
+    (rowsToSort: SkuMetadataRow[], field: string, direction: "asc" | "desc") => {
+      const collator = new Intl.Collator(isHe ? "he" : "en", { numeric: true, sensitivity: "base" })
+      return [...rowsToSort].sort((a, b) => {
+        const av = getFieldValue(a, field).trim()
+        const bv = getFieldValue(b, field).trim()
+        if (!av && !bv) return 0
+        if (!av) return 1
+        if (!bv) return -1
+        const cmp = collator.compare(av, bv)
+        return direction === "asc" ? cmp : -cmp
+      })
+    },
+    [isHe],
+  )
+
+  // If a column is actively sorted, re-place every row after any edit —
+  // otherwise a row you just typed a new value into would sit wherever it
+  // was before the edit until the user manually re-clicked the sort icon.
+  // Safe to call unconditionally: re-sorting by a field nothing just
+  // changed is a no-op (the array is already in that order).
+  const applyActiveSort = useCallback(
+    (rowsToCheck: SkuMetadataRow[]) => {
+      const active = sortStateRef.current
+      return active ? sortRowsByField(rowsToCheck, active.field, active.direction) : rowsToCheck
+    },
+    [sortRowsByField],
+  )
+
+  // Auto re-sort when more rows arrive from outside (infinite-scroll
+  // loading the next batch) — without this, newly loaded rows would just
+  // tack onto the end, unsorted relative to what's already on screen, until
+  // the user manually re-clicked the sort icon.
+  const prevRowsLengthRef = useRef(rows.length)
+  useEffect(() => {
+    const grew = rows.length > prevRowsLengthRef.current
+    prevRowsLengthRef.current = rows.length
+    if (!grew) return
+    const resorted = applyActiveSort(rows)
+    if (resorted.some((r, i) => r !== rows[i])) onRowsChange(resorted)
+  }, [rows, onRowsChange, applyActiveSort])
 
   // ── Fill-down drag (the corner handle) ────────────────────────────────
   const fillPreviewEls = useRef<HTMLElement[]>([])
@@ -1853,13 +1969,8 @@ export const SkuSheetCeramic = forwardRef<SkuSheetCeramicHandle, SkuSheetCeramic
       const container = containerRef.current
       if (!container) return
 
-      // Nothing to copy from a blank cell — an empty-source drag would only
-      // mark untouched rows as edited without changing anything
-      const isEmptySource = Array.isArray(value)
-        ? value.length === 0
-        : !String(value ?? "").trim()
-      if (isEmptySource) return
-
+      // A blank source is a valid drag too — it clears every row it's
+      // dragged over, the same way dragging a filled cell copies it
       const isSku = field === "sku"
       let endRow = startRow
       let overWrongColumn = false
@@ -1886,16 +1997,20 @@ export const SkuSheetCeramic = forwardRef<SkuSheetCeramicHandle, SkuSheetCeramic
         delete chip.dataset.invalid
         if (isImage) {
           const urls = Array.isArray(value) ? value : value ? [value] : []
-          const img = document.createElement("img")
-          img.src = urls[0] ?? ""
-          img.alt = ""
-          img.style.cssText =
-            "width:24px;height:24px;border-radius:7px;object-fit:cover;box-shadow:0 1px 3px rgba(0,0,0,.3);"
-          chip.appendChild(img)
-          if (urls.length > 1) {
-            const count = document.createElement("span")
-            count.textContent = `+${urls.length - 1}`
-            chip.appendChild(count)
+          if (urls[0]) {
+            const img = document.createElement("img")
+            img.src = urls[0]
+            img.alt = ""
+            img.style.cssText =
+              "width:24px;height:24px;border-radius:7px;object-fit:cover;box-shadow:0 1px 3px rgba(0,0,0,.3);"
+            chip.appendChild(img)
+            if (urls.length > 1) {
+              const count = document.createElement("span")
+              count.textContent = `+${urls.length - 1}`
+              chip.appendChild(count)
+            }
+          } else {
+            chip.textContent = "⌀"
           }
         } else {
           chip.textContent = toDisplay(fillValueAt(value as string, offset, isSku))
@@ -1954,12 +2069,14 @@ export const SkuSheetCeramic = forwardRef<SkuSheetCeramicHandle, SkuSheetCeramic
         }
       }
 
-      const onMove = (me: MouseEvent) => {
-        moveChip(me.clientX, me.clientY)
-
-        // Which cell is under the cursor?
+      // Re-evaluates which row is under the cursor and updates the
+      // preview/endRow accordingly. Called both on real mouse movement and
+      // on every auto-scroll tick — scrolling moves rows under a stationary
+      // cursor, so the hover target must be re-checked even without a
+      // mousemove event firing.
+      const recalcHover = (clientX: number, clientY: number) => {
         let hovered: { row: number; field: string } | null = null
-        for (const el of document.elementsFromPoint(me.clientX, me.clientY)) {
+        for (const el of document.elementsFromPoint(clientX, clientY)) {
           const cellEl = (el as HTMLElement).closest?.("[data-fill-cell]") as HTMLElement | null
           if (cellEl) {
             const rowAttr = cellEl.getAttribute("data-row")
@@ -1989,11 +2106,61 @@ export const SkuSheetCeramic = forwardRef<SkuSheetCeramicHandle, SkuSheetCeramic
         updatePreview()
       }
 
+      // Auto-scroll the sheet while dragging near the top/bottom edge of the
+      // visible area — otherwise you can never fill past whatever rows
+      // happen to be on screen when the drag starts.
+      const scrollPanel = container.querySelector<HTMLElement>(".ceramic-panel")
+      const AUTO_SCROLL_ZONE = 56
+      const AUTO_SCROLL_MAX_SPEED = 18
+      let scrollSpeed = 0
+      let scrollRafId: number | null = null
+      let lastClientX = 0
+      let lastClientY = 0
+
+      const tickScroll = () => {
+        if (scrollSpeed !== 0 && scrollPanel) {
+          scrollPanel.scrollTop += scrollSpeed
+          recalcHover(lastClientX, lastClientY)
+          scrollRafId = requestAnimationFrame(tickScroll)
+        } else {
+          scrollRafId = null
+        }
+      }
+
+      const updateAutoScroll = (clientY: number) => {
+        if (!scrollPanel) return
+        const rect = scrollPanel.getBoundingClientRect()
+        if (clientY < rect.top + AUTO_SCROLL_ZONE) {
+          const dist = Math.max(0, clientY - rect.top)
+          const intensity = 1 - Math.min(1, dist / AUTO_SCROLL_ZONE)
+          scrollSpeed = -Math.ceil(intensity * AUTO_SCROLL_MAX_SPEED)
+        } else if (clientY > rect.bottom - AUTO_SCROLL_ZONE) {
+          const dist = Math.max(0, rect.bottom - clientY)
+          const intensity = 1 - Math.min(1, dist / AUTO_SCROLL_ZONE)
+          scrollSpeed = Math.ceil(intensity * AUTO_SCROLL_MAX_SPEED)
+        } else {
+          scrollSpeed = 0
+        }
+        if (scrollSpeed !== 0 && scrollRafId == null) {
+          scrollRafId = requestAnimationFrame(tickScroll)
+        }
+      }
+
+      const onMove = (me: MouseEvent) => {
+        lastClientX = me.clientX
+        lastClientY = me.clientY
+        moveChip(me.clientX, me.clientY)
+        updateAutoScroll(me.clientY)
+        recalcHover(me.clientX, me.clientY)
+      }
+
       const cleanup = () => {
         document.removeEventListener("mousemove", onMove)
         document.removeEventListener("mouseup", onUp)
         document.removeEventListener("keydown", onKey, true)
         document.body.classList.remove("ceramic-fill-dragging", "ceramic-fill-invalid")
+        if (scrollRafId != null) cancelAnimationFrame(scrollRafId)
+        scrollSpeed = 0
         chip.remove()
         clearFillPreview()
       }
@@ -2030,14 +2197,14 @@ export const SkuSheetCeramic = forwardRef<SkuSheetCeramicHandle, SkuSheetCeramic
             _validationStatus: "unchecked" as SkuValidationStatus,
           }
         })
-        onRowsChangeRef.current(newRows)
+        onRowsChangeRef.current(applyActiveSort(newRows))
       }
 
       document.addEventListener("mousemove", onMove)
       document.addEventListener("mouseup", onUp)
       document.addEventListener("keydown", onKey, true)
     },
-    [clearFillPreview, dropdowns, isHe, t],
+    [clearFillPreview, dropdowns, isHe, t, applyActiveSort],
   )
 
   // ── Grid template columns ─────────────────────────────────────────────
@@ -2058,6 +2225,30 @@ export const SkuSheetCeramic = forwardRef<SkuSheetCeramicHandle, SkuSheetCeramic
     () => columns.reduce((sum, c) => sum + (colWidthOverrides[c.field] ?? c.minWidth) + 8, 0),
     [columns, colWidthOverrides],
   )
+
+  // ── Frozen (sticky) leading columns ─────────────────────────────────────
+  // Index "#" and SKU are always frozen; "Original SAP Name" joins them in
+  // cleanup mode (it's reference-only, so it stays visible alongside the
+  // SKU it describes while scrolling). Checkbox, when shown, takes slot 0
+  // and shifts everything else over by one.
+  const stickyColCount = (showCheckbox ? 1 : 0) + 2 + (mode === "cleanup" ? 1 : 0)
+
+  // Each frozen column's left offset = the actual rendered width of every
+  // sticky column before it (not a hardcoded pixel guess) — SKU's own
+  // width can change if the user expands it, so anything frozen after it
+  // must shift to match or it'll overlap/gap. Exposed as CSS variables so
+  // the sticky cells (rendered in CeramicRow, which doesn't have
+  // colWidthOverrides) can read them via inheritance.
+  const stickyOffsetStyle = useMemo(() => {
+    const style: Record<string, string> = {}
+    let acc = 0
+    for (let i = 0; i < stickyColCount; i++) {
+      style[`--sticky-offset-${i}`] = `${acc}px`
+      const col = columns[i]
+      acc += (col ? (colWidthOverrides[col.field] ?? col.minWidth) : 0) + 8
+    }
+    return style as React.CSSProperties
+  }, [columns, colWidthOverrides, stickyColCount])
 
   // ── Duplicate SKU detection ───────────────────────────────────────────
   const duplicateSkus = useMemo(() => {
@@ -2094,9 +2285,9 @@ export const SkuSheetCeramic = forwardRef<SkuSheetCeramicHandle, SkuSheetCeramic
             }
           : r,
       )
-      onRowsChange(newRows)
+      onRowsChange(applyActiveSort(newRows))
     },
-    [rows, onRowsChange, autocomplete],
+    [rows, onRowsChange, autocomplete, applyActiveSort],
   )
 
   // ── Image row change ──────────────────────────────────────────────────
@@ -2334,8 +2525,8 @@ export const SkuSheetCeramic = forwardRef<SkuSheetCeramicHandle, SkuSheetCeramic
       next._validationStatus = "unchecked"
       return next
     })
-    onRowsChangeRef.current(newRows)
-  }, [selectionRect])
+    onRowsChangeRef.current(applyActiveSort(newRows))
+  }, [selectionRect, applyActiveSort])
 
   const buildRangeTsv = useCallback(() => {
     const rect = selectionRect()
@@ -2393,8 +2584,8 @@ export const SkuSheetCeramic = forwardRef<SkuSheetCeramicHandle, SkuSheetCeramic
       next._validationStatus = "unchecked"
       return next
     })
-    onRowsChangeRef.current(newRows)
-  }, [selectionRect])
+    onRowsChangeRef.current(applyActiveSort(newRows))
+  }, [selectionRect, applyActiveSort])
 
   // ── Cell copy/paste (Ctrl+C / Ctrl+V, Excel-compatible) ────────────────
   // Paste spreads tab/newline-separated blocks across writable columns from
@@ -2458,12 +2649,12 @@ export const SkuSheetCeramic = forwardRef<SkuSheetCeramicHandle, SkuSheetCeramic
         }
       }
 
-      onRowsChangeRef.current(newRows)
+      onRowsChangeRef.current(applyActiveSort(newRows))
     }
 
     container.addEventListener("paste", handlePaste)
     return () => container.removeEventListener("paste", handlePaste)
-  }, [createEmptyRow])
+  }, [createEmptyRow, applyActiveSort])
 
   // ── Keyboard shortcuts + selection events ─────────────────────────────
   useEffect(() => {
@@ -2650,20 +2841,16 @@ export const SkuSheetCeramic = forwardRef<SkuSheetCeramicHandle, SkuSheetCeramic
           style={{
             gridTemplateColumns,
             minWidth: gridMinWidth,
+            ...stickyOffsetStyle,
           }}
         >
           {/* Header row */}
           {columns.map((col, colIndex) => {
-            const isSticky0 = colIndex === 0
-            const isSticky1 = colIndex === 1
-            const isSticky2 = showCheckbox && colIndex === 2
-            const headClass = isSticky0
+            const headClass = colIndex === 0
               ? "ceramic-head ceramic-cell-sticky ceramic-cell-sticky-0"
-              : isSticky1
-                ? "ceramic-head ceramic-cell-sticky ceramic-cell-sticky-1"
-                : isSticky2
-                  ? "ceramic-head ceramic-cell-sticky ceramic-cell-sticky-2"
-                  : "ceramic-head"
+              : colIndex < stickyColCount
+                ? `ceramic-head ceramic-cell-sticky ceramic-cell-sticky-${colIndex}`
+                : "ceramic-head"
 
             if (col.type === "checkbox") {
               const checkedState = headerChecked !== undefined ? headerChecked : pageFullySelected

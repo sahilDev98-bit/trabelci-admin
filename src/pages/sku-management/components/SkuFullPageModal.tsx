@@ -21,6 +21,8 @@ interface SkuFullPageModalProps {
   /** Status line shown below the title (e.g. "12 rows · 3 unsaved") */
   statusLine?: React.ReactNode
   autocomplete?: SkuAutocompleteAPI
+  /** Infinite scroll — forwarded straight through to the inner grid */
+  onNearEnd?: () => void
 }
 
 export function SkuFullPageModal({
@@ -38,6 +40,7 @@ export function SkuFullPageModal({
   actions,
   statusLine,
   autocomplete,
+  onNearEnd,
 }: SkuFullPageModalProps) {
   // Close on Escape
   useEffect(() => {
@@ -244,6 +247,7 @@ export function SkuFullPageModal({
             onUndo={onUndo}
             onRedo={onRedo}
             autocomplete={autocomplete}
+            onNearEnd={onNearEnd}
           />
         </div>
       </div>

@@ -130,6 +130,7 @@ export interface SkuMetadataListResponse {
   total: number;
   page: number;
   pageSize: number;
+  hasMore: boolean;
 }
 
 export interface SkuBulkUpsertResponse {

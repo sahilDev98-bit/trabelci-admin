@@ -7,6 +7,10 @@ export const skuQueryKeys = {
     all: ['sku', 'metadata'] as const,
     list: (filters?: SkuMetadataFilters) =>
       ['sku', 'metadata', 'list', filters ?? {}] as const,
+    // `page` is deliberately excluded — useInfiniteQuery manages the page
+    // cursor itself; it isn't part of what makes the query "different"
+    infiniteList: (filters?: Omit<SkuMetadataFilters, 'page'>) =>
+      ['sku', 'metadata', 'infinite-list', filters ?? {}] as const,
     byId: (sku: string) => ['sku', 'metadata', sku] as const,
     auditLog: (sku: string) => ['sku', 'metadata', sku, 'audit'] as const,
   },

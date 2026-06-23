@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import {
   useSkuDropdownsQuery,
-  useSkuMetadataListQuery,
+  useSkuMetadataInfiniteQuery,
   useSkuBulkUpsertMutation,
   useSkuValidateMutation,
   useSkuCheckDuplicatesMutation,
@@ -15,7 +15,7 @@ import {
   useSkuAutocompleteHintsQuery,
 } from "@/features/skuManagement/api"
 import { useSkuAutocomplete } from "@/hooks/useSkuAutocomplete"
-import type { SkuMetadataRow } from "@/features/skuManagement/types"
+import type { SkuMetadataListResponse, SkuMetadataRow } from "@/features/skuManagement/types"
 import { SkuSheetCeramic, type SkuSheetCeramicHandle } from "./components/SkuSheetCeramic"
 import { SkuFullPageModal } from "./components/SkuFullPageModal"
 // Rollback to the AG Grid sheet: import { SkuGrid } from "./components/SkuGrid"
@@ -69,6 +69,24 @@ function padWithEmptyRows(rows: SkuMetadataRow[]): SkuMetadataRow[] {
   ]
 }
 
+// Infinite scroll appends newly-loaded drafts into the sheet — but the
+// trailing blank rows must stay LAST (that's the whole point of the
+// endless-sheet behavior), so new rows are spliced in just BEFORE them,
+// not tacked onto the very end.
+function insertLoadedRows(current: SkuMetadataRow[], loaded: SkuMetadataRow[]): SkuMetadataRow[] {
+  if (!loaded.length) return current
+  let trailingEmpty = 0
+  for (let i = current.length - 1; i >= 0 && isRowEmpty(current[i]); i--) {
+    trailingEmpty++
+  }
+  const insertAt = current.length - trailingEmpty
+  return padWithEmptyRows([
+    ...current.slice(0, insertAt),
+    ...loaded,
+    ...current.slice(insertAt),
+  ])
+}
+
 // Statuses still being worked on — rows already pushed to SAP
 // (created_in_sap) are finished and must not reappear in the editing sheet.
 const IN_PROGRESS_STATUSES = new Set<string>(["draft", "pending_approval", "approved"])
@@ -115,13 +133,21 @@ function errorMessage(err: unknown): string | null {
 }
 
 export function SkuNewCreationPage() {
-  // Load previously saved drafts once; the sheet takes them as initial state.
-  // Mounting the sheet only after the fetch settles means later refetches
+  // Load previously saved drafts via infinite scroll — the sheet mounts once
+  // the first 100 settle, then loads more itself as the user scrolls.
+  // Mounting only after the first page settles means later refetches
   // (e.g. cache invalidation after Save Draft) never clobber in-progress edits.
-  const { data, isLoading } = useSkuMetadataListQuery({
-    workflowType: "new_creation",
-    pageSize: 500,
-  })
+  const {
+    data,
+    isLoading,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+  } = useSkuMetadataInfiniteQuery({ workflowType: "new_creation" })
+
+  const handleNearEnd = useCallback(() => {
+    if (hasNextPage && !isFetchingNextPage) fetchNextPage()
+  }, [hasNextPage, isFetchingNextPage, fetchNextPage])
 
   if (isLoading) {
     return (
@@ -131,17 +157,42 @@ export function SkuNewCreationPage() {
     )
   }
 
-  const savedRows = (data?.rows ?? [])
-    .filter((r) => IN_PROGRESS_STATUSES.has(r.status))
-    .map(toGridRow)
-
-  return <CreationSheet initialRows={padWithEmptyRows(savedRows)} />
+  return <CreationSheet pages={data?.pages ?? []} onNearEnd={handleNearEnd} />
 }
 
-function CreationSheet({ initialRows }: { initialRows: SkuMetadataRow[] }) {
+function CreationSheet({
+  pages,
+  onNearEnd,
+}: {
+  pages: SkuMetadataListResponse[]
+  onNearEnd: () => void
+}) {
   const { t } = useTranslation()
   const navigate = useNavigate()
-  const [rows, setRows] = useState<SkuMetadataRow[]>(initialRows)
+  const [rows, setRows] = useState<SkuMetadataRow[]>(() =>
+    padWithEmptyRows(
+      (pages[0]?.rows ?? [])
+        .filter((r) => IN_PROGRESS_STATUSES.has(r.status))
+        .map(toGridRow)
+    )
+  )
+
+  // Infinite scroll — splice in each newly-fetched page's rows as it
+  // arrives, ahead of the trailing blank rows. consumedPagesRef tracks how
+  // many pages are already reflected in `rows` so each page is only
+  // inserted once even though this effect re-runs on every render.
+  const consumedPagesRef = useRef(pages.length)
+  useEffect(() => {
+    if (pages.length <= consumedPagesRef.current) return
+    const newPages = pages.slice(consumedPagesRef.current)
+    consumedPagesRef.current = pages.length
+    const loaded = newPages
+      .flatMap((p) => p.rows)
+      .filter((r) => IN_PROGRESS_STATUSES.has(r.status))
+      .map(toGridRow)
+    if (loaded.length) setRows((prev) => insertLoadedRows(prev, loaded))
+  }, [pages])
+
   const { data: dbHints } = useSkuAutocompleteHintsQuery()
   const autocomplete = useSkuAutocomplete(dbHints, rows)
   // Which toolbar action is running — Save Draft and Approve share the same
@@ -166,7 +217,7 @@ function CreationSheet({ initialRows }: { initialRows: SkuMetadataRow[] }) {
   // (React StrictMode invokes them twice, which corrupted the history when
   // pops/pushes lived inside them) — so all history mutations happen out
   // here, against this ref, and setRows only receives plain values.
-  const rowsSnapshotRef = useRef<SkuMetadataRow[]>(initialRows)
+  const rowsSnapshotRef = useRef<SkuMetadataRow[]>(rows)
   useEffect(() => {
     rowsSnapshotRef.current = rows
   }, [rows])
@@ -553,6 +604,7 @@ function CreationSheet({ initialRows }: { initialRows: SkuMetadataRow[] }) {
               if (!pfs) setSelectAllMode(false)
             }}
             autocomplete={autocomplete}
+            onNearEnd={onNearEnd}
           />
         </div>
         {/* Right-side details panel — temporarily hidden
@@ -577,6 +629,7 @@ function CreationSheet({ initialRows }: { initialRows: SkuMetadataRow[] }) {
         onUndo={undo}
         onRedo={redo}
         autocomplete={autocomplete}
+        onNearEnd={onNearEnd}
         actions={
           <>
             <Button

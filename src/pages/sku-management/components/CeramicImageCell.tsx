@@ -172,6 +172,17 @@ export function CeramicImageCell({
               <span>{t("sku.grid.uploadImage")}</span>
             </div>
           )}
+          {/* A blank image cell is a valid drag source too — it clears
+              whatever images the rows below it have */}
+          <span
+            className="ceramic-fill-handle"
+            title="Drag to fill (same column)"
+            onClick={(e) => e.stopPropagation()}
+            onMouseDown={(e) => {
+              e.stopPropagation()
+              onFillStart(rowIndex, field, multiple ? [] : "", e)
+            }}
+          />
         </div>
       ) : (
         /* Has images — at most MAX_VISIBLE_THUMBS in the cell; the rest live

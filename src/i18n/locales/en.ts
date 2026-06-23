@@ -818,9 +818,8 @@ const en = {
         cleaned: "Cleaned",
       },
       pagination: {
-        prev: "Prev",
-        next: "Next",
-        pageOf: "Page {{page}} of {{pages}} ({{total}} items)",
+        loadingMore: "Loading more…",
+        loadedOf: "Showing {{loaded}} of {{total}} items",
       },
     },
 

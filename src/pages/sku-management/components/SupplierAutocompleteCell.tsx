@@ -110,8 +110,6 @@ export function SupplierAutocompleteCell({
       }
     : {}
 
-  const hasValue = Boolean(typedValue.trim())
-
   return (
     <div
       className={`ceramic-rect${isExpanded ? " ceramic-col-expanded" : ""}`}
@@ -169,18 +167,17 @@ export function SupplierAutocompleteCell({
         onKeyDown={handleKeyDown}
       />
 
-      {hasValue && (
-        <span
-          className="ceramic-fill-handle"
-          title="Drag to fill (same column)"
-          style={{ zIndex: 2 }}
-          onClick={(e) => e.stopPropagation()}
-          onMouseDown={(e) => {
-            commit()
-            onFillStart(rowIndex, field, inputRef.current?.value ?? value, e)
-          }}
-        />
-      )}
+      {/* A blank cell is a valid drag source too — it clears rows below it */}
+      <span
+        className="ceramic-fill-handle"
+        title="Drag to fill (same column)"
+        style={{ zIndex: 2 }}
+        onClick={(e) => e.stopPropagation()}
+        onMouseDown={(e) => {
+          commit()
+          onFillStart(rowIndex, field, inputRef.current?.value ?? value, e)
+        }}
+      />
     </div>
   )
 }

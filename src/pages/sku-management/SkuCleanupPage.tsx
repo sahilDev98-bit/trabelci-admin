@@ -4,8 +4,6 @@ import { useTranslation } from "react-i18next"
 import { useQueryClient } from "@tanstack/react-query"
 import {
   ArrowLeft,
-  ChevronLeft,
-  ChevronRight,
   Download,
   Save,
   Loader2,
@@ -28,7 +26,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
 import {
-  useSkuMetadataListQuery,
+  useSkuMetadataInfiniteQuery,
   useSkuDropdownsQuery,
   useSkuBulkUpsertMutation,
   useSkuValidateMutation,
@@ -44,8 +42,6 @@ import { cn } from "@/lib/utils"
 import { SkuSheetCeramic } from "./components/SkuSheetCeramic"
 import { SkuFullPageModal } from "./components/SkuFullPageModal"
 import { SkuSapImportModal } from "./components/SkuSapImportModal"
-
-const PAGE_SIZE = 100
 
 function statusFilterForTab(tab: SkuCleanupStatusTab): SkuMetadataRow["status"] | undefined {
   if (tab === "pending") return "cleanup_only"
@@ -86,6 +82,8 @@ function colStickyStyle(ci: number): React.CSSProperties {
   if (ci === 0) return { ...base, position: "sticky", insetInlineStart: 0, zIndex: 3 }
   if (ci === 1) return { ...base, position: "sticky", insetInlineStart: 44, zIndex: 3 }
   if (ci === 2) return { ...base, position: "sticky", insetInlineStart: 96, zIndex: 3 }
+  // 36px checkbox + 8 + 44px # + 8 + 140px sku (its minWidth) + 8
+  if (ci === 3) return { ...base, position: "sticky", insetInlineStart: 244, zIndex: 3 }
   return {}
 }
 
@@ -190,7 +188,6 @@ export function SkuCleanupPage() {
   const [search, setSearch] = useState("")
   const [debouncedSearch, setDebouncedSearch] = useState("")
   const [statusTab, setStatusTab] = useState<SkuCleanupStatusTab>("pending")
-  const [page, setPage] = useState(1)
   const [showSapImportModal, setShowSapImportModal] = useState(false)
   const [fullPageOpen, setFullPageOpen] = useState(false)
   const [localRows, setLocalRows] = useState<SkuMetadataRow[]>([])
@@ -208,8 +205,8 @@ export function SkuCleanupPage() {
     return () => window.clearTimeout(timer)
   }, [search])
 
-  // Reset selection only when the dataset changes (tab or search), NOT on page change —
-  // selection must persist as the user paginates through the same result set
+  // Reset selection whenever the dataset changes (tab or search) — infinite
+  // scroll has no "page" anymore, so this is now the only reset trigger
   useEffect(() => {
     setIsSelectAllMode(false)
     setSelectedKeys(new Set())
@@ -221,13 +218,18 @@ export function SkuCleanupPage() {
       workflowType: "cleanup" as const,
       status: statusFilterForTab(statusTab),
       search: debouncedSearch || undefined,
-      page,
-      pageSize: PAGE_SIZE,
     }),
-    [statusTab, debouncedSearch, page],
+    [statusTab, debouncedSearch],
   )
 
-  const { data: listData, isLoading, isFetching } = useSkuMetadataListQuery(listFilters)
+  const {
+    data: infiniteData,
+    isLoading,
+    isFetching,
+    isFetchingNextPage,
+    hasNextPage,
+    fetchNextPage,
+  } = useSkuMetadataInfiniteQuery(listFilters)
   const { data: dropdowns = {} } = useSkuDropdownsQuery()
   const { data: stats } = useCleanupStatsQuery()
   const bulkUpsert = useSkuBulkUpsertMutation()
@@ -241,9 +243,11 @@ export function SkuCleanupPage() {
     [localRows],
   )
 
+  // Infinite scroll accumulates pages — flatten everything fetched so far
+  // into one continuous list (replaces the old single-page serverRows).
   const serverRows = useMemo(
-    () => (listData?.rows ?? []).map(toGridRow),
-    [listData?.rows],
+    () => (infiniteData?.pages.flatMap((p) => p.rows) ?? []).map(toGridRow),
+    [infiniteData?.pages],
   )
 
   const mergedRows = useMemo(() => {
@@ -252,7 +256,7 @@ export function SkuCleanupPage() {
     // carry unsaved edits). Row ORDER prefers the local cache too — that's
     // what lets in-grid sorting (which reorders localRows) actually stick —
     // falling back to the server's own order for rows not cached yet (e.g.
-    // a page visited for the first time this session).
+    // freshly streamed in by the next infinite-scroll page).
     const ordered = localRows.filter((r) => r.sku && serverSkus.has(r.sku))
     const seen = new Set(ordered.map((r) => r.sku))
     for (const sr of serverRows) {
@@ -262,8 +266,8 @@ export function SkuCleanupPage() {
   }, [serverRows, localBySku, localRows])
 
   const dirtyCount = localRows.filter((r) => r._isDirty).length
-  const totalItems = listData?.total ?? 0
-  const totalPages = Math.max(1, Math.ceil(totalItems / PAGE_SIZE))
+  // Total is the same on every page of the response — the first page's value is fine
+  const totalItems = infiniteData?.pages[0]?.total ?? 0
   const tabCounts = {
     pending: stats?.pending ?? 0,
     cleaned: stats?.cleaned ?? 0,
@@ -396,15 +400,22 @@ export function SkuCleanupPage() {
 
   const handleRowsChange = useCallback((updated: SkuMetadataRow[]) => {
     setLocalRows((prev) => {
-      // `updated` is always the full current page, in whatever order the
-      // grid wants displayed (sorting reorders it; every other edit keeps
-      // the existing order) — that order wins. Rows cached from other
-      // pages/tabs are carried over unchanged, after this page's rows.
+      // `updated` is always every row currently loaded (across all
+      // infinite-scroll pages so far), in whatever order the grid wants
+      // displayed (sorting reorders it; every other edit keeps the existing
+      // order) — that order wins. Rows cached from other tabs/searches are
+      // carried over unchanged, after these.
       const updatedSkus = new Set(updated.filter((r) => r.sku).map((r) => r.sku))
       const carryOver = prev.filter((r) => r.sku && !updatedSkus.has(r.sku))
       return [...updated.filter((r) => r.sku), ...carryOver]
     })
   }, [])
+
+  // Infinite scroll — fetch the next 100 once the grid reports the user has
+  // scrolled near the bottom of what's currently loaded
+  const handleNearEnd = useCallback(() => {
+    if (hasNextPage && !isFetchingNextPage) fetchNextPage()
+  }, [hasNextPage, isFetchingNextPage, fetchNextPage])
 
   const { data: dbHints } = useSkuAutocompleteHintsQuery()
   const autocomplete = useSkuAutocomplete(dbHints, mergedRows)
@@ -525,7 +536,7 @@ export function SkuCleanupPage() {
     </>
   ) : (
     <>
-      All {selectedCount} item{selectedCount !== 1 ? "s" : ""} on this page are selected.
+      All {selectedCount} loaded item{selectedCount !== 1 ? "s" : ""} are selected.
       {totalItems > selectedCount && (
         <>
           {" "}
@@ -586,10 +597,7 @@ export function SkuCleanupPage() {
               className="h-8 pl-8 text-sm"
               placeholder={t("sku.grid.searchSkus")}
               value={search}
-              onChange={(e) => {
-                setSearch(e.target.value)
-                setPage(1)
-              }}
+              onChange={(e) => setSearch(e.target.value)}
             />
           </div>
           <Button variant="outline" size="sm" onClick={() => setShowSapImportModal(true)}>
@@ -633,10 +641,7 @@ export function SkuCleanupPage() {
                   ? "bg-background text-foreground shadow-sm ring-1 ring-border/60"
                   : "text-muted-foreground hover:text-foreground",
               )}
-              onClick={() => {
-                setStatusTab(tab.key)
-                setPage(1)
-              }}
+              onClick={() => setStatusTab(tab.key)}
             >
               {tab.label}
               <Badge
@@ -725,41 +730,27 @@ export function SkuCleanupPage() {
                 headerIndeterminate={false}
                 onHeaderToggle={onHeaderToggle}
                 autocomplete={autocomplete}
+                onNearEnd={handleNearEnd}
               />
             </div>
           )}
         </div>
 
-        {/* Pagination */}
+        {/* Infinite-scroll status line — replaces the old Prev/Next pager.
+            Reserves its height always so the grid below doesn't jump. */}
         {totalItems > 0 && (
-          <div className="flex items-center justify-center gap-3 border-t bg-background/80 px-4 py-2 text-sm">
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-8 gap-1"
-              disabled={page <= 1 || isFetching}
-              onClick={() => setPage((p) => Math.max(1, p - 1))}
-            >
-              <ChevronLeft className="h-3.5 w-3.5" />
-              {t("sku.cleanup.pagination.prev")}
-            </Button>
-            <span className="text-xs text-muted-foreground tabular-nums">
-              {t("sku.cleanup.pagination.pageOf", {
-                page,
-                pages: totalPages,
+          <div className="flex h-8 shrink-0 items-center justify-center gap-2 border-t bg-background/80 px-4 text-xs text-muted-foreground tabular-nums">
+            {isFetchingNextPage ? (
+              <>
+                <Loader2 className="h-3 w-3 animate-spin" />
+                {t("sku.cleanup.pagination.loadingMore")}
+              </>
+            ) : (
+              t("sku.cleanup.pagination.loadedOf", {
+                loaded: mergedRows.length,
                 total: totalItems,
-              })}
-            </span>
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-8 gap-1"
-              disabled={page >= totalPages || isFetching}
-              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-            >
-              {t("sku.cleanup.pagination.next")}
-              <ChevronRight className="h-3.5 w-3.5" />
-            </Button>
+              })
+            )}
           </div>
         )}
       </div>
@@ -848,6 +839,7 @@ export function SkuCleanupPage() {
         onRowsChange={handleRowsChange}
         dropdowns={dropdowns}
         autocomplete={autocomplete}
+        onNearEnd={handleNearEnd}
         actions={
           <Button
             size="sm"

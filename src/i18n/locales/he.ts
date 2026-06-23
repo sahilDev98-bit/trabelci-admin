@@ -802,9 +802,8 @@ const he = {
         cleaned: "מנוקה",
       },
       pagination: {
-        prev: "הקודם",
-        next: "הבא",
-        pageOf: "עמוד {{page}} מתוך {{pages}} ({{total}} פריטים)",
+        loadingMore: "טוען עוד…",
+        loadedOf: "מוצגים {{loaded}} מתוך {{total}} פריטים",
       },
     },
 

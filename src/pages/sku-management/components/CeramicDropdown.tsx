@@ -68,9 +68,16 @@ export function CeramicDropdown({
     return () => document.removeEventListener("mousedown", handleClick, true)
   }, [onClose])
 
-  // Close on scroll or resize
+  // Close on scroll OUTSIDE the dropdown (e.g. the grid panel scrolling,
+  // which moves the trigger and would leave the popover mispositioned) or
+  // on resize. Scrolling the dropdown's own search/list must NOT close it —
+  // that scroll event is still observable here via the capture-phase
+  // listener on window, so it has to be explicitly excluded.
   useEffect(() => {
-    const close = () => onClose()
+    const close = (e: Event) => {
+      if (popoverRef.current?.contains(e.target as Node)) return
+      onClose()
+    }
     window.addEventListener("scroll", close, true)
     window.addEventListener("resize", close)
     return () => {

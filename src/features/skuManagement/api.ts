@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { apiFetch } from "@/lib/apiClient"
 import { API_ENDPOINTS } from "@/lib/apiEndpoints"
 import { skuQueryKeys } from "./queryKeys"
@@ -256,6 +256,22 @@ export function useSkuMetadataListQuery(filters: SkuMetadataFilters = {}) {
   return useQuery({
     queryKey: skuQueryKeys.metadata.list(filters),
     queryFn: () => fetchSkuMetadataList(filters),
+  })
+}
+
+const INFINITE_PAGE_SIZE = 100
+
+// Infinite-scroll variant — `page` is managed internally by React Query as
+// the fetch cursor, not passed in by the caller. `filters` should NOT
+// include `page`/`pageSize`; pageSize is fixed at INFINITE_PAGE_SIZE so the
+// "load next 100 near the bottom" behavior is consistent everywhere it's used.
+export function useSkuMetadataInfiniteQuery(filters: Omit<SkuMetadataFilters, "page" | "pageSize"> = {}) {
+  return useInfiniteQuery({
+    queryKey: skuQueryKeys.metadata.infiniteList(filters),
+    queryFn: ({ pageParam }) =>
+      fetchSkuMetadataList({ ...filters, page: pageParam, pageSize: INFINITE_PAGE_SIZE }),
+    initialPageParam: 1,
+    getNextPageParam: (lastPage) => (lastPage.hasMore ? lastPage.page + 1 : undefined),
   })
 }
 
