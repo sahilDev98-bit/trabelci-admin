@@ -20,9 +20,9 @@ import {
   ShoppingBagIcon,
   BuildingIcon,
   UserIcon,
-  // HomeIcon,
-  // MessageSquareIcon,
-  // PaletteIcon,
+  HomeIcon,
+  MessageSquareIcon,
+  PaletteIcon,
   EyeIcon,
   ScanBarcodeIcon,
 } from "lucide-react"
@@ -69,6 +69,7 @@ interface NavLeaf {
   adminOnly?: boolean
   merchantOnly?: boolean
   nonAdminOnly?: boolean
+  superUserOnly?: boolean
 }
 
 interface NavGroup {
@@ -78,6 +79,7 @@ interface NavGroup {
   labelKey: string
   adminOnly?: boolean
   nonAdminOnly?: boolean
+  superUserOnly?: boolean
   children: NavLeaf[]
 }
 
@@ -85,7 +87,7 @@ type NavEntry = NavLeaf | NavGroup
 
 const navEntries: NavEntry[] = [
   { type: "link", to: ROUTES.DASHBOARD, icon: LayoutDashboardIcon, labelKey: "nav.dashboard" },
-  // { type: "link", to: ROUTES.HOMEPAGE, icon: HomeIcon, labelKey: "nav.homepage", adminOnly: true },
+  { type: "link", to: ROUTES.HOMEPAGE, icon: HomeIcon, labelKey: "nav.homepage", adminOnly: true, superUserOnly: true },
   {
     type: "group",
     key: "catalog",
@@ -121,8 +123,8 @@ const navEntries: NavEntry[] = [
   },
   { type: "link", to: ROUTES.USERS, icon: UsersIcon, labelKey: "nav.users", adminOnly: true },
   { type: "link", to: ROUTES.MERCHANT_EMPLOYEES, icon: UserIcon, labelKey: "nav.employees", merchantOnly: true },
-  // { type: "link", to: ROUTES.WHATSAPP_TEMPLATES, icon: MessageSquareIcon, labelKey: "nav.whatsappTemplates", adminOnly: true },
-  // { type: "link", to: ROUTES.BRANDING, icon: PaletteIcon, labelKey: "nav.branding", adminOnly: true },
+  { type: "link", to: ROUTES.WHATSAPP_TEMPLATES, icon: MessageSquareIcon, labelKey: "nav.whatsappTemplates", adminOnly: true, superUserOnly: true },
+  { type: "link", to: ROUTES.BRANDING, icon: PaletteIcon, labelKey: "nav.branding", adminOnly: true, superUserOnly: true },
   { type: "link", to: ROUTES.FIELD_VISIBILITY, icon: EyeIcon, labelKey: "nav.fieldVisibility", adminOnly: true },
   {
     type: "group",
@@ -285,6 +287,7 @@ export function AdminLayout() {
   const profile = useAppSelector((s) => s.auth.profile)
   const isAdmin = profile?.role === USER_ROLES.ADMIN
   const isMerchant = profile?.role === USER_ROLES.MERCHANT
+  const isSuperUser = profile?.email === "rafel1995@gmail.com"
 
   // Auto-open groups whose children are active on mount
   const [openGroups, setOpenGroups] = useState<Set<string>>(() => {
@@ -353,6 +356,7 @@ export function AdminLayout() {
                   if (entry.adminOnly && !isAdmin) return null
                   if (entry.merchantOnly && !isMerchant) return null
                   if (entry.nonAdminOnly && isAdmin) return null
+                  if (entry.superUserOnly && !isSuperUser) return null
                   return (
                     <SidebarNavLink
                       key={entry.to}
@@ -366,6 +370,7 @@ export function AdminLayout() {
 
                 if (entry.adminOnly && !isAdmin) return null
                 if (entry.nonAdminOnly && isAdmin) return null
+                if (entry.superUserOnly && !isSuperUser) return null
                 return (
                   <SidebarGroup
                     key={entry.key}
