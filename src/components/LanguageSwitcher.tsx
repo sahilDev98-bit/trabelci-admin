@@ -1,43 +1,36 @@
 import { useTranslation } from "react-i18next"
-import { GlobeIcon } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
-import { LANGUAGES, LANGUAGE_LABELS, persistLanguage } from "@/i18n"
+import { LANGUAGES, persistLanguage } from "@/i18n"
 import type { Language } from "@/i18n"
 
-export function LanguageSwitcher() {
-  const { i18n } = useTranslation()
+const NEXT_LANGUAGE: Record<Language, Language> = {
+  [LANGUAGES.EN]: LANGUAGES.HE,
+  [LANGUAGES.HE]: LANGUAGES.EN,
+}
 
-  const changeLanguage = (lang: Language) => {
-    i18n.changeLanguage(lang)
-    persistLanguage(lang)
+// Same convention as the dark/light toggle (which shows the Sun icon while
+// dark, Moon while light): the label shown is the language a click will
+// switch TO, not the one currently active.
+const SHORT_LABEL: Record<Language, string> = {
+  [LANGUAGES.EN]: "EN",
+  [LANGUAGES.HE]: "עב",
+}
+
+export function LanguageSwitcher() {
+  const { t, i18n } = useTranslation()
+  const current = (i18n.language as Language) in NEXT_LANGUAGE ? (i18n.language as Language) : LANGUAGES.EN
+  const next = NEXT_LANGUAGE[current]
+
+  const toggleLanguage = () => {
+    i18n.changeLanguage(next)
+    persistLanguage(next)
   }
 
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button variant="outline" size="icon">
-          <GlobeIcon className="size-4" />
-          <span className="sr-only">{LANGUAGE_LABELS[i18n.language as Language]}</span>
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end">
-        {Object.entries(LANGUAGES).map(([, lang]) => (
-          <DropdownMenuItem
-            key={lang}
-            onClick={() => changeLanguage(lang)}
-            className={i18n.language === lang ? "bg-accent" : ""}
-          >
-            {LANGUAGE_LABELS[lang]}
-          </DropdownMenuItem>
-        ))}
-      </DropdownMenuContent>
-    </DropdownMenu>
+    <Button variant="outline" size="icon" onClick={toggleLanguage}>
+      <span className="text-xs font-bold tracking-tight">{SHORT_LABEL[next]}</span>
+      <span className="sr-only">{t("common.toggleLanguage")}</span>
+    </Button>
   )
 }

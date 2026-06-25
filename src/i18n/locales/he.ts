@@ -6,6 +6,7 @@ const he = {
     signingIn: "מתחבר...",
     signOut: "התנתק",
     toggleTheme: "החלף ערכת נושא",
+    toggleLanguage: "החלף שפה",
     toggleSidebar: "החלף סרגל צד",
     expandSidebar: "הרחב סרגל צד",
     loading: "טוען...",

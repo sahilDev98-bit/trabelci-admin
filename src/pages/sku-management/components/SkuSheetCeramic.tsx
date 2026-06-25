@@ -129,7 +129,8 @@ const COLUMNS: CeramicColumn[] = [
   { field: "supplier",           type: "supplier-autocomplete", minWidth: 130 },
   { field: "series",             type: "supplier-autocomplete", minWidth: 120 },
   { field: "color",              type: "supplier-autocomplete", minWidth: 110 },
-  // size / shade / country_of_origin / finish keep controlled-vocabulary dropdowns
+  // size / country_of_origin / finish keep controlled-vocabulary dropdowns;
+  // shade is a free-text field like supplier/series/color (no dropdown)
   { field: "size",               type: "dropdown",              minWidth: 130, dropdownKey: "size"              },
   { field: "finish",             type: "dropdown",              minWidth: 125, dropdownKey: "finish"            },
   { field: "product_image_urls", type: "image-multi",           minWidth: 170, imageType: "product" },
@@ -137,7 +138,7 @@ const COLUMNS: CeramicColumn[] = [
   { field: "country_of_origin",  type: "dropdown",              minWidth: 130, dropdownKey: "country_of_origin" },
   { field: "qty_per_carton",     type: "supplier-autocomplete", minWidth: 110 },
   { field: "qty_per_pallet",     type: "supplier-autocomplete", minWidth: 110 },
-  { field: "shade",              type: "dropdown",              minWidth: 110, dropdownKey: "shade" },
+  { field: "shade",              type: "supplier-autocomplete", minWidth: 110 },
   { field: "supplier_code",      type: "supplier-autocomplete", minWidth: 110 },
   { field: "display_name_en",    type: "supplier-autocomplete", minWidth: 180 },
   { field: "series_en",          type: "supplier-autocomplete", minWidth: 120 },
@@ -369,11 +370,12 @@ const CERAMIC_CSS = `
     /* outline: none suppresses the browser's native focus ring (black border)
        that appears on Windows when pressing ALT or navigating with keyboard */
     outline: none;
-    /* 8px fills the grid column-gap; the faint separator shadow makes the
-       frozen edge crisp so any minor card-shadow bleed is imperceptible */
-    box-shadow:
-      8px 0 0 0 var(--ceramic-sticky-bg),
-      2px 0 6px -1px rgba(20, 24, 48, 0.07);
+    /* 8px fills the grid column-gap so nothing peeks through as the row
+       scrolls behind the frozen column — solid, same color as the row
+       itself, so it's invisible rather than a visible "divider" line. No
+       extra drop-shadow here on purpose: that line is exactly what reads
+       as a seam/divider between frozen and scrolling columns. */
+    box-shadow: 8px 0 0 0 var(--ceramic-sticky-bg);
   }
   .ceramic-cell-sticky-0 {
     /* inset-inline-start: left edge in LTR (English), right edge in RTL
@@ -401,7 +403,6 @@ const CERAMIC_CSS = `
     z-index: 6;
     box-shadow:
       8px 0 0 0 var(--ceramic-sticky-bg),
-      2px 0 6px -1px rgba(20, 24, 48, 0.07),
       0 -4px 0 0 var(--ceramic-sticky-bg),
       0 10px 0 0 var(--ceramic-sticky-bg);
   }
@@ -418,9 +419,7 @@ const CERAMIC_CSS = `
      extend toward the left (column-gap / rest of the grid) instead of
      the right, and cover the panel's right padding instead of its left */
   html[dir="rtl"] .ceramic-cell-sticky {
-    box-shadow:
-      -8px 0 0 0 var(--ceramic-sticky-bg),
-      -2px 0 6px -1px rgba(20, 24, 48, 0.07);
+    box-shadow: -8px 0 0 0 var(--ceramic-sticky-bg);
   }
   html[dir="rtl"] .ceramic-cell-sticky-0 {
     box-shadow: 4px 0 0 0 var(--ceramic-sticky-bg), -8px 0 0 0 var(--ceramic-sticky-bg);
@@ -428,7 +427,6 @@ const CERAMIC_CSS = `
   html[dir="rtl"] .ceramic-head.ceramic-cell-sticky {
     box-shadow:
       -8px 0 0 0 var(--ceramic-sticky-bg),
-      -2px 0 6px -1px rgba(20, 24, 48, 0.07),
       0 -4px 0 0 var(--ceramic-sticky-bg),
       0 10px 0 0 var(--ceramic-sticky-bg);
   }
@@ -465,6 +463,45 @@ const CERAMIC_CSS = `
 
   .ceramic-rect[data-validation-tint] {
     background: var(--ceramic-rect-bg);
+  }
+
+  /* Original SAP Name (Cleanup grid) — keeps its normal gray pill card
+     (same as every other text cell, e.g. SKU) so it still reads as a
+     value, not floating text. The EXTRA layer behind that pill — this
+     column's opaque near-black sticky backdrop — now only covers the
+     leading 50% of the cell (where the pill itself actually sits); the
+     trailing 50% (the otherwise-empty space before the next column) is
+     transparent instead of a big solid block. Body cells only — the
+     header keeps its full backdrop, and every other sticky column
+     (checkbox/#/SKU) is untouched. */
+  .ceramic-cell.ceramic-cell-sticky[data-field="original_sap_name"] {
+    background: linear-gradient(to right, var(--ceramic-sticky-bg) 80%, transparent 50%);
+    box-shadow: none;
+  }
+  html[dir="rtl"] .ceramic-cell.ceramic-cell-sticky[data-field="original_sap_name"] {
+    background: linear-gradient(to left, var(--ceramic-sticky-bg) 80%, transparent 50%);
+  }
+  /* Expanded (full text visible, via the ↔ column-expand toggle) — the
+     class lives on the inner .ceramic-rect, not this outer cell, hence
+     :has(). Wider backdrop here since the longer revealed text needs more
+     of the cell covered. */
+  .ceramic-cell.ceramic-cell-sticky[data-field="original_sap_name"]:has(.ceramic-col-expanded) {
+    background: linear-gradient(to right, var(--ceramic-sticky-bg) 95%, transparent 50%);
+  }
+  html[dir="rtl"] .ceramic-cell.ceramic-cell-sticky[data-field="original_sap_name"]:has(.ceramic-col-expanded) {
+    background: linear-gradient(to left, var(--ceramic-sticky-bg) 95%, transparent 50%);
+  }
+
+  /* SKU / ItemCode (New Creation grid only — Cleanup's SKU column is
+     untouched) — same treatment as Original SAP Name above: keep the
+     normal gray pill, just shrink its sticky backdrop to the leading 50%
+     of the cell instead of a full solid block. */
+  .ceramic-sheet-root[data-mode="creation"] .ceramic-cell.ceramic-cell-sticky[data-field="sku"] {
+    background: linear-gradient(to right, var(--ceramic-sticky-bg) 80%, transparent 50%);
+    box-shadow: none;
+  }
+  html[dir="rtl"] .ceramic-sheet-root[data-mode="creation"] .ceramic-cell.ceramic-cell-sticky[data-field="sku"] {
+    background: linear-gradient(to left, var(--ceramic-sticky-bg) 80%, transparent 50%);
   }
 
   .ceramic-field {
@@ -867,11 +904,13 @@ const CERAMIC_CSS = `
     opacity: .15;
   }
 
-  /* Multi-cell range selection (Shift+Click / Shift+↑↓ / Ctrl+A) */
+  /* Multi-cell range selection (Shift+Click / Shift+↑↓ / Ctrl+A) — border only,
+     the cell keeps its normal background so text stays readable. A previous
+     version of this rule also swapped in a light/white background-image,
+     which the dark theme never overrode, so active cells went white and the
+     text became unreadable. */
   .ceramic-sel-cell {
     box-shadow: inset 0 0 0 2px rgba(24,26,34,.45) !important;
-    background-image: linear-gradient(rgba(24,26,34,.07), rgba(24,26,34,.07)),
-      linear-gradient(180deg, #ffffff, var(--ceramic-cell-soft)) !important;
   }
   .dark .ceramic-sel-cell {
     box-shadow: inset 0 0 0 2px rgba(255,255,255,.55) !important;
@@ -1403,7 +1442,13 @@ const CeramicRow = memo(function CeramicRow({
 
         // text cell
         return (
-          <div key={col.field} className={cellClassName(colIndex)} data-row-index={rowIndex} title={issue?.message}>
+          <div
+            key={col.field}
+            className={cellClassName(colIndex)}
+            data-row-index={rowIndex}
+            data-field={col.field}
+            title={issue?.message}
+          >
             <TextCellWrapper
               initialValue={getFieldValue(row, col.field)}
               clientId={row._clientId ?? row.sku}
@@ -2832,7 +2877,7 @@ export const SkuSheetCeramic = forwardRef<SkuSheetCeramicHandle, SkuSheetCeramic
   // the browser's native copy/paste for plain text only.)
 
   return (
-    <div ref={containerRef} className={`ceramic-sheet-root${showCheckbox ? " ceramic-has-checkbox" : ""}`}>
+    <div ref={containerRef} className={`ceramic-sheet-root${showCheckbox ? " ceramic-has-checkbox" : ""}`} data-mode={mode}>
       <style>{CERAMIC_CSS}</style>
 
       <div className="ceramic-panel">

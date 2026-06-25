@@ -6,6 +6,7 @@ const en = {
     signingIn: "Signing in...",
     signOut: "Sign out",
     toggleTheme: "Toggle theme",
+    toggleLanguage: "Switch language",
     toggleSidebar: "Toggle sidebar",
     expandSidebar: "Expand sidebar",
     loading: "Loading...",
