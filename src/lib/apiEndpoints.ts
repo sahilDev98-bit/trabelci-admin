@@ -36,6 +36,7 @@ export const API_ENDPOINTS = {
   SKU_METADATA_BULK: "/sku/metadata/bulk",
   SKU_METADATA_BULK_DELETE: "/sku/metadata/bulk",
   SKU_DROPDOWNS: "/sku/dropdowns",
+  SKU_DROPDOWNS_SUGGEST_LABELS: "/sku/dropdowns/suggest-labels",
   SKU_TEMPLATES: "/sku/templates",
   SKU_VALIDATE: "/sku/validate",
   SKU_CHECK_DUPLICATES: "/sku/check-duplicates",

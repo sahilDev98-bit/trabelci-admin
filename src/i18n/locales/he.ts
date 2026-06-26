@@ -876,6 +876,8 @@ const he = {
       failedToRemove: "הסרה נכשלה",
       enLabel: "תווית EN",
       heLabel: "תווית HE",
+      showMore: "הצג {{count}} עוד",
+      showLess: "הצג פחות",
     },
   },
 } as const

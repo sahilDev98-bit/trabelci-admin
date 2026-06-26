@@ -892,6 +892,8 @@ const en = {
       failedToRemove: "Failed to remove",
       enLabel: "EN label",
       heLabel: "HE label",
+      showMore: "Show {{count}} more",
+      showLess: "Show less",
     },
   },
 } as const

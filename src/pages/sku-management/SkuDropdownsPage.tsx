@@ -1,7 +1,7 @@
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { useNavigate } from "@tanstack/react-router"
 import { useTranslation } from "react-i18next"
-import { ArrowLeft, Plus, Pencil, Trash2, Loader2, Check, X } from "lucide-react"
+import { ArrowLeft, Plus, Pencil, Trash2, Loader2, Check, X, ChevronDown, ChevronUp } from "lucide-react"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -12,8 +12,47 @@ import {
   useCreateSkuDropdownValueMutation,
   useUpdateSkuDropdownValueMutation,
   useDeleteSkuDropdownValueMutation,
+  useSuggestSkuDropdownLabelsMutation,
 } from "@/features/skuManagement/api"
 import type { SkuDropdownValue } from "@/features/skuManagement/types"
+
+// Rows visible before a card collapses behind "Show more" — keeps every
+// field's card the same fixed height regardless of how many values it has
+// (Size has 19, Finish has 7 — without this the grid looked ragged).
+const COLLAPSED_ROW_COUNT = 6
+const ROW_HEIGHT_PX = 32
+
+// How long to wait after the last keystroke in the canonical Value box
+// before asking the AI to suggest labels — long enough that normal typing
+// speed never fires a request mid-word, short enough to feel responsive
+// once you actually pause.
+const LABEL_SUGGEST_DEBOUNCE_MS = 600
+
+// Thin, theme-matched scrollbar for the collapsed value list — same colors
+// as the SKU grid's scrollbar (.ceramic-panel) — instead of the browser's
+// default light/white one, which stood out against this dark UI.
+const SCROLLBAR_CSS = `
+  .dropdown-values-scroll {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(30,36,60,.25) transparent;
+  }
+  .dropdown-values-scroll::-webkit-scrollbar {
+    width: 6px;
+  }
+  .dropdown-values-scroll::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .dropdown-values-scroll::-webkit-scrollbar-thumb {
+    background: rgba(30,36,60,.25);
+    border-radius: 8px;
+  }
+  .dark .dropdown-values-scroll {
+    scrollbar-color: rgba(255,255,255,.18) transparent;
+  }
+  .dark .dropdown-values-scroll::-webkit-scrollbar-thumb {
+    background: rgba(255,255,255,.18);
+  }
+`
 
 export function SkuDropdownsPage() {
   const { t } = useTranslation()
@@ -22,6 +61,7 @@ export function SkuDropdownsPage() {
   const create = useCreateSkuDropdownValueMutation()
   const update = useUpdateSkuDropdownValueMutation()
   const del = useDeleteSkuDropdownValueMutation()
+  const suggestLabels = useSuggestSkuDropdownLabelsMutation()
 
   const [addingTo, setAddingTo] = useState<string | null>(null)
   const [newValue, setNewValue] = useState("")
@@ -31,6 +71,22 @@ export function SkuDropdownsPage() {
   const [editValue, setEditValue] = useState("")
   const [editLabelEn, setEditLabelEn] = useState("")
   const [editLabelHe, setEditLabelHe] = useState("")
+  const [expandedFields, setExpandedFields] = useState<Set<string>>(new Set())
+  // True once the user types directly into either label box themselves —
+  // distinguishes "the AI suggested this" (safe to replace if the value
+  // changes again) from "the user typed this" (never overwrite). Without
+  // this, checking "are the labels non-empty" alone would also block
+  // re-suggesting after the FIRST AI suggestion already filled them in.
+  const [labelsManuallyEdited, setLabelsManuallyEdited] = useState(false)
+
+  const toggleExpanded = (fieldKey: string) => {
+    setExpandedFields((prev) => {
+      const next = new Set(prev)
+      if (next.has(fieldKey)) next.delete(fieldKey)
+      else next.add(fieldKey)
+      return next
+    })
+  }
 
   // Field keys that have managed dropdown values
   const fieldKeys = Object.keys(
@@ -51,6 +107,7 @@ export function SkuDropdownsPage() {
       setNewValue("")
       setNewLabelEn("")
       setNewLabelHe("")
+      setLabelsManuallyEdited(false)
       setAddingTo(null)
       toast.success(t("sku.dropdowns.added"))
     } catch (err: unknown) {
@@ -63,6 +120,34 @@ export function SkuDropdownsPage() {
       }
     }
   }
+
+  // Debounced auto-suggest: waits for a pause in typing the canonical value
+  // (not every keystroke — that would spam the AI mid-word) before asking
+  // for label suggestions. Re-arms on every change to newValue; the cleanup
+  // function cancels the previous timer, so only the LAST pause within
+  // LABEL_SUGGEST_DEBOUNCE_MS actually fires a request. Skips entirely once
+  // the user has typed into either label box directly (labelsManuallyEdited)
+  // — but as long as that hasn't happened, it keeps re-suggesting every time
+  // the value changes, even overwriting an EARLIER AI suggestion, since that
+  // earlier suggestion was never something the user actually asked to keep.
+  useEffect(() => {
+    if (!addingTo || !newValue.trim() || labelsManuallyEdited) return
+
+    const timer = setTimeout(() => {
+      suggestLabels.mutate(
+        { value: newValue.trim(), fieldKey: addingTo },
+        {
+          onSuccess: (suggestion) => {
+            setNewLabelEn(suggestion.label_en)
+            setNewLabelHe(suggestion.label_he)
+          },
+        }
+      )
+    }, LABEL_SUGGEST_DEBOUNCE_MS)
+
+    return () => clearTimeout(timer)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [newValue, addingTo, labelsManuallyEdited])
 
   const handleUpdate = async (id: number) => {
     try {
@@ -97,6 +182,7 @@ export function SkuDropdownsPage() {
 
   return (
     <div className="mx-auto max-w-4xl space-y-6 p-6">
+      <style>{SCROLLBAR_CSS}</style>
       <div className="flex items-center gap-3">
         <Button
           variant="ghost"
@@ -111,19 +197,31 @@ export function SkuDropdownsPage() {
         </div>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-2">
+      {/* items-start: without it, CSS Grid stretches every card in a row to
+          match the tallest one — so expanding one card's "Show more" also
+          visually grew its row-neighbor, even though that neighbor's own
+          state never changed. Each card now sizes to its own content only. */}
+      <div className="grid items-start gap-4 md:grid-cols-2">
         {fieldKeys.map((fieldKey) => {
           const values: SkuDropdownValue[] = dropdowns[fieldKey] ?? []
           const fieldLabel = t(`sku.fieldLabels.${fieldKey}`, fieldKey)
+          const isExpanded = expandedFields.has(fieldKey)
+          const isCollapsible = values.length > COLLAPSED_ROW_COUNT
           return (
-            <Card key={fieldKey}>
+            <Card key={fieldKey} className="flex flex-col">
               <CardHeader className="pb-2">
                 <div className="flex items-center justify-between">
                   <CardTitle className="text-sm">{fieldLabel}</CardTitle>
                   <Badge variant="secondary">{values.length}</Badge>
                 </div>
               </CardHeader>
-              <CardContent className="space-y-1">
+              <CardContent className="flex flex-col">
+                <div
+                  className="dropdown-values-scroll space-y-1 overflow-y-auto transition-[max-height] duration-200"
+                  style={{
+                    maxHeight: isCollapsible && !isExpanded ? COLLAPSED_ROW_COUNT * ROW_HEIGHT_PX : undefined,
+                  }}
+                >
                 {values.map((v) => (
                   <div
                     key={v.id}
@@ -202,6 +300,7 @@ export function SkuDropdownsPage() {
                     )}
                   </div>
                 ))}
+                </div>
 
                 {addingTo === fieldKey ? (
                   <div className="mt-2 flex items-center gap-1.5">
@@ -216,18 +315,36 @@ export function SkuDropdownsPage() {
                         if (e.key === "Escape") setAddingTo(null)
                       }}
                     />
-                    <Input
-                      className="h-7 w-24 text-xs"
-                      placeholder={t("sku.dropdowns.enLabel")}
-                      value={newLabelEn}
-                      onChange={(e) => setNewLabelEn(e.target.value)}
-                    />
-                    <Input
-                      className="h-7 w-20 text-xs"
-                      placeholder={t("sku.dropdowns.heLabel")}
-                      value={newLabelHe}
-                      onChange={(e) => setNewLabelHe(e.target.value)}
-                    />
+                    <div className="relative">
+                      <Input
+                        className={`h-7 w-24 text-xs ${suggestLabels.isPending ? "animate-pulse pe-5" : ""}`}
+                        placeholder={t("sku.dropdowns.enLabel")}
+                        value={newLabelEn}
+                        disabled={suggestLabels.isPending}
+                        onChange={(e) => {
+                          setNewLabelEn(e.target.value)
+                          setLabelsManuallyEdited(true)
+                        }}
+                      />
+                      {suggestLabels.isPending && (
+                        <Loader2 className="absolute inset-e-1.5 top-1/2 h-3 w-3 -translate-y-1/2 animate-spin text-muted-foreground" />
+                      )}
+                    </div>
+                    <div className="relative">
+                      <Input
+                        className={`h-7 w-20 text-xs ${suggestLabels.isPending ? "animate-pulse pe-5" : ""}`}
+                        placeholder={t("sku.dropdowns.heLabel")}
+                        value={newLabelHe}
+                        disabled={suggestLabels.isPending}
+                        onChange={(e) => {
+                          setNewLabelHe(e.target.value)
+                          setLabelsManuallyEdited(true)
+                        }}
+                      />
+                      {suggestLabels.isPending && (
+                        <Loader2 className="absolute inset-e-1.5 top-1/2 h-3 w-3 -translate-y-1/2 animate-spin text-muted-foreground" />
+                      )}
+                    </div>
                     <Button
                       variant="ghost"
                       size="icon"
@@ -241,7 +358,10 @@ export function SkuDropdownsPage() {
                       variant="ghost"
                       size="icon"
                       className="h-6 w-6"
-                      onClick={() => setAddingTo(null)}
+                      onClick={() => {
+                        setAddingTo(null)
+                        setLabelsManuallyEdited(false)
+                      }}
                     >
                       <X className="h-3 w-3" />
                     </Button>
@@ -256,10 +376,32 @@ export function SkuDropdownsPage() {
                       setNewValue("")
                       setNewLabelEn("")
                       setNewLabelHe("")
+                      setLabelsManuallyEdited(false)
                     }}
                   >
                     <Plus className="mr-1 h-3 w-3" />
                     {t("sku.dropdowns.addValue")}
+                  </Button>
+                )}
+
+                {isCollapsible && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="mt-1 h-7 w-full justify-center text-xs text-muted-foreground"
+                    onClick={() => toggleExpanded(fieldKey)}
+                  >
+                    {isExpanded ? (
+                      <>
+                        <ChevronUp className="mr-1 h-3 w-3" />
+                        {t("sku.dropdowns.showLess")}
+                      </>
+                    ) : (
+                      <>
+                        <ChevronDown className="mr-1 h-3 w-3" />
+                        {t("sku.dropdowns.showMore", { count: values.length - COLLAPSED_ROW_COUNT })}
+                      </>
+                    )}
                   </Button>
                 )}
               </CardContent>

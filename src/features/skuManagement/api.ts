@@ -98,6 +98,21 @@ export async function deleteSkuDropdownValue(id: number): Promise<void> {
   return apiFetch(`${API_ENDPOINTS.SKU_DROPDOWNS}/${id}`, { method: "DELETE" })
 }
 
+export interface SkuDropdownLabelSuggestion {
+  label_en: string
+  label_he: string
+}
+
+export async function suggestSkuDropdownLabels(
+  value: string,
+  fieldKey: string
+): Promise<SkuDropdownLabelSuggestion> {
+  return apiFetch(API_ENDPOINTS.SKU_DROPDOWNS_SUGGEST_LABELS, {
+    method: "POST",
+    body: JSON.stringify({ value, fieldKey }),
+  })
+}
+
 // ─── Templates ───────────────────────────────────────────────────────────────
 
 export async function fetchSkuTemplates(): Promise<SkuTemplate[]> {
@@ -441,6 +456,15 @@ export function useDeleteSkuDropdownValueMutation() {
   return useMutation({
     mutationFn: (id: number) => deleteSkuDropdownValue(id),
     onSuccess: () => qc.invalidateQueries({ queryKey: skuQueryKeys.dropdowns.all }),
+  })
+}
+
+// No invalidation — this only suggests text for the add-value form, it
+// never touches stored data.
+export function useSuggestSkuDropdownLabelsMutation() {
+  return useMutation({
+    mutationFn: ({ value, fieldKey }: { value: string; fieldKey: string }) =>
+      suggestSkuDropdownLabels(value, fieldKey),
   })
 }
 
