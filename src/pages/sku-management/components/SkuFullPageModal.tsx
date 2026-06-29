@@ -1,4 +1,5 @@
 import { useEffect } from "react"
+import { useTranslation } from "react-i18next"
 import { Minimize2 } from "lucide-react"
 import { SkuSheetCeramic } from "./SkuSheetCeramic"
 import type { SkuMetadataRow, SkuDropdownMap } from "@/features/skuManagement/types"
@@ -42,6 +43,7 @@ export function SkuFullPageModal({
   autocomplete,
   onNearEnd,
 }: SkuFullPageModalProps) {
+  const { t } = useTranslation()
   // Close on Escape
   useEffect(() => {
     if (!open) return
@@ -232,7 +234,7 @@ export function SkuFullPageModal({
             aria-label="Exit full page"
           >
             <Minimize2 size={13} />
-            Exit full page
+            {t("sku.exitFullPage")}
           </button>
         </div>
 

@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState } from "react"
-import { FileText, Upload, X, ChevronLeft, ChevronRight, CheckCircle, AlertCircle, Loader2 } from "lucide-react"
+import { FileText, Upload, X, ChevronLeft, ChevronRight, CheckCircle, AlertCircle, Loader2, ArrowLeft } from "lucide-react"
+import { useTranslation } from "react-i18next"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import {
@@ -16,22 +17,21 @@ import type { SkuMetadataRow } from "@/features/skuManagement/types"
 const FIELD_MAP: Array<{
   extracted: keyof PdfExtractedProduct
   row: keyof SkuMetadataRow
-  label: string
 }> = [
-  { extracted: "supplier_name",     row: "supplier",          label: "Supplier" },
-  { extracted: "supplier_code",     row: "supplier_code",     label: "Supplier Code" },
-  { extracted: "supplier_sku",      row: "supplier_sku",      label: "Supplier SKU" },
-  { extracted: "series",            row: "series",            label: "Series" },
-  { extracted: "series_english",    row: "series_en",         label: "Series (EN)" },
-  { extracted: "color",             row: "color",             label: "Color" },
-  { extracted: "color_english",     row: "color_en",          label: "Color (EN)" },
-  { extracted: "size",              row: "size",              label: "Size" },
-  { extracted: "finish",            row: "finish",            label: "Finish" },
-  { extracted: "country_of_origin", row: "country_of_origin", label: "Country of Origin" },
-  { extracted: "shade",             row: "shade",             label: "Shade" },
-  { extracted: "quantity_per_carton",  row: "qty_per_carton",  label: "Qty / Carton" },
-  { extracted: "quantity_per_pallet",  row: "qty_per_pallet",  label: "Qty / Pallet" },
-  { extracted: "name_english",      row: "display_name_en",   label: "Display Name (EN)" },
+  { extracted: "supplier_name",        row: "supplier"          },
+  { extracted: "supplier_code",        row: "supplier_code"     },
+  { extracted: "supplier_sku",         row: "supplier_sku"      },
+  { extracted: "series",               row: "series"            },
+  { extracted: "series_english",       row: "series_en"         },
+  { extracted: "color",                row: "color"             },
+  { extracted: "color_english",        row: "color_en"          },
+  { extracted: "size",                 row: "size"              },
+  { extracted: "finish",               row: "finish"            },
+  { extracted: "country_of_origin",    row: "country_of_origin" },
+  { extracted: "shade",                row: "shade"             },
+  { extracted: "quantity_per_carton",  row: "qty_per_carton"    },
+  { extracted: "quantity_per_pallet",  row: "qty_per_pallet"    },
+  { extracted: "name_english",         row: "display_name_en"   },
 ]
 
 const REQUIRED_EXTRACTED = [
@@ -60,6 +60,7 @@ interface UploadZoneProps {
 }
 
 function UploadZone({ files, onAdd, onRemove }: UploadZoneProps) {
+  const { t } = useTranslation()
   const inputRef = useRef<HTMLInputElement>(null)
   const [dragging, setDragging] = useState(false)
 
@@ -91,8 +92,8 @@ function UploadZone({ files, onAdd, onRemove }: UploadZoneProps) {
         ].join(" ")}
       >
         <Upload className="h-8 w-8 text-muted-foreground" />
-        <p className="text-sm font-medium">Drop PDFs here or click to browse</p>
-        <p className="text-xs text-muted-foreground">Up to 10 files · 20 MB each</p>
+        <p className="text-sm font-medium">{t("sku.pdfExtract.dropZoneText")}</p>
+        <p className="text-xs text-muted-foreground">{t("sku.pdfExtract.dropZoneHint")}</p>
         <input
           ref={inputRef}
           type="file"
@@ -148,28 +149,31 @@ interface ReviewStepProps {
 }
 
 function ReviewStep({ entries, selected, onToggle, activeIndex, onSetActive, onUpdate }: ReviewStepProps) {
+  const { t, i18n } = useTranslation()
+  const isRtl = i18n.dir() === "rtl"
   const active = entries[activeIndex]
 
   if (entries.length === 0) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
         <AlertCircle className="h-10 w-10 text-amber-500" />
-        <p className="text-sm font-medium">No products could be extracted</p>
+        <p className="text-sm font-medium">{t("sku.pdfExtract.noProducts")}</p>
         <p className="max-w-sm text-xs text-muted-foreground">
-          The PDF was processed but no product entries with a recognisable supplier SKU or
-          code were found. Make sure the PDF contains a product table with item codes, then
-          try again.
+          {t("sku.pdfExtract.noProductsDesc")}
         </p>
       </div>
     )
   }
+
+  const PrevIcon = isRtl ? ChevronRight : ChevronLeft
+  const NextIcon = isRtl ? ChevronLeft : ChevronRight
 
   return (
     <div className="flex h-full gap-4 overflow-hidden">
       {/* Left: product list */}
       <div className="flex w-56 shrink-0 flex-col gap-1 overflow-y-auto">
         {entries.map((entry, i) => {
-          const sku = entry.product.supplier_sku || entry.product.supplier_code || `Product ${i + 1}`
+          const sku = entry.product.supplier_sku || entry.product.supplier_code || `${t("sku.pdfExtract.productOf", { current: i + 1, total: entries.length })}`
           const description = [entry.product.series, entry.product.color, entry.product.size]
             .filter(Boolean)
             .join(" · ")
@@ -208,7 +212,7 @@ function ReviewStep({ entries, selected, onToggle, activeIndex, onSetActive, onU
                   className="h-3 w-3 accent-primary"
                 />
                 <span className={isSelected ? "text-primary" : "text-muted-foreground"}>
-                  {isSelected ? "Selected" : "Skip"}
+                  {isSelected ? t("sku.pdfExtract.selectedLabel") : t("sku.pdfExtract.skipLabel")}
                 </span>
               </div>
             </button>
@@ -227,10 +231,10 @@ function ReviewStep({ entries, selected, onToggle, activeIndex, onSetActive, onU
               onClick={() => onSetActive(activeIndex - 1)}
               className="flex items-center gap-1 rounded p-1 hover:bg-muted/50 disabled:opacity-30"
             >
-              <ChevronLeft className="h-3.5 w-3.5" /> Prev
+              <PrevIcon className="h-3.5 w-3.5" /> {t("sku.pdfExtract.prev")}
             </button>
             <span>
-              Product {activeIndex + 1} of {entries.length}
+              {t("sku.pdfExtract.productOf", { current: activeIndex + 1, total: entries.length })}
             </span>
             <button
               type="button"
@@ -238,7 +242,7 @@ function ReviewStep({ entries, selected, onToggle, activeIndex, onSetActive, onU
               onClick={() => onSetActive(activeIndex + 1)}
               className="flex items-center gap-1 rounded p-1 hover:bg-muted/50 disabled:opacity-30"
             >
-              Next <ChevronRight className="h-3.5 w-3.5" />
+              {t("sku.pdfExtract.next")} <NextIcon className="h-3.5 w-3.5" />
             </button>
           </div>
 
@@ -246,28 +250,29 @@ function ReviewStep({ entries, selected, onToggle, activeIndex, onSetActive, onU
           <div className="flex items-center gap-2">
             {active.complete ? (
               <Badge variant="outline" className="border-green-200 bg-green-50 text-green-700 dark:border-green-900 dark:bg-green-950/30 dark:text-green-400">
-                ✓ Complete
+                ✓ {t("sku.pdfExtract.complete")}
               </Badge>
             ) : (
               <Badge variant="outline" className="border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-400">
-                {active.missing_required.length} field{active.missing_required.length !== 1 ? "s" : ""} missing
+                {t("sku.pdfExtract.fieldsMissing", { count: active.missing_required.length })}
               </Badge>
             )}
             {active.docs.length > 0 && (
               <span className="text-xs text-muted-foreground">
-                from {active.docs.join(", ")}
+                {t("sku.pdfExtract.from")} {active.docs.join(", ")}
               </span>
             )}
           </div>
 
           {/* Fields grid */}
           <div className="grid grid-cols-2 gap-2">
-            {FIELD_MAP.map(({ extracted, label }) => {
+            {FIELD_MAP.map(({ extracted }) => {
               const value = active.product[extracted]
               const source = active.sources[extracted]
               const currentStr = value != null ? String(value) : ""
               const isMissingRequired = REQUIRED_EXTRACTED.includes(extracted) && !currentStr.trim()
               const hasValue = currentStr.trim() !== ""
+              const label = t(`sku.pdfExtract.fields.${extracted}`)
 
               return (
                 <div
@@ -285,7 +290,7 @@ function ReviewStep({ entries, selected, onToggle, activeIndex, onSetActive, onU
                   <input
                     type="text"
                     value={currentStr}
-                    placeholder={isMissingRequired ? "Required — not found" : "—"}
+                    placeholder={isMissingRequired ? t("sku.pdfExtract.requiredNotFound") : "—"}
                     onChange={(e) => onUpdate(activeIndex, extracted, e.target.value)}
                     className={[
                       "bg-transparent font-medium outline-none w-full",
@@ -319,6 +324,7 @@ interface PdfExtractModalProps {
 type Step = "upload" | "review"
 
 export function PdfExtractModal({ open, onClose, onApprove }: PdfExtractModalProps) {
+  const { t } = useTranslation()
   const [step, setStep] = useState<Step>("upload")
   const [files, setFiles] = useState<File[]>([])
   const [entries, setEntries] = useState<PdfExtractedEntry[]>([])
@@ -328,7 +334,6 @@ export function PdfExtractModal({ open, onClose, onApprove }: PdfExtractModalPro
   const extract = useSkuExtractFromPdfMutation()
 
   const handleClose = () => {
-    // reset on close
     setStep("upload")
     setFiles([])
     setEntries([])
@@ -396,6 +401,8 @@ export function PdfExtractModal({ open, onClose, onApprove }: PdfExtractModalPro
   }
 
   const selectedCount = selected.size
+  const completeCount = entries.filter((e) => e.complete).length
+  const incompleteCount = entries.filter((e) => !e.complete).length
 
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) handleClose() }}>
@@ -406,13 +413,15 @@ export function PdfExtractModal({ open, onClose, onApprove }: PdfExtractModalPro
         <DialogHeader className="border-b px-6 py-4">
           <DialogTitle className="flex items-center gap-2">
             <FileText className="h-4 w-4" />
-            Extract from PDF
+            {t("sku.pdfExtract.title")}
           </DialogTitle>
           {step === "review" && entries.length > 0 && (
             <p className="text-sm text-muted-foreground">
-              {entries.filter((e) => e.complete).length} complete ·{" "}
-              {entries.filter((e) => !e.complete).length} incomplete ·{" "}
-              {selectedCount} selected
+              {t("sku.pdfExtract.reviewSummary", {
+                complete: completeCount,
+                incomplete: incompleteCount,
+                selected: selectedCount,
+              })}
             </p>
           )}
         </DialogHeader>
@@ -423,7 +432,7 @@ export function PdfExtractModal({ open, onClose, onApprove }: PdfExtractModalPro
               <UploadZone files={files} onAdd={handleAddFiles} onRemove={handleRemoveFile} />
               {extract.isError && (
                 <p className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
-                  {extract.error instanceof Error ? extract.error.message : "Extraction failed"}
+                  {extract.error instanceof Error ? extract.error.message : t("sku.pdfExtract.extractionFailed")}
                 </p>
               )}
             </div>
@@ -445,7 +454,7 @@ export function PdfExtractModal({ open, onClose, onApprove }: PdfExtractModalPro
           {step === "upload" ? (
             <>
               <Button type="button" variant="outline" size="sm" onClick={handleClose}>
-                Cancel
+                {t("common.cancel")}
               </Button>
               <Button
                 type="button"
@@ -455,13 +464,15 @@ export function PdfExtractModal({ open, onClose, onApprove }: PdfExtractModalPro
               >
                 {extract.isPending ? (
                   <>
-                    <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
-                    Extracting…
+                    <Loader2 className="me-1.5 h-4 w-4 animate-spin" />
+                    {t("sku.pdfExtract.extracting")}
                   </>
                 ) : (
                   <>
-                    <FileText className="mr-1.5 h-4 w-4" />
-                    Extract from PDF{files.length > 1 ? `s (${files.length})` : ""}
+                    <FileText className="me-1.5 h-4 w-4" />
+                    {files.length > 1
+                      ? t("sku.pdfExtract.extractButtonPlural", { count: files.length })
+                      : t("sku.pdfExtract.extractButton")}
                   </>
                 )}
               </Button>
@@ -474,10 +485,11 @@ export function PdfExtractModal({ open, onClose, onApprove }: PdfExtractModalPro
                 size="sm"
                 onClick={() => { setStep("upload"); extract.reset() }}
               >
-                ← Back
+                <ArrowLeft className="me-1.5 h-4 w-4 rtl:rotate-180" />
+                {t("sku.pdfExtract.back")}
               </Button>
               <Button type="button" variant="outline" size="sm" onClick={handleClose}>
-                Cancel
+                {t("common.cancel")}
               </Button>
               <Button
                 type="button"
@@ -485,8 +497,8 @@ export function PdfExtractModal({ open, onClose, onApprove }: PdfExtractModalPro
                 onClick={handleApprove}
                 disabled={selectedCount === 0}
               >
-                <CheckCircle className="mr-1.5 h-4 w-4" />
-                Approve & Fill ({selectedCount})
+                <CheckCircle className="me-1.5 h-4 w-4" />
+                {t("sku.pdfExtract.approveButton", { count: selectedCount })}
               </Button>
             </>
           )}

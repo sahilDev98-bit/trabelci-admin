@@ -611,7 +611,7 @@ export function SkuCleanupPage() {
             title="Open grid in full page"
           >
             <Maximize2 className="mr-1 h-4 w-4" />
-            View in Full Page
+            {t("sku.viewFullPage")}
           </Button>
           <Button
             size="sm"

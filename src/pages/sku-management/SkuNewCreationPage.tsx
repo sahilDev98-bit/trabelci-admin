@@ -521,7 +521,7 @@ function CreationSheet({
             title="Open grid in full page"
           >
             <Maximize2 className="mr-1 h-4 w-4" />
-            View in Full Page
+            {t("sku.viewFullPage")}
           </Button>
           <Button
             variant="outline"
@@ -530,7 +530,7 @@ function CreationSheet({
             disabled={activeAction !== null}
           >
             <FileText className="mr-1 h-4 w-4" />
-            Extract from PDF
+            {t("sku.pdfExtract.extractButton")}
           </Button>
           <Button
             variant="outline"
@@ -670,7 +670,7 @@ function CreationSheet({
               disabled={activeAction !== null}
             >
               <FileText className="mr-1 h-4 w-4" />
-              Extract from PDF
+              {t("sku.pdfExtract.extractButton")}
             </Button>
             <Button
               variant="outline"

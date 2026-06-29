@@ -18,9 +18,9 @@ except ImportError:
 
 load_dotenv()
 
-api_key = os.getenv("OPENAIKEY")
+api_key = os.getenv("OPENAI_API_KEY") or os.getenv("OPENAIKEY")
 if not api_key:
-    print("ERROR: OPENAIKEY not found in .env file")
+    print("ERROR: OPENAI_API_KEY not found in environment")
     sys.exit(1)
 
 client = OpenAI(api_key=api_key)
