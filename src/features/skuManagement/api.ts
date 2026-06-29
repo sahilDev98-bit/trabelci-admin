@@ -265,6 +265,65 @@ export async function bulkDeleteSkuMetadataItems(
   })
 }
 
+// ─── PDF extraction ──────────────────────────────────────────────────────────
+
+export interface PdfExtractedProduct {
+  internal_category: string | null
+  supplier_name: string | null
+  series: string | null
+  color: string | null
+  size: string | null
+  finish: string | null
+  product_image: string | null
+  images: string[]
+  country_of_origin: string | null
+  order_quantity: string | null
+  unit_of_measure: string | null
+  quantity_per_carton: string | null
+  quantity_per_pallet: string | null
+  shade: string | null
+  supplier_code: string | null
+  name_english: string | null
+  series_english: string | null
+  color_english: string | null
+  supplier_sku: string | null
+}
+
+export interface PdfExtractedEntry {
+  product: PdfExtractedProduct
+  sources: Partial<Record<keyof PdfExtractedProduct, string>>
+  docs: string[]
+  missing_required: string[]
+  complete: boolean
+}
+
+export interface PdfExtractResponse {
+  products: PdfExtractedEntry[]
+  total: number
+  complete: number
+}
+
+export async function extractSkuFromPdf(files: File[]): Promise<PdfExtractResponse> {
+  const form = new FormData()
+  for (const file of files) {
+    form.append("pdfs", file)
+  }
+
+  // In dev: call Python server directly (same as POC) so we don't depend on the
+  // production API URL set in .env. VITE_PDF_EXTRACT_URL is undefined in production.
+  const directUrl = (import.meta.env.VITE_PDF_EXTRACT_URL as string | undefined)?.trim()
+  if (directUrl) {
+    const res = await fetch(`${directUrl}/extract-batch`, { method: "POST", body: form })
+    if (!res.ok) {
+      const text = await res.text()
+      throw new Error(`PDF extraction failed (${res.status}): ${text}`)
+    }
+    return res.json() as Promise<PdfExtractResponse>
+  }
+
+  return apiFetch(API_ENDPOINTS.SKU_EXTRACT_PDF, { method: "POST", body: form })
+}
+
 // ─── React Query hooks ───────────────────────────────────────────────────────
 
 export function useSkuMetadataListQuery(filters: SkuMetadataFilters = {}) {
@@ -497,5 +556,11 @@ export function useUpdateSkuTemplateMutation() {
     mutationFn: ({ id, payload }: { id: number; payload: Partial<SkuTemplate> }) =>
       updateSkuTemplate(id, payload),
     onSuccess: () => qc.invalidateQueries({ queryKey: skuQueryKeys.templates.all }),
+  })
+}
+
+export function useSkuExtractFromPdfMutation() {
+  return useMutation({
+    mutationFn: (files: File[]) => extractSkuFromPdf(files),
   })
 }

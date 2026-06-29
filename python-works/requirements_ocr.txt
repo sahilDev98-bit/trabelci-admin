@@ -1,0 +1,29 @@
+# Shared by all OCR scripts
+pdf2image
+Pillow
+torch
+transformers>=4.37.0
+accelerate
+sentencepiece
+
+# TrOCR  (ocr_trocr.py)
+# No extra deps beyond transformers + pdf2image
+
+# PaddleOCR  (ocr_paddleocr.py)
+paddlepaddle
+paddleocr
+
+# Donut  (ocr_donut.py)
+# No extra deps beyond transformers
+
+# Nougat  (ocr_nougat.py)
+# Install separately to avoid old pyarrow/MSVC conflict:
+#   pip install nougat-ocr --no-deps
+#   pip install datasets pyarrow lightning torchvision
+
+# GOT-OCR 2.0  (ocr_got.py)
+tiktoken
+verovio
+
+# Qwen2-VL  (ocr_qwen2vl.py)
+qwen-vl-utils

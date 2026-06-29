@@ -16,6 +16,10 @@ export default defineConfig(({ mode }) => {
       },
     },
     server: {
+      watch: {
+        // Python server writes output here — ignore to prevent spurious HMR reloads
+        ignored: ["**/python-works/openai-output/**", "**/python-works/pdfs/**"],
+      },
       proxy: {
         "/api": {
           target: adminBackendUrl,

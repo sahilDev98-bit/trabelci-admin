@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import { useNavigate } from "@tanstack/react-router"
 import { useTranslation } from "react-i18next"
-import { ArrowLeft, Save, Send, Loader2, CheckSquare, Maximize2, Trash2 } from "lucide-react"
+import { ArrowLeft, Save, Send, Loader2, CheckSquare, Maximize2, Trash2, FileText } from "lucide-react"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -18,6 +18,7 @@ import { useSkuAutocomplete } from "@/hooks/useSkuAutocomplete"
 import type { SkuMetadataListResponse, SkuMetadataRow } from "@/features/skuManagement/types"
 import { SkuSheetCeramic, type SkuSheetCeramicHandle } from "./components/SkuSheetCeramic"
 import { SkuFullPageModal } from "./components/SkuFullPageModal"
+import { PdfExtractModal } from "./components/PdfExtractModal"
 // Rollback to the AG Grid sheet: import { SkuGrid } from "./components/SkuGrid"
 // Right-side details panel — temporarily hidden (doc point 29 lists it as
 // optional). Uncomment the related blocks below to bring it back.
@@ -200,6 +201,7 @@ function CreationSheet({
   // loading state at once.
   const [activeAction, setActiveAction] = useState<"save" | "approve" | null>(null)
   const [fullPageOpen, setFullPageOpen] = useState(false)
+  const [pdfExtractOpen, setPdfExtractOpen] = useState(false)
   const sheetRef = useRef<SkuSheetCeramicHandle>(null)
   const [selectedCount, setSelectedCount] = useState(0)
   const [pageFullySelected, setPageFullySelected] = useState(false)
@@ -424,6 +426,20 @@ function CreationSheet({
     }
   }, [rows, submitToSap, t])
 
+  const handlePdfApprove = useCallback((extracted: Partial<SkuMetadataRow>[]) => {
+    if (!extracted.length) return
+    const newRows = extracted.map((partial) => ({
+      ...makeEmptyRow(),
+      ...partial,
+      _isDirty: true,
+    }))
+    setRows((prev) => {
+      const filled = prev.filter((r) => !isRowEmpty(r))
+      return padWithEmptyRows([...newRows, ...filled])
+    })
+    toast.success(`${extracted.length} product${extracted.length !== 1 ? "s" : ""} added from PDF`)
+  }, [])
+
   // Blank padding rows don't exist as far as counts and actions are concerned
   const filledRows = rows.filter((r) => !isRowEmpty(r))
   const redCount = filledRows.filter((r) => r._validationStatus === "red").length
@@ -506,6 +522,15 @@ function CreationSheet({
           >
             <Maximize2 className="mr-1 h-4 w-4" />
             View in Full Page
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setPdfExtractOpen(true)}
+            disabled={activeAction !== null}
+          >
+            <FileText className="mr-1 h-4 w-4" />
+            Extract from PDF
           </Button>
           <Button
             variant="outline"
@@ -616,6 +641,12 @@ function CreationSheet({
         */}
       </div>
 
+      <PdfExtractModal
+        open={pdfExtractOpen}
+        onClose={() => setPdfExtractOpen(false)}
+        onApprove={handlePdfApprove}
+      />
+
       <SkuFullPageModal
         open={fullPageOpen}
         onClose={() => setFullPageOpen(false)}
@@ -632,6 +663,15 @@ function CreationSheet({
         onNearEnd={onNearEnd}
         actions={
           <>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setPdfExtractOpen(true)}
+              disabled={activeAction !== null}
+            >
+              <FileText className="mr-1 h-4 w-4" />
+              Extract from PDF
+            </Button>
             <Button
               variant="outline"
               size="sm"
