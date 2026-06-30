@@ -9,11 +9,7 @@ import type {
   BusinessPartner,
   BPUser,
   SapBpLookupResult,
-  SapSyncSuggestion,
-  SapMatchCandidate,
-  BulkLinkInput,
-  BulkLinkResponse,
-  BulkLinkFailure,
+  RefreshFromSapResponse,
 } from "./types"
 
 type BusinessPartnerRow = {
@@ -93,68 +89,46 @@ export async function lookupSapBp(cardCode: string): Promise<SapBpLookupResult> 
   return res.sapBusinessPartner
 }
 
-type SapSyncSuggestionRow = {
-  businessPartnerId: number
-  name: string
-  email: string | null
-  sapSyncStatus: string | null
-  candidates: SapMatchCandidate[]
-}
-
-const mapSuggestionRow = (row: SapSyncSuggestionRow): SapSyncSuggestion => ({
-  businessPartnerId: String(row.businessPartnerId),
-  name: row.name,
-  email: row.email,
-  sapSyncStatus: row.sapSyncStatus,
-  candidates: row.candidates,
-})
-
-async function fetchSapSyncSuggestions(): Promise<SapSyncSuggestion[]> {
-  const res = await apiFetch<{ success: true; suggestions: SapSyncSuggestionRow[] }>(
-    `${API_ENDPOINTS.BUSINESS_PARTNERS}/sap-sync-suggestions`,
-    { method: "GET" },
-  )
-  return (res.suggestions ?? []).map(mapSuggestionRow)
-}
-
-export function useSapSyncSuggestionsQuery(enabled: boolean) {
-  return useQuery({
-    queryKey: businessPartnersQueryKeys.sapSyncSuggestions,
-    queryFn: fetchSapSyncSuggestions,
-    enabled,
-  })
-}
-
-type BulkLinkResponseRaw = {
-  linkedCount: number
+type RefreshFromSapResponseRaw = {
+  refreshedCount: number
   failedCount: number
-  linked: BusinessPartnerRow[]
-  failed: BulkLinkFailure[]
+  failed: { id: number; reason: string }[]
 }
 
-async function bulkLinkBusinessPartnersToSap(links: BulkLinkInput[]): Promise<BulkLinkResponse> {
-  const res = await apiFetch<{ success: true } & BulkLinkResponseRaw>(
-    `${API_ENDPOINTS.BUSINESS_PARTNERS}/bulk-link-sap`,
-    {
-      method: "POST",
-      body: JSON.stringify({ links: links.map((l) => ({ id: l.id, cardCode: l.cardCode })) }),
-    },
+async function bulkRefreshBusinessPartnersFromSap(): Promise<RefreshFromSapResponse> {
+  const res = await apiFetch<{ success: true } & RefreshFromSapResponseRaw>(
+    `${API_ENDPOINTS.BUSINESS_PARTNERS}/refresh-from-sap`,
+    { method: "POST" },
   )
   return {
-    linkedCount: res.linkedCount,
+    refreshedCount: res.refreshedCount,
     failedCount: res.failedCount,
-    linked: (res.linked ?? []).map(mapBusinessPartnerRow),
-    failed: res.failed ?? [],
+    failed: (res.failed ?? []).map((f) => ({ id: String(f.id), reason: f.reason })),
   }
 }
 
-export function useBulkLinkBusinessPartnersToSapMutation() {
+export function useBulkRefreshBusinessPartnersFromSapMutation() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: bulkLinkBusinessPartnersToSap,
+    mutationFn: bulkRefreshBusinessPartnersFromSap,
     onSuccess: async () => {
       await qc.invalidateQueries({ queryKey: businessPartnersQueryKeys.all })
-      await qc.invalidateQueries({ queryKey: businessPartnersQueryKeys.sapSyncSuggestions })
+    },
+  })
+}
+
+async function refreshBusinessPartnerFromSap(id: string): Promise<void> {
+  await apiFetch(`${API_ENDPOINTS.BUSINESS_PARTNERS}/${id}/refresh-from-sap`, {
+    method: "POST",
+  })
+}
+
+export function useRefreshBusinessPartnerFromSapMutation() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: refreshBusinessPartnerFromSap,
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: businessPartnersQueryKeys.all })
     },
   })
 }

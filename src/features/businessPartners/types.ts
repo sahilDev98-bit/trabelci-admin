@@ -45,37 +45,13 @@ export interface SapBpLookupResult {
   CardName: string
 }
 
-export interface SapMatchCandidate {
-  cardCode: string
-  cardName: string
-  cardType: string | null
-  phone1: string | null
-  email: string | null
-  confidence: "high" | "low"
-}
-
-export interface SapSyncSuggestion {
-  businessPartnerId: string
-  name: string
-  email: string | null
-  sapSyncStatus: string | null
-  candidates: SapMatchCandidate[]
-}
-
-export interface BulkLinkInput {
+export interface RefreshFromSapFailure {
   id: string
-  cardCode: string
-}
-
-export interface BulkLinkFailure {
-  id: string
-  cardCode: string
   reason: string
 }
 
-export interface BulkLinkResponse {
-  linkedCount: number
+export interface RefreshFromSapResponse {
+  refreshedCount: number
   failedCount: number
-  linked: BusinessPartner[]
-  failed: BulkLinkFailure[]
+  failed: RefreshFromSapFailure[]
 }

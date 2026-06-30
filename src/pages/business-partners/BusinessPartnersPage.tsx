@@ -6,6 +6,7 @@ import { ArrowRightLeft, CheckCircle2Icon, ChevronDownIcon, ChevronUpIcon, Loade
 import { toast } from "sonner"
 
 import { ErrorMessage } from "@/components/ErrorMessage"
+import { ApiError } from "@/lib/apiClient"
 import { ConfirmDeleteDialog } from "@/components/ConfirmDeleteDialog"
 import { formatDate } from "@/lib/formatDate"
 import { QueryStateWrapper } from "@/components/QueryStateWrapper"
@@ -35,10 +36,11 @@ import {
   useUpdateBusinessPartnerMutation,
   useDeleteBusinessPartnerMutation,
   useToggleBusinessPartnerActiveMutation,
+  useBulkRefreshBusinessPartnersFromSapMutation,
+  useRefreshBusinessPartnerFromSapMutation,
   lookupSapBp,
 } from "@/features/businessPartners/api"
 import type { BusinessPartner, CreateBusinessPartnerInput, SapBpLookupResult } from "@/features/businessPartners/types"
-import { BusinessPartnerSapSyncModal } from "./components/BusinessPartnerSapSyncModal"
 
 type FormValues = CreateBusinessPartnerInput
 
@@ -62,16 +64,18 @@ export function BusinessPartnersPage() {
     defaultValues: { name: "", email: "", skuDefaultCountry: "", skuDefaultDisplayNameEn: "", skuDefaultSupplierSku: "" },
   })
 
-  const { data, isLoading, isError, error, refetch, isFetching } = useBusinessPartnersQuery()
+  const { data, isLoading, isError, error } = useBusinessPartnersQuery()
   const createMutation = useCreateBusinessPartnerMutation()
   const updateMutation = useUpdateBusinessPartnerMutation()
   const deleteMutation = useDeleteBusinessPartnerMutation()
   const toggleActiveMutation = useToggleBusinessPartnerActiveMutation()
+  const bulkRefreshMutation = useBulkRefreshBusinessPartnersFromSapMutation()
+  const refreshOneMutation = useRefreshBusinessPartnerFromSapMutation()
 
   const [editTarget, setEditTarget] = useState<BusinessPartner | null>(null)
   const [pendingDelete, setPendingDelete] = useState<BusinessPartner | null>(null)
   const [togglingId, setTogglingId] = useState<string | null>(null)
-  const [sapSyncModalOpen, setSapSyncModalOpen] = useState(false)
+  const [refreshingId, setRefreshingId] = useState<string | null>(null)
 
   // SAP link state
   const [sapSectionOpen, setSapSectionOpen] = useState(false)
@@ -150,8 +154,46 @@ export function BusinessPartnersPage() {
     setPendingDelete(null)
   }
 
-  const handleSyncWithSap = () => {
-    setSapSyncModalOpen(true)
+  // Turns a backend error reason into a short, non-technical explanation.
+  // The backend's wording (e.g. raw SAP lookup errors) isn't something a
+  // non-technical admin should have to parse — only a couple of failure
+  // shapes are possible here, so a simple substring check is enough.
+  const friendlyRefreshFailureReason = (name: string, reason?: string): string => {
+    if (reason?.includes("No SAP customer found")) {
+      return t("businessPartners.refreshFailureNotFound", { name })
+    }
+    return t("businessPartners.refreshFailureGeneric", { name })
+  }
+
+  const handleSyncWithSap = async () => {
+    try {
+      const result = await bulkRefreshMutation.mutateAsync()
+      if (result.refreshedCount > 0) {
+        toast.success(t("businessPartners.refreshedFromSapSummary", { refreshed: result.refreshedCount }))
+      }
+      for (const failure of result.failed) {
+        const partnerName = data?.find((bp) => bp.id === failure.id)?.name ?? failure.id
+        toast.error(friendlyRefreshFailureReason(partnerName, failure.reason))
+      }
+    } catch {
+      toast.error(t("businessPartners.refreshFailureGenericNoName"))
+    }
+  }
+
+  const handleRefreshOneFromSap = async (bp: BusinessPartner) => {
+    setRefreshingId(bp.id)
+    try {
+      await refreshOneMutation.mutateAsync(bp.id)
+      toast.success(t("businessPartners.refreshedFromSapSummary", { refreshed: 1 }))
+    } catch (err: unknown) {
+      const details = err instanceof ApiError && err.payload && typeof err.payload === "object"
+        ? (err.payload as { details?: string }).details
+        : undefined
+      const reason = details ?? (err instanceof ApiError ? err.message : undefined)
+      toast.error(friendlyRefreshFailureReason(bp.name, reason))
+    } finally {
+      setRefreshingId(null)
+    }
   }
 
   const handleToggleActive = async (bp: BusinessPartner) => {
@@ -282,16 +324,14 @@ export function BusinessPartnersPage() {
         <Card>
           <CardHeader className="flex flex-row items-center justify-between gap-4">
             <CardTitle>{t("businessPartners.title")}</CardTitle>
-            <div className="flex items-center gap-2">
-              <Button onClick={handleSyncWithSap}>
+            <Button onClick={handleSyncWithSap} disabled={bulkRefreshMutation.isPending}>
+              {bulkRefreshMutation.isPending ? (
+                <RefreshCwIcon className="h-4 w-4 animate-spin" />
+              ) : (
                 <ArrowRightLeft className="h-4 w-4" />
-                {t("businessPartners.syncWithSap")}
-              </Button>
-              <Button variant="outline" size="icon" onClick={() => refetch()} disabled={isFetching}>
-                <RefreshCwIcon className={isFetching ? "animate-spin" : ""} />
-                <span className="sr-only">{t("common.refresh")}</span>
-              </Button>
-            </div>
+              )}
+              {bulkRefreshMutation.isPending ? t("businessPartners.refreshingFromSap") : t("businessPartners.syncWithSap")}
+            </Button>
           </CardHeader>
           <CardContent>
             <QueryStateWrapper
@@ -348,6 +388,12 @@ export function BusinessPartnersPage() {
                           <DropdownMenuContent align="end">
                             <DropdownMenuItem onClick={(e) => { e.stopPropagation(); openEdit(bp) }}>
                               {t("common.edit")}
+                            </DropdownMenuItem>
+                            <DropdownMenuItem
+                              disabled={!bp.cardCode || refreshingId === bp.id}
+                              onClick={(e) => { e.stopPropagation(); handleRefreshOneFromSap(bp) }}
+                            >
+                              {t("businessPartners.refreshFromSap")}
                             </DropdownMenuItem>
                             <DropdownMenuItem
                               disabled={togglingId === bp.id}
@@ -431,12 +477,6 @@ export function BusinessPartnersPage() {
         }
         onConfirm={onConfirmDelete}
         isPending={deleteMutation.isPending}
-      />
-
-      {/* Sync with SAP Modal */}
-      <BusinessPartnerSapSyncModal
-        open={sapSyncModalOpen}
-        onClose={() => setSapSyncModalOpen(false)}
       />
     </>
   )
