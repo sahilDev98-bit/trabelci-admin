@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { FileText, Upload, X, ChevronLeft, ChevronRight, CheckCircle, AlertCircle, Loader2, ArrowLeft } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import { Button } from "@/components/ui/button"
@@ -10,7 +10,7 @@ import {
   DialogTitle,
   DialogFooter,
 } from "@/components/ui/dialog"
-import { useSkuExtractFromPdfMutation, type PdfExtractedEntry, type PdfExtractedProduct } from "@/features/skuManagement/api"
+import { usePdfExtractJob, type PdfExtractedEntry, type PdfExtractedProduct } from "@/features/skuManagement/api"
 import type { SkuMetadataRow } from "@/features/skuManagement/types"
 
 // Maps PDF-extracted field names → SkuMetadataRow field names
@@ -321,7 +321,7 @@ interface PdfExtractModalProps {
   onApprove: (rows: Partial<SkuMetadataRow>[]) => void
 }
 
-type Step = "upload" | "review"
+type Step = "upload" | "processing" | "review"
 
 export function PdfExtractModal({ open, onClose, onApprove }: PdfExtractModalProps) {
   const { t } = useTranslation()
@@ -331,7 +331,7 @@ export function PdfExtractModal({ open, onClose, onApprove }: PdfExtractModalPro
   const [selected, setSelected] = useState<Set<number>>(new Set())
   const [activeIndex, setActiveIndex] = useState(0)
 
-  const extract = useSkuExtractFromPdfMutation()
+  const extract = usePdfExtractJob()
 
   const handleClose = () => {
     setStep("upload")
@@ -355,15 +355,24 @@ export function PdfExtractModal({ open, onClose, onApprove }: PdfExtractModalPro
     setFiles((prev) => prev.filter((_, i) => i !== index))
   }
 
-  const handleExtract = async () => {
+  const handleExtract = () => {
     if (!files.length) return
-    const result = await extract.mutateAsync(files)
-    const allSelected = new Set(result.products.map((_, i) => i))
-    setEntries(result.products)
-    setSelected(allSelected)
-    setActiveIndex(0)
-    setStep("review")
+    setStep("processing")
+    extract.start(files)
   }
+
+  // Transition to review when job finishes successfully
+  const extractResult = extract.result
+  const extractStatus = extract.status
+  useEffect(() => {
+    if (step === "processing" && extractStatus === "done" && extractResult) {
+      const allSelected = new Set(extractResult.products.map((_, i) => i))
+      setEntries(extractResult.products)
+      setSelected(allSelected)
+      setActiveIndex(0)
+      setStep("review")
+    }
+  }, [step, extractStatus, extractResult])
 
   const handleToggle = (index: number) => {
     setSelected((prev) => {
@@ -427,16 +436,61 @@ export function PdfExtractModal({ open, onClose, onApprove }: PdfExtractModalPro
         </DialogHeader>
 
         <div className="flex-1 overflow-hidden px-6 py-4" style={{ minHeight: 0 }}>
-          {step === "upload" ? (
+          {step === "upload" && (
             <div className="flex flex-col gap-4">
               <UploadZone files={files} onAdd={handleAddFiles} onRemove={handleRemoveFile} />
-              {extract.isError && (
+              {extract.status === "failed" && extract.error && (
                 <p className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
-                  {extract.error instanceof Error ? extract.error.message : t("sku.pdfExtract.extractionFailed")}
+                  {extract.error}
                 </p>
               )}
             </div>
-          ) : (
+          )}
+
+          {step === "processing" && (
+            <div className="flex flex-col items-center justify-center gap-6 py-8">
+              <Loader2 className="h-10 w-10 animate-spin text-primary" />
+              <div className="w-full max-w-sm text-center">
+                {extract.progress.totalPages > 0 ? (
+                  <>
+                    <p className="mb-3 text-sm font-medium">
+                      {t("sku.pdfExtract.processingPages", {
+                        done: extract.progress.completedPages,
+                        total: extract.progress.totalPages,
+                      })}
+                    </p>
+                    {/* Progress bar */}
+                    <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
+                      <div
+                        className="h-full rounded-full bg-primary transition-all duration-500"
+                        style={{
+                          width: `${Math.round((extract.progress.completedPages / extract.progress.totalPages) * 100)}%`,
+                        }}
+                      />
+                    </div>
+                    <p className="mt-2 text-xs text-muted-foreground">
+                      {Math.round((extract.progress.completedPages / extract.progress.totalPages) * 100)}%
+                      {" — "}
+                      {t("sku.pdfExtract.processingFiles", { count: extract.progress.totalFiles })}
+                    </p>
+                  </>
+                ) : (
+                  <p className="text-sm text-muted-foreground">
+                    {extract.status === "uploading"
+                      ? t("sku.pdfExtract.uploading")
+                      : t("sku.pdfExtract.extracting")}
+                  </p>
+                )}
+                {extract.status === "failed" && extract.error && (
+                  <p className="mt-4 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                    {extract.error}
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
+
+          {step === "review" && (
             <div style={{ height: "calc(90vh - 200px)" }}>
               <ReviewStep
                 entries={entries}
@@ -451,7 +505,7 @@ export function PdfExtractModal({ open, onClose, onApprove }: PdfExtractModalPro
         </div>
 
         <DialogFooter className="border-t px-6 py-4">
-          {step === "upload" ? (
+          {step === "upload" && (
             <>
               <Button type="button" variant="outline" size="sm" onClick={handleClose}>
                 {t("common.cancel")}
@@ -460,24 +514,36 @@ export function PdfExtractModal({ open, onClose, onApprove }: PdfExtractModalPro
                 type="button"
                 size="sm"
                 onClick={handleExtract}
-                disabled={files.length === 0 || extract.isPending}
+                disabled={files.length === 0}
               >
-                {extract.isPending ? (
-                  <>
-                    <Loader2 className="me-1.5 h-4 w-4 animate-spin" />
-                    {t("sku.pdfExtract.extracting")}
-                  </>
-                ) : (
-                  <>
-                    <FileText className="me-1.5 h-4 w-4" />
-                    {files.length > 1
-                      ? t("sku.pdfExtract.extractButtonPlural", { count: files.length })
-                      : t("sku.pdfExtract.extractButton")}
-                  </>
-                )}
+                <FileText className="me-1.5 h-4 w-4" />
+                {files.length > 1
+                  ? t("sku.pdfExtract.extractButtonPlural", { count: files.length })
+                  : t("sku.pdfExtract.extractButton")}
               </Button>
             </>
-          ) : (
+          )}
+
+          {step === "processing" && (
+            <>
+              <Button type="button" variant="outline" size="sm" onClick={handleClose}>
+                {t("common.cancel")}
+              </Button>
+              {extract.status === "failed" && (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => { setStep("upload"); extract.reset() }}
+                >
+                  <ArrowLeft className="me-1.5 h-4 w-4 rtl:rotate-180" />
+                  {t("sku.pdfExtract.back")}
+                </Button>
+              )}
+            </>
+          )}
+
+          {step === "review" && (
             <>
               <Button
                 type="button"

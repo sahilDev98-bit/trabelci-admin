@@ -1,4 +1,5 @@
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { apiFetch } from "@/lib/apiClient"
 import { API_ENDPOINTS } from "@/lib/apiEndpoints"
 import { skuQueryKeys } from "./queryKeys"
@@ -303,25 +304,122 @@ export interface PdfExtractResponse {
   complete: number
 }
 
-export async function extractSkuFromPdf(files: File[]): Promise<PdfExtractResponse> {
-  const form = new FormData()
-  for (const file of files) {
-    form.append("pdfs", file)
-  }
+export interface PdfExtractJobStatus {
+  job_id: string
+  status: "processing" | "done" | "failed"
+  total_files: number
+  total_pages: number
+  completed_pages: number
+  result: PdfExtractResponse | null
+  error: string | null
+}
 
-  // In dev: call Python server directly (same as POC) so we don't depend on the
-  // production API URL set in .env. VITE_PDF_EXTRACT_URL is undefined in production.
-  const directUrl = (import.meta.env.VITE_PDF_EXTRACT_URL as string | undefined)?.trim()
-  if (directUrl) {
-    const res = await fetch(`${directUrl}/extract-batch`, { method: "POST", body: form })
-    if (!res.ok) {
-      const text = await res.text()
-      throw new Error(`PDF extraction failed (${res.status}): ${text}`)
-    }
-    return res.json() as Promise<PdfExtractResponse>
+// The base URL for local dev — when set, requests go directly to the Python server.
+const DEV_PYTHON_URL = (import.meta.env.VITE_PDF_EXTRACT_URL as string | undefined)?.trim() || null
+
+async function _startPdfExtractJob(files: File[]): Promise<Pick<PdfExtractJobStatus, "job_id" | "status" | "total_files" | "total_pages" | "completed_pages">> {
+  const form = new FormData()
+  for (const file of files) form.append("pdfs", file)
+
+  if (DEV_PYTHON_URL) {
+    const res = await fetch(`${DEV_PYTHON_URL}/start-batch`, { method: "POST", body: form })
+    if (!res.ok) throw new Error(`Failed to start extraction (${res.status})`)
+    return res.json()
   }
 
   return apiFetch(API_ENDPOINTS.SKU_EXTRACT_PDF, { method: "POST", body: form })
+}
+
+async function _pollPdfExtractJob(jobId: string): Promise<PdfExtractJobStatus> {
+  if (DEV_PYTHON_URL) {
+    const res = await fetch(`${DEV_PYTHON_URL}/job/${encodeURIComponent(jobId)}`)
+    if (!res.ok) throw new Error(`Poll failed (${res.status})`)
+    return res.json()
+  }
+
+  return apiFetch(`${API_ENDPOINTS.SKU_EXTRACT_JOB}/${encodeURIComponent(jobId)}`)
+}
+
+export type PdfExtractStatus = "idle" | "uploading" | "processing" | "done" | "failed"
+
+export interface UsePdfExtractJobReturn {
+  status: PdfExtractStatus
+  progress: { completedPages: number; totalPages: number; totalFiles: number }
+  result: PdfExtractResponse | null
+  error: string | null
+  start: (files: File[]) => Promise<void>
+  reset: () => void
+}
+
+export function usePdfExtractJob(): UsePdfExtractJobReturn {
+  const [status, setStatus] = useState<PdfExtractStatus>("idle")
+  const [progress, setProgress] = useState({ completedPages: 0, totalPages: 0, totalFiles: 0 })
+  const [result, setResult] = useState<PdfExtractResponse | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const jobIdRef = useRef<string | null>(null)
+  const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  const stopPolling = () => {
+    if (pollIntervalRef.current) {
+      clearInterval(pollIntervalRef.current)
+      pollIntervalRef.current = null
+    }
+  }
+
+  const reset = useCallback(() => {
+    stopPolling()
+    jobIdRef.current = null
+    setStatus("idle")
+    setProgress({ completedPages: 0, totalPages: 0, totalFiles: 0 })
+    setResult(null)
+    setError(null)
+  }, [])
+
+  useEffect(() => () => stopPolling(), [])
+
+  const start = useCallback(async (files: File[]) => {
+    reset()
+    setStatus("uploading")
+
+    let jobData: Awaited<ReturnType<typeof _startPdfExtractJob>>
+    try {
+      jobData = await _startPdfExtractJob(files)
+    } catch (err) {
+      setStatus("failed")
+      setError(err instanceof Error ? err.message : "Failed to start extraction")
+      return
+    }
+
+    jobIdRef.current = jobData.job_id
+    setStatus("processing")
+    setProgress({ completedPages: 0, totalPages: 0, totalFiles: jobData.total_files })
+
+    pollIntervalRef.current = setInterval(async () => {
+      if (!jobIdRef.current) return
+      try {
+        const s = await _pollPdfExtractJob(jobIdRef.current)
+        setProgress({
+          completedPages: s.completed_pages,
+          totalPages: s.total_pages,
+          totalFiles: s.total_files,
+        })
+        if (s.status === "done") {
+          stopPolling()
+          setResult(s.result)
+          setStatus("done")
+        } else if (s.status === "failed") {
+          stopPolling()
+          setError(s.error ?? "Extraction failed")
+          setStatus("failed")
+        }
+      } catch (err) {
+        // transient poll failure — keep trying
+        console.warn("[PDF extract poll]", err)
+      }
+    }, 2000)
+  }, [reset])
+
+  return { status, progress, result, error, start, reset }
 }
 
 // ─── React Query hooks ───────────────────────────────────────────────────────
@@ -559,8 +657,3 @@ export function useUpdateSkuTemplateMutation() {
   })
 }
 
-export function useSkuExtractFromPdfMutation() {
-  return useMutation({
-    mutationFn: (files: File[]) => extractSkuFromPdf(files),
-  })
-}

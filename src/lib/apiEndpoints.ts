@@ -50,4 +50,5 @@ export const API_ENDPOINTS = {
   SKU_AUDIT_LOG: "/sku/audit-log",
   SKU_AUTOCOMPLETE_HINTS: "/sku/autocomplete-hints",
   SKU_EXTRACT_PDF: "/sku/extract-pdf",
+  SKU_EXTRACT_JOB: "/sku/extract-job",
 } as const
