@@ -2,7 +2,7 @@ import { useState } from "react"
 import { useNavigate } from "@tanstack/react-router"
 import { useTranslation } from "react-i18next"
 import { useForm } from "react-hook-form"
-import { CheckCircle2Icon, ChevronDownIcon, ChevronUpIcon, Loader2Icon, MoreVerticalIcon, RefreshCwIcon, XCircleIcon } from "lucide-react"
+import { ArrowRightLeft, CheckCircle2Icon, ChevronDownIcon, ChevronUpIcon, Loader2Icon, MoreVerticalIcon, RefreshCwIcon, XCircleIcon } from "lucide-react"
 import { toast } from "sonner"
 
 import { ErrorMessage } from "@/components/ErrorMessage"
@@ -38,6 +38,7 @@ import {
   lookupSapBp,
 } from "@/features/businessPartners/api"
 import type { BusinessPartner, CreateBusinessPartnerInput, SapBpLookupResult } from "@/features/businessPartners/types"
+import { BusinessPartnerSapSyncModal } from "./components/BusinessPartnerSapSyncModal"
 
 type FormValues = CreateBusinessPartnerInput
 
@@ -70,6 +71,7 @@ export function BusinessPartnersPage() {
   const [editTarget, setEditTarget] = useState<BusinessPartner | null>(null)
   const [pendingDelete, setPendingDelete] = useState<BusinessPartner | null>(null)
   const [togglingId, setTogglingId] = useState<string | null>(null)
+  const [sapSyncModalOpen, setSapSyncModalOpen] = useState(false)
 
   // SAP link state
   const [sapSectionOpen, setSapSectionOpen] = useState(false)
@@ -146,6 +148,10 @@ export function BusinessPartnersPage() {
     await deleteMutation.mutateAsync(pendingDelete.id)
     toast.success(t("businessPartners.bpDeleted"))
     setPendingDelete(null)
+  }
+
+  const handleSyncWithSap = () => {
+    setSapSyncModalOpen(true)
   }
 
   const handleToggleActive = async (bp: BusinessPartner) => {
@@ -276,10 +282,16 @@ export function BusinessPartnersPage() {
         <Card>
           <CardHeader className="flex flex-row items-center justify-between gap-4">
             <CardTitle>{t("businessPartners.title")}</CardTitle>
-            <Button variant="outline" size="icon" onClick={() => refetch()} disabled={isFetching}>
-              <RefreshCwIcon className={isFetching ? "animate-spin" : ""} />
-              <span className="sr-only">{t("common.refresh")}</span>
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button onClick={handleSyncWithSap}>
+                <ArrowRightLeft className="h-4 w-4" />
+                {t("businessPartners.syncWithSap")}
+              </Button>
+              <Button variant="outline" size="icon" onClick={() => refetch()} disabled={isFetching}>
+                <RefreshCwIcon className={isFetching ? "animate-spin" : ""} />
+                <span className="sr-only">{t("common.refresh")}</span>
+              </Button>
+            </div>
           </CardHeader>
           <CardContent>
             <QueryStateWrapper
@@ -419,6 +431,12 @@ export function BusinessPartnersPage() {
         }
         onConfirm={onConfirmDelete}
         isPending={deleteMutation.isPending}
+      />
+
+      {/* Sync with SAP Modal */}
+      <BusinessPartnerSapSyncModal
+        open={sapSyncModalOpen}
+        onClose={() => setSapSyncModalOpen(false)}
       />
     </>
   )

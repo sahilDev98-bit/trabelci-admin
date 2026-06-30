@@ -3,7 +3,18 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { apiFetch } from "@/lib/apiClient"
 import { API_ENDPOINTS } from "@/lib/apiEndpoints"
 import { businessPartnersQueryKeys } from "./queryKeys"
-import type { CreateBusinessPartnerInput, UpdateBusinessPartnerInput, BusinessPartner, BPUser, SapBpLookupResult } from "./types"
+import type {
+  CreateBusinessPartnerInput,
+  UpdateBusinessPartnerInput,
+  BusinessPartner,
+  BPUser,
+  SapBpLookupResult,
+  SapSyncSuggestion,
+  SapMatchCandidate,
+  BulkLinkInput,
+  BulkLinkResponse,
+  BulkLinkFailure,
+} from "./types"
 
 type BusinessPartnerRow = {
   id: number
@@ -80,6 +91,72 @@ export async function lookupSapBp(cardCode: string): Promise<SapBpLookupResult> 
     { method: "GET" },
   )
   return res.sapBusinessPartner
+}
+
+type SapSyncSuggestionRow = {
+  businessPartnerId: number
+  name: string
+  email: string | null
+  sapSyncStatus: string | null
+  candidates: SapMatchCandidate[]
+}
+
+const mapSuggestionRow = (row: SapSyncSuggestionRow): SapSyncSuggestion => ({
+  businessPartnerId: String(row.businessPartnerId),
+  name: row.name,
+  email: row.email,
+  sapSyncStatus: row.sapSyncStatus,
+  candidates: row.candidates,
+})
+
+async function fetchSapSyncSuggestions(): Promise<SapSyncSuggestion[]> {
+  const res = await apiFetch<{ success: true; suggestions: SapSyncSuggestionRow[] }>(
+    `${API_ENDPOINTS.BUSINESS_PARTNERS}/sap-sync-suggestions`,
+    { method: "GET" },
+  )
+  return (res.suggestions ?? []).map(mapSuggestionRow)
+}
+
+export function useSapSyncSuggestionsQuery(enabled: boolean) {
+  return useQuery({
+    queryKey: businessPartnersQueryKeys.sapSyncSuggestions,
+    queryFn: fetchSapSyncSuggestions,
+    enabled,
+  })
+}
+
+type BulkLinkResponseRaw = {
+  linkedCount: number
+  failedCount: number
+  linked: BusinessPartnerRow[]
+  failed: BulkLinkFailure[]
+}
+
+async function bulkLinkBusinessPartnersToSap(links: BulkLinkInput[]): Promise<BulkLinkResponse> {
+  const res = await apiFetch<{ success: true } & BulkLinkResponseRaw>(
+    `${API_ENDPOINTS.BUSINESS_PARTNERS}/bulk-link-sap`,
+    {
+      method: "POST",
+      body: JSON.stringify({ links: links.map((l) => ({ id: l.id, cardCode: l.cardCode })) }),
+    },
+  )
+  return {
+    linkedCount: res.linkedCount,
+    failedCount: res.failedCount,
+    linked: (res.linked ?? []).map(mapBusinessPartnerRow),
+    failed: res.failed ?? [],
+  }
+}
+
+export function useBulkLinkBusinessPartnersToSapMutation() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: bulkLinkBusinessPartnersToSap,
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: businessPartnersQueryKeys.all })
+      await qc.invalidateQueries({ queryKey: businessPartnersQueryKeys.sapSyncSuggestions })
+    },
+  })
 }
 
 async function fetchBusinessPartner(id: string): Promise<BusinessPartner> {
