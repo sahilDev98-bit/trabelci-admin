@@ -1798,16 +1798,6 @@ export const SkuSheetCeramic = forwardRef<SkuSheetCeramicHandle, SkuSheetCeramic
       const direction: "asc" | "desc" =
         sortState?.field === field && sortState.direction === "asc" ? "desc" : "asc"
 
-      // eslint-disable-next-line no-console
-      console.log(`%c[SORT DEBUG] click on "${field}" → direction = ${direction}`, "color:#60a5fa;font-weight:bold")
-      // eslint-disable-next-line no-console
-      console.log("[SORT DEBUG] sortState BEFORE click:", sortState)
-      // eslint-disable-next-line no-console
-      console.log(
-        "[SORT DEBUG] rows BEFORE sort (in current order):",
-        rows.map((r, i) => ({ index: i, clientId: r._clientId, sku: r.sku, [field]: getFieldValue(r, field) })),
-      )
-
       const collator = new Intl.Collator(isHe ? "he" : "en", { numeric: true, sensitivity: "base" })
       const sorted = [...rows].sort((a, b) => {
         const av = getFieldValue(a, field).trim()
@@ -1816,23 +1806,11 @@ export const SkuSheetCeramic = forwardRef<SkuSheetCeramicHandle, SkuSheetCeramic
         if (!av) return 1
         if (!bv) return -1
         const cmp = collator.compare(av, bv)
-        const result = direction === "asc" ? cmp : -cmp
-        // eslint-disable-next-line no-console
-        console.log(`[SORT DEBUG] compare "${av}" vs "${bv}" → cmp=${cmp} → result=${result}`)
-        return result
+        return direction === "asc" ? cmp : -cmp
       })
-
-      // eslint-disable-next-line no-console
-      console.log(
-        "[SORT DEBUG] rows AFTER sort (about to call onRowsChange):",
-        sorted.map((r, i) => ({ index: i, clientId: r._clientId, sku: r.sku, [field]: getFieldValue(r, field) })),
-      )
 
       setSortState({ field, direction })
       onRowsChange(sorted)
-
-      // eslint-disable-next-line no-console
-      console.log("[SORT DEBUG] ── done. Check the NEXT render's rows prop to see what actually got displayed. ──")
     },
     [rows, onRowsChange, sortState, isHe],
   )
