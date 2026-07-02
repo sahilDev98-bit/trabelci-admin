@@ -770,7 +770,7 @@ const he = {
       qty_per_pallet: "כמות למשטח",
       shade: "גוון",
       supplier_code: "קוד ספק",
-      display_name_en: "שם יצרן (אנגלית)",
+      supplier_name_en: "שם יצרן (אנגלית)",
       series_en: "סדרה (אנגלית)",
       color_en: "צבע (אנגלית)",
       supplier_sku: "מק\"ט ספק",

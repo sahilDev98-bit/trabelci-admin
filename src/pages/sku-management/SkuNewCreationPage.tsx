@@ -48,7 +48,7 @@ const MIN_TRAILING_EMPTY_ROWS = 40
 const USER_DATA_FIELDS = [
   "sku", "supplier", "series", "color", "size", "finish",
   "country_of_origin", "qty_per_carton", "qty_per_pallet", "shade",
-  "supplier_code", "display_name_en", "series_en", "color_en", "supplier_sku",
+  "supplier_code", "supplier_name_en", "series_en", "color_en", "supplier_sku",
 ] as const
 
 function isRowEmpty(row: SkuMetadataRow): boolean {

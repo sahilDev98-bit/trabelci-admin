@@ -786,7 +786,7 @@ const en = {
       qty_per_pallet: "Quantity per Pallet",
       shade: "Shade",
       supplier_code: "Supplier Code",
-      display_name_en: "Display Name (EN)",
+      supplier_name_en: "Supplier Name (EN)",
       series_en: "Series (English)",
       color_en: "Color (English)",
       supplier_sku: "Supplier SKU",

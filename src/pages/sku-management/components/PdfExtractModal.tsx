@@ -31,7 +31,7 @@ const FIELD_MAP: Array<{
   { extracted: "shade",                row: "shade"             },
   { extracted: "quantity_per_carton",  row: "qty_per_carton"    },
   { extracted: "quantity_per_pallet",  row: "qty_per_pallet"    },
-  { extracted: "name_english",         row: "display_name_en"   },
+  { extracted: "name_english",         row: "supplier_name_en"  },
 ]
 
 const REQUIRED_EXTRACTED = [

@@ -29,7 +29,7 @@ export interface SkuMetadataRow {
   qty_per_carton?: string;
   qty_per_pallet?: string;
 
-  display_name_en?: string;
+  supplier_name_en?: string;
 
   // Image URLs — files live in Cloudflare R2; both fields hold multiple URLs
   // (mirrors the product table's cover_url + images pattern)
@@ -200,7 +200,7 @@ export interface SkuSupplierHints {
     color:           string;
     series_en:       string | null;
     color_en:        string | null;
-    display_name_en: string;
+    supplier_name_en: string;
   }>;
 }
 

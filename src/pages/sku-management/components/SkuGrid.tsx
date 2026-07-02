@@ -185,7 +185,7 @@ function buildColumnDefs(
     { field: "qty_per_pallet",    headerName: t("sku.fields.qty_per_pallet"),    flex: 10, minWidth: 100, editable: true },
     { field: "shade",              headerName: t("sku.fields.shade"),            flex: 10, minWidth: 100, editable: true, ...makeDropdownCellEditor("shade", dropdowns) },
     { field: "supplier_code",     headerName: t("sku.fields.supplier_code"),     flex: 11, minWidth: 110, editable: true },
-    { field: "display_name_en",   headerName: t("sku.fields.display_name_en"),   flex: 20, minWidth: 180, editable: true },
+    { field: "supplier_name_en",   headerName: t("sku.fields.supplier_name_en"),   flex: 20, minWidth: 180, editable: true },
     { field: "series_en",         headerName: t("sku.fields.series_en"),         flex: 13, minWidth: 120, editable: true },
     { field: "color_en",          headerName: t("sku.fields.color_en"),          flex: 12, minWidth: 110, editable: true },
     { field: "supplier_sku",      headerName: t("sku.fields.supplier_sku"),      flex: 13, minWidth: 130, editable: true },

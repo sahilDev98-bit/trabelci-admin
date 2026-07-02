@@ -64,11 +64,11 @@ export function useSkuAutocomplete(
       if (row.color     && !e.colors.includes(row.color))            e.colors.push(row.color)
       if (row.color     && row.color_en)                             e.colorEnMap[row.color]   = row.color_en
       if (row.finish    && !e.finishes.includes(row.finish))         e.finishes.push(row.finish)
-      if (row.display_name_en && !e.displayNames.includes(row.display_name_en)) e.displayNames.push(row.display_name_en)
+      if (row.supplier_name_en && !e.displayNames.includes(row.supplier_name_en)) e.displayNames.push(row.supplier_name_en)
       if (row.qty_per_carton  && !e.qtyPerCarton.includes(row.qty_per_carton))  e.qtyPerCarton.push(row.qty_per_carton)
       if (row.qty_per_pallet  && !e.qtyPerPallet.includes(row.qty_per_pallet))  e.qtyPerPallet.push(row.qty_per_pallet)
 
-      if (row.series && row.color && row.display_name_en) {
+      if (row.series && row.color && row.supplier_name_en) {
         const exists = e.combinations.some(c => c.series === row.series && c.color === row.color)
         if (!exists) {
           e.combinations.push({
@@ -76,7 +76,7 @@ export function useSkuAutocomplete(
             color:           row.color,
             series_en:       row.series_en  ?? null,
             color_en:        row.color_en   ?? null,
-            display_name_en: row.display_name_en,
+            supplier_name_en: row.supplier_name_en,
           })
         }
       }
@@ -117,8 +117,8 @@ export function useSkuAutocomplete(
         if (sh?.country_of_origin) fill.country_of_origin = sh.country_of_origin
         if (sh?.supplier_code)     fill.supplier_code     = sh.supplier_code
         // If supplier consistently uses a single display name, fill it immediately
-        if (!currentRow.display_name_en && sh?.displayNames.length === 1) {
-          fill.display_name_en = sh.displayNames[0]
+        if (!currentRow.supplier_name_en && sh?.displayNames.length === 1) {
+          fill.supplier_name_en = sh.displayNames[0]
         }
       }
 
@@ -137,14 +137,14 @@ export function useSkuAutocomplete(
         if (colorEn) fill.color_en = colorEn
       }
 
-      // supplier + series + color all known → fill display_name_en (only if still empty)
+      // supplier + series + color all known → fill supplier_name_en (only if still empty)
       const series = changedField === 'series' ? newValue : (currentRow.series ?? '')
       const color  = changedField === 'color'  ? newValue : (currentRow.color  ?? '')
-      const pendingDisplayName = fill.display_name_en
+      const pendingDisplayName = fill.supplier_name_en
 
-      if (!currentRow.display_name_en && !pendingDisplayName && activeSupplier && series && color && sh) {
+      if (!currentRow.supplier_name_en && !pendingDisplayName && activeSupplier && series && color && sh) {
         const combo = sh.combinations.find(c => c.series === series && c.color === color)
-        if (combo?.display_name_en) fill.display_name_en = combo.display_name_en
+        if (combo?.supplier_name_en) fill.supplier_name_en = combo.supplier_name_en
       }
 
       return Object.keys(fill).length > 0 ? fill : null

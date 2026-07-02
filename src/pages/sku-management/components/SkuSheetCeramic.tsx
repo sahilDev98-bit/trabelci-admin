@@ -140,7 +140,7 @@ const COLUMNS: CeramicColumn[] = [
   { field: "qty_per_pallet",     type: "supplier-autocomplete", minWidth: 110 },
   { field: "shade",              type: "supplier-autocomplete", minWidth: 110 },
   { field: "supplier_code",      type: "supplier-autocomplete", minWidth: 110 },
-  { field: "display_name_en",    type: "supplier-autocomplete", minWidth: 180 },
+  { field: "supplier_name_en",    type: "supplier-autocomplete", minWidth: 180 },
   { field: "series_en",          type: "supplier-autocomplete", minWidth: 120 },
   { field: "color_en",           type: "supplier-autocomplete", minWidth: 110 },
   { field: "supplier_sku",       type: "text",                  minWidth: 130 },
@@ -758,9 +758,16 @@ const CERAMIC_CSS = `
     background: linear-gradient(180deg, #fff3f3, #fbdcdc);
     box-shadow: 0 0 0 2px rgba(239,68,68,.55);
   }
+  /* Dark mode: always use the dark surface so light-mode gradients from
+     data-issue or the inline validationTint style never bleed through.
+     !important beats the inline style React sets for row-level tinting. */
+  .dark .ceramic-rect,
+  .dark .ceramic-dropdown-trigger {
+    background: var(--ceramic-rect-bg) !important;
+  }
   .dark .ceramic-rect[data-issue="error"],
   .dark .ceramic-dropdown-trigger[data-issue="error"] {
-    background: var(--ceramic-rect-bg);
+    box-shadow: 0 0 0 2px rgba(239,68,68,.75) !important;
   }
   .dark .ceramic-rect[data-issue="error"] .ceramic-field {
     color: #f87171;
@@ -772,6 +779,10 @@ const CERAMIC_CSS = `
   .ceramic-dropdown-trigger[data-issue="warning"] {
     background: linear-gradient(180deg, #fffaf0, #fbeed3);
     box-shadow: 0 0 0 2px rgba(217,119,6,.45);
+  }
+  .dark .ceramic-rect[data-issue="warning"],
+  .dark .ceramic-dropdown-trigger[data-issue="warning"] {
+    box-shadow: 0 0 0 2px rgba(217,119,6,.65) !important;
   }
 
   /* Fill handle — a bare "v" chevron on the cell corner (no background,
@@ -1391,7 +1402,7 @@ const CeramicRow = memo(function CeramicRow({
             : col.field === "finish"      ? (autocomplete?.getFinishSuggestions(sup)       ?? [])
             : col.field === "series_en"   ? (autocomplete?.getSeriesEnSuggestions(sup)     ?? [])
             : col.field === "color_en"    ? (autocomplete?.getColorEnSuggestions(sup)      ?? [])
-            : col.field === "display_name_en" ? (autocomplete?.getDisplayNameSuggestions(sup) ?? [])
+            : col.field === "supplier_name_en" ? (autocomplete?.getDisplayNameSuggestions(sup) ?? [])
             : col.field === "qty_per_carton"  ? (autocomplete?.getQtyPerCartonSuggestions(sup)  ?? [])
             : col.field === "qty_per_pallet"  ? (autocomplete?.getQtyPerPalletSuggestions(sup)  ?? [])
             : col.field === "supplier_code"   ? (autocomplete?.getSupplierCodeSuggestions()      ?? [])
