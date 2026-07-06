@@ -25,4 +25,5 @@ export const ROUTES = {
   SKU_MANAGEMENT_DROPDOWNS: "/sku-management/dropdowns",
   SKU_MANAGEMENT_TEMPLATES: "/sku-management/templates",
   SETTINGS: "/settings",
+  CREATE_PDF: "/create-pdf",
 } as const

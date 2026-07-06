@@ -91,6 +91,7 @@ const en = {
     skuCleanup: "Cleanup",
     skuDropdowns: "Dropdowns",
     skuTemplates: "Templates",
+    createPdf: "Create PDF",
   },
   breadcrumb: {
     dashboard: "Dashboard",
@@ -113,6 +114,7 @@ const en = {
     cleanup: "Cleanup",
     dropdowns: "Dropdowns",
     templates: "Templates",
+    "create-pdf": "Create PDF",
   },
   auth: {
     adminSignIn: "Admin sign in",

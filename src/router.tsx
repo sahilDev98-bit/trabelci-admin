@@ -43,6 +43,7 @@ const SkuNewCreationPage = lazy(() => import("@/pages/sku-management/SkuNewCreat
 const SkuCleanupPage = lazy(() => import("@/pages/sku-management/SkuCleanupPage").then(m => ({ default: m.SkuCleanupPage })))
 const SkuDropdownsPage = lazy(() => import("@/pages/sku-management/SkuDropdownsPage").then(m => ({ default: m.SkuDropdownsPage })))
 const SkuTemplatesPage = lazy(() => import("@/pages/sku-management/SkuTemplatesPage").then(m => ({ default: m.SkuTemplatesPage })))
+const CreatePdfPage = lazy(() => import("@/pages/create-pdf/CreatePdfPage").then(m => ({ default: m.CreatePdfPage })))
 
 const SuspenseFallback = (
   <div className="flex min-h-screen items-center justify-center">
@@ -318,6 +319,12 @@ const skuTemplatesRoute = createRoute({
   ),
 })
 
+const createPdfRoute = createRoute({
+  getParentRoute: () => appLayoutRoute,
+  path: "/create-pdf",
+  component: CreatePdfPage,
+})
+
 const routeTree = rootRoute.addChildren([
   loginRoute,
   forgotPasswordRoute,
@@ -346,6 +353,7 @@ const routeTree = rootRoute.addChildren([
     skuCleanupRoute,
     skuDropdownsRoute,
     skuTemplatesRoute,
+    createPdfRoute,
   ]),
 ])
 

@@ -91,6 +91,7 @@ const he = {
     skuCleanup: "ניקוי",
     skuDropdowns: "רשימות",
     skuTemplates: "תבניות",
+    createPdf: "צור PDF",
   },
   breadcrumb: {
     dashboard: "לוח בקרה",
@@ -113,6 +114,7 @@ const he = {
     cleanup: "ניקוי",
     dropdowns: "רשימות",
     templates: "תבניות",
+    "create-pdf": "צור PDF",
   },
   auth: {
     adminSignIn: "כניסת מנהל",
