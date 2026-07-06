@@ -51,4 +51,7 @@ export const API_ENDPOINTS = {
   SKU_AUTOCOMPLETE_HINTS: "/sku/autocomplete-hints",
   SKU_EXTRACT_PDF: "/sku/extract-pdf",
   SKU_EXTRACT_JOB: "/sku/extract-job",
+
+  // PDF Templates
+  PDF_TEMPLATES: "/pdf-templates",
 } as const

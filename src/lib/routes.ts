@@ -26,4 +26,6 @@ export const ROUTES = {
   SKU_MANAGEMENT_TEMPLATES: "/sku-management/templates",
   SETTINGS: "/settings",
   CREATE_PDF: "/create-pdf",
+  CREATE_PDF_TEMPLATE_NEW: "/create-pdf/templates/new",
+  CREATE_PDF_TEMPLATE_EDIT: "/create-pdf/templates/$templateId",
 } as const
