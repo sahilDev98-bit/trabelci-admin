@@ -979,6 +979,17 @@ const en = {
     components: "Components",
     pageLayouts: "Page Layouts",
     insertSnippet: "Insert",
+    // Customizer (Step 2)
+    customizeTitle: "Customize",
+    downloadPdf: "Download PDF",
+    generating: "Generating…",
+    editableSlots: "Editable Slots",
+    noEditableSlots: "This template has no editable slots.",
+    clickToUpload: "Click to upload an image",
+    changeImage: "Change image",
+    preview: "Preview",
+    slotLegend: "Blue outline = text slot · Orange = image slot",
+    pdfDownloaded: "PDF downloaded.",
   },
 } as const
 

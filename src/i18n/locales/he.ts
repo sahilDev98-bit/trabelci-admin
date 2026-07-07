@@ -963,6 +963,17 @@ const he = {
     components: "רכיבים",
     pageLayouts: "פריסות עמוד",
     insertSnippet: "הוסף",
+    // Customizer (Step 2)
+    customizeTitle: "התאמה אישית",
+    downloadPdf: "הורד PDF",
+    generating: "מייצר…",
+    editableSlots: "אזורי עריכה",
+    noEditableSlots: "לתבנית זו אין אזורי עריכה.",
+    clickToUpload: "לחץ להעלאת תמונה",
+    changeImage: "החלף תמונה",
+    preview: "תצוגה מקדימה",
+    slotLegend: "מסגרת כחולה = טקסט · כתומה = תמונה",
+    pdfDownloaded: "PDF הורד בהצלחה.",
   },
 } as const
 

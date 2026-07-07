@@ -46,11 +46,13 @@ function TemplateCard({
   isAdmin,
   onEdit,
   onDelete,
+  onUse,
 }: {
   template: PdfTemplate
   isAdmin: boolean
   onEdit: (id: string) => void
   onDelete: (t: PdfTemplate) => void
+  onUse: (id: string) => void
 }) {
   const { t } = useTranslation()
   const slotCount = countSlots(template.html_content)
@@ -105,7 +107,7 @@ function TemplateCard({
             })}
           </span>
         </div>
-        <Button size="sm" variant="outline" className="w-full" disabled>
+        <Button size="sm" className="w-full" onClick={() => onUse(template.id)}>
           {t("pdfTemplates.useTemplate")}
         </Button>
       </CardContent>
@@ -126,6 +128,10 @@ export function CreatePdfPage() {
 
   function handleEdit(id: string) {
     void navigate({ to: ROUTES.CREATE_PDF_TEMPLATE_EDIT.replace("$templateId", id) })
+  }
+
+  function handleUse(id: string) {
+    void navigate({ to: ROUTES.CREATE_PDF_CUSTOMIZE.replace("$templateId", id) })
   }
 
   async function handleDeleteConfirm() {
@@ -180,6 +186,7 @@ export function CreatePdfPage() {
                   isAdmin={isAdmin}
                   onEdit={handleEdit}
                   onDelete={setToDelete}
+                  onUse={handleUse}
                 />
               ))}
             </div>

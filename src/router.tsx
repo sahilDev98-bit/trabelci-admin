@@ -45,6 +45,7 @@ const SkuDropdownsPage = lazy(() => import("@/pages/sku-management/SkuDropdownsP
 const SkuTemplatesPage = lazy(() => import("@/pages/sku-management/SkuTemplatesPage").then(m => ({ default: m.SkuTemplatesPage })))
 const CreatePdfPage = lazy(() => import("@/pages/create-pdf/CreatePdfPage").then(m => ({ default: m.CreatePdfPage })))
 const PdfTemplateEditorPage = lazy(() => import("@/pages/create-pdf/PdfTemplateEditorPage").then(m => ({ default: m.PdfTemplateEditorPage })))
+const PdfCustomizerPage = lazy(() => import("@/pages/create-pdf/PdfCustomizerPage").then(m => ({ default: m.PdfCustomizerPage })))
 
 const SuspenseFallback = (
   <div className="flex min-h-screen items-center justify-center">
@@ -338,6 +339,12 @@ const pdfTemplateEditRoute = createRoute({
   component: PdfTemplateEditorPage,
 })
 
+const pdfCustomizerRoute = createRoute({
+  getParentRoute: () => appLayoutRoute,
+  path: "/create-pdf/customize/$templateId",
+  component: PdfCustomizerPage,
+})
+
 const routeTree = rootRoute.addChildren([
   loginRoute,
   forgotPasswordRoute,
@@ -369,6 +376,7 @@ const routeTree = rootRoute.addChildren([
     createPdfRoute,
     pdfTemplateNewRoute,
     pdfTemplateEditRoute,
+    pdfCustomizerRoute,
   ]),
 ])
 
