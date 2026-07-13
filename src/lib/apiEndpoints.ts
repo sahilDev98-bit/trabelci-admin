@@ -54,4 +54,5 @@ export const API_ENDPOINTS = {
 
   // PDF Templates
   PDF_TEMPLATES: "/pdf-templates",
+  PDF_TEMPLATES_FROM_PDF: "/pdf-templates/from-pdf",
 } as const

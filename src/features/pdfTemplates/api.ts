@@ -36,6 +36,16 @@ export async function deletePdfTemplate(id: string): Promise<void> {
   await apiFetch(`${API_ENDPOINTS.PDF_TEMPLATES}/${id}`, { method: "DELETE" })
 }
 
+export async function createPdfTemplateFromPdf(file: File): Promise<PdfTemplate> {
+  const form = new FormData()
+  form.append("pdf", file)
+  const res = await apiFetch<{ template: PdfTemplate }>(API_ENDPOINTS.PDF_TEMPLATES_FROM_PDF, {
+    method: "POST",
+    body: form,
+  })
+  return res.template
+}
+
 // ── React Query hooks ─────────────────────────────────────────────────────────
 
 export function usePdfTemplatesQuery() {
@@ -71,6 +81,14 @@ export function useDeletePdfTemplateMutation() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: deletePdfTemplate,
+    onSuccess: () => qc.invalidateQueries({ queryKey: pdfTemplatesQueryKeys.all }),
+  })
+}
+
+export function useCreatePdfTemplateFromPdfMutation() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: createPdfTemplateFromPdf,
     onSuccess: () => qc.invalidateQueries({ queryKey: pdfTemplatesQueryKeys.all }),
   })
 }

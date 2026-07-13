@@ -1,7 +1,7 @@
-import { useState } from "react"
+import { useRef, useState } from "react"
 import { useNavigate } from "@tanstack/react-router"
 import { useTranslation } from "react-i18next"
-import { FileTextIcon, Loader2Icon, PlusIcon, PencilIcon, Trash2Icon } from "lucide-react"
+import { FileTextIcon, Loader2Icon, PlusIcon, PencilIcon, Trash2Icon, UploadIcon } from "lucide-react"
 import { toast } from "sonner"
 
 import { useAppSelector } from "@/store"
@@ -19,7 +19,11 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
-import { usePdfTemplatesQuery, useDeletePdfTemplateMutation } from "@/features/pdfTemplates/api"
+import {
+  usePdfTemplatesQuery,
+  useDeletePdfTemplateMutation,
+  useCreatePdfTemplateFromPdfMutation,
+} from "@/features/pdfTemplates/api"
 import type { PdfTemplate } from "@/features/pdfTemplates/types"
 
 function countSlots(html: string): number {
@@ -123,8 +127,22 @@ export function CreatePdfPage() {
 
   const { data: templates, isLoading, isError } = usePdfTemplatesQuery()
   const deleteMutation = useDeletePdfTemplateMutation()
+  const fromPdfMutation = useCreatePdfTemplateFromPdfMutation()
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   const [toDelete, setToDelete] = useState<PdfTemplate | null>(null)
+
+  async function handlePdfSelected(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    e.target.value = "" // allow re-selecting the same file later
+    if (!file) return
+    try {
+      const template = await fromPdfMutation.mutateAsync(file)
+      toast.success(t("pdfTemplates.pdfConverted", { name: template.name }))
+    } catch {
+      toast.error(t("pdfTemplates.pdfConvertFailed"))
+    }
+  }
 
   function handleEdit(id: string) {
     void navigate({ to: ROUTES.CREATE_PDF_TEMPLATE_EDIT.replace("$templateId", id) })
@@ -154,10 +172,33 @@ export function CreatePdfPage() {
           <p className="mt-1 text-sm text-muted-foreground">{t("pdfTemplates.subtitle")}</p>
         </div>
         {isAdmin && (
-          <Button onClick={() => void navigate({ to: ROUTES.CREATE_PDF_TEMPLATE_NEW })}>
-            <PlusIcon className="size-4" />
-            {t("pdfTemplates.newTemplate")}
-          </Button>
+          <div className="flex shrink-0 items-center gap-2">
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="application/pdf,.pdf"
+              className="hidden"
+              onChange={handlePdfSelected}
+            />
+            <Button
+              variant="outline"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={fromPdfMutation.isPending}
+            >
+              {fromPdfMutation.isPending ? (
+                <Loader2Icon className="size-4 animate-spin" />
+              ) : (
+                <UploadIcon className="size-4" />
+              )}
+              {fromPdfMutation.isPending
+                ? t("pdfTemplates.converting")
+                : t("pdfTemplates.uploadPdf")}
+            </Button>
+            <Button onClick={() => void navigate({ to: ROUTES.CREATE_PDF_TEMPLATE_NEW })}>
+              <PlusIcon className="size-4" />
+              {t("pdfTemplates.newTemplate")}
+            </Button>
+          </div>
         )}
       </header>
 
