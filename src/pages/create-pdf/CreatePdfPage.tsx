@@ -106,7 +106,7 @@ function TemplateCard({
       </CardHeader>
       <CardContent className="flex flex-1 flex-col gap-3 pt-0">
         <MiniPreview html={template.html_content} />
-        <div className="flex items-center justify-between gap-2">
+        {/* <div className="flex items-center justify-between gap-2">
           {slotCount > 0 && (
             <span className="text-xs text-muted-foreground">
               {t("pdfTemplates.slotsCount", { count: slotCount })}
@@ -117,7 +117,7 @@ function TemplateCard({
               date: new Date(template.updated_at).toLocaleDateString(),
             })}
           </span>
-        </div>
+        </div> */}
         <div className="flex gap-2">
           <Button size="sm" className="flex-1" onClick={() => onUse(template.id)}>
             {t("pdfTemplates.useTemplate")}
