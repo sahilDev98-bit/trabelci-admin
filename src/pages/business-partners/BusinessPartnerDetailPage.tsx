@@ -3,7 +3,7 @@ import { useNavigate, useParams } from "@tanstack/react-router"
 import { useForm, useWatch } from "react-hook-form"
 import { useQueryClient } from "@tanstack/react-query"
 import { useTranslation } from "react-i18next"
-import { ArrowLeft, Plus, Users } from "lucide-react"
+import { ArrowLeft, CheckCircle2, Link2, Loader2, Plus, Users, XCircle } from "lucide-react"
 
 import { ErrorMessage } from "@/components/ErrorMessage"
 import { ApiError } from "@/lib/apiClient"
@@ -24,7 +24,14 @@ import { Label } from "@/components/ui/label"
 import { PasswordInput } from "@/components/ui/password-input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { useBusinessPartnerQuery, useBusinessPartnerUsersQuery, useUpdateBusinessPartnerMultiplierMutation } from "@/features/businessPartners/api"
+import {
+  lookupSapBp,
+  useBusinessPartnerQuery,
+  useBusinessPartnerUsersQuery,
+  useLinkBusinessPartnerToSapMutation,
+  useUpdateBusinessPartnerMultiplierMutation,
+} from "@/features/businessPartners/api"
+import type { SapBpLookupResult } from "@/features/businessPartners/types"
 import { businessPartnersQueryKeys } from "@/features/businessPartners/queryKeys"
 import { useCreateUserMutation } from "@/features/users/api"
 import { formatDate } from "@/lib/formatDate"
@@ -213,6 +220,115 @@ function AddUserDialog({
 }
 
 // ---------------------------------------------------------------------------
+// Link to SAP customer
+// ---------------------------------------------------------------------------
+
+function LinkSapCard({ bpId }: { bpId: string }) {
+  const { t } = useTranslation()
+  const [codeInput, setCodeInput] = useState("")
+  const [lookupLoading, setLookupLoading] = useState(false)
+  const [lookupResult, setLookupResult] = useState<SapBpLookupResult | null>(null)
+  const [lookupError, setLookupError] = useState<string | null>(null)
+  const linkMutation = useLinkBusinessPartnerToSapMutation()
+
+  const handleLookup = async () => {
+    const code = codeInput.trim()
+    if (!code) return
+    setLookupLoading(true)
+    setLookupResult(null)
+    setLookupError(null)
+    linkMutation.reset()
+    try {
+      const result = await lookupSapBp(code)
+      setLookupResult(result)
+    } catch (err: unknown) {
+      setLookupError(err instanceof Error ? err.message : "SAP lookup failed")
+    } finally {
+      setLookupLoading(false)
+    }
+  }
+
+  const handleConnect = () => {
+    if (!lookupResult) return
+    linkMutation.mutate({ id: bpId, cardCode: lookupResult.CardCode })
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <Link2 className="size-5" />
+          {t("businessPartners.linkSapTitle")}
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="grid gap-3">
+        <p className="text-sm text-muted-foreground">{t("businessPartners.linkSapDesc")}</p>
+
+        <div className="flex items-center gap-2">
+          <Input
+            placeholder={t("businessPartners.sapCardCodePlaceholder")}
+            className="max-w-[240px]"
+            value={codeInput}
+            onChange={(e) => {
+              setCodeInput(e.target.value)
+              setLookupResult(null)
+              setLookupError(null)
+            }}
+            onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); handleLookup() } }}
+          />
+          <Button type="button" variant="outline" onClick={handleLookup} disabled={lookupLoading || !codeInput.trim()}>
+            {lookupLoading ? <Loader2 className="size-4 animate-spin" /> : t("businessPartners.checkSap")}
+          </Button>
+        </div>
+
+        {lookupError ? (
+          <div className="flex items-center gap-2 text-sm text-destructive">
+            <XCircle className="size-4 shrink-0" />
+            <span>{lookupError}</span>
+          </div>
+        ) : null}
+
+        {lookupResult ? (
+          <div className="rounded-md border bg-muted/40 p-3 text-sm flex flex-col gap-2">
+            <div className="flex items-center gap-2 font-medium text-green-700 dark:text-green-400">
+              <CheckCircle2 className="size-4" />
+              {t("businessPartners.sapCustomerFound")}
+            </div>
+            <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-muted-foreground">
+              <span className="font-medium text-foreground">{t("common.name")}</span><span>{lookupResult.CardName}</span>
+              <span className="font-medium text-foreground">{t("businessPartners.cardCode")}</span><span>{lookupResult.CardCode}</span>
+              {lookupResult.Phone1 ? (
+                <>
+                  <span className="font-medium text-foreground">{t("businessPartners.phone")}</span><span>{lookupResult.Phone1}</span>
+                </>
+              ) : null}
+              {lookupResult.EMail ? (
+                <>
+                  <span className="font-medium text-foreground">{t("common.email")}</span><span>{lookupResult.EMail}</span>
+                </>
+              ) : null}
+            </div>
+            <p className="text-xs text-amber-600 dark:text-amber-400">{t("businessPartners.sapNameOverrideNote")}</p>
+            <Button type="button" size="sm" onClick={handleConnect} disabled={linkMutation.isPending}>
+              {linkMutation.isPending ? <Loader2 className="size-4 animate-spin" /> : t("businessPartners.linkToThisCustomer")}
+            </Button>
+            {linkMutation.isError ? (
+              <ErrorMessage>
+                {linkMutation.error instanceof ApiError && linkMutation.error.i18nKey
+                  ? t(linkMutation.error.i18nKey)
+                  : linkMutation.error instanceof Error
+                    ? linkMutation.error.message
+                    : t("businessPartners.failedToLinkSap")}
+              </ErrorMessage>
+            ) : null}
+          </div>
+        ) : null}
+      </CardContent>
+    </Card>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Page
 // ---------------------------------------------------------------------------
 
@@ -307,8 +423,10 @@ export function BusinessPartnerDetailPage() {
                 </div>
                 <div>
                   <p className="text-xs text-muted-foreground">{t("businessPartners.sapSync")}</p>
-                  <Badge variant={bp.sapSyncStatus === "synced" ? "default" : "secondary"}>
-                    {bp.sapSyncStatus === "synced" ? t("common.synced") : t("common.pending")}
+                  <Badge variant={bp.cardCode ? "default" : "secondary"}>
+                    {bp.cardCode
+                      ? (bp.sapSyncStatus === "manually_linked" ? t("businessPartners.manuallyLinked") : t("common.synced"))
+                      : t("businessPartners.notLinked")}
                   </Badge>
                 </div>
                 <div>
@@ -374,6 +492,9 @@ export function BusinessPartnerDetailPage() {
           </QueryStateWrapper>
         </CardContent>
       </Card>
+
+      {/* Link to SAP Card — only for BPs not yet connected to a SAP customer */}
+      {bp && !bp.cardCode && id ? <LinkSapCard bpId={id} /> : null}
 
       {/* Users Card */}
       <Card>

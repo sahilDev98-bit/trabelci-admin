@@ -133,6 +133,23 @@ export function useRefreshBusinessPartnerFromSapMutation() {
   })
 }
 
+async function linkBusinessPartnerToSap({ id, cardCode }: { id: string; cardCode: string }): Promise<void> {
+  await apiFetch(`${API_ENDPOINTS.BUSINESS_PARTNERS}/${id}/link-sap`, {
+    method: "POST",
+    body: JSON.stringify({ cardCode }),
+  })
+}
+
+export function useLinkBusinessPartnerToSapMutation() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: linkBusinessPartnerToSap,
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: businessPartnersQueryKeys.all })
+    },
+  })
+}
+
 async function fetchBusinessPartner(id: string): Promise<BusinessPartner> {
   const res = await apiFetch<{ success: true; businessPartner: BusinessPartnerRow }>(
     `${API_ENDPOINTS.BUSINESS_PARTNERS}/${id}`,
