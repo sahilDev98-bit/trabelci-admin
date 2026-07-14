@@ -43,6 +43,9 @@ export interface UpdateBusinessPartnerInput {
 export interface SapBpLookupResult {
   CardCode: string
   CardName: string
+  CardType?: string | null
+  Phone1?: string | null
+  EMail?: string | null
 }
 
 export interface RefreshFromSapFailure {
