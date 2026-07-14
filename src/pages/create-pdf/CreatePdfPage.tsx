@@ -26,6 +26,11 @@ import {
 } from "@/features/pdfTemplates/api"
 import type { PdfTemplate } from "@/features/pdfTemplates/types"
 
+// Manual template creation/editing is disabled for now — PDF upload is the
+// only supported way to create templates. Flip this back on to restore the
+// "New Template" button and the per-card edit/delete icons.
+const SHOW_TEMPLATE_MANAGEMENT = false
+
 function countSlots(html: string): number {
   const matches = html.match(/data-pdf-slot=/g)
   return matches ? matches.length : 0
@@ -64,7 +69,9 @@ function TemplateCard({
   return (
     <Card className="flex flex-col overflow-hidden transition-shadow hover:shadow-md">
       <CardHeader className="pb-2">
-        <div className="flex items-start justify-between gap-2">
+        {/* Fixed height (title + up to 2 description lines) so every card's
+            image starts at the same y position regardless of text length */}
+        <div className="flex min-h-13 items-start justify-between gap-2">
           <div className="min-w-0">
             <CardTitle className="truncate text-sm font-medium">{template.name}</CardTitle>
             {template.description && (
@@ -73,7 +80,7 @@ function TemplateCard({
               </CardDescription>
             )}
           </div>
-          {isAdmin && (
+          {isAdmin && SHOW_TEMPLATE_MANAGEMENT && (
             <div className="flex shrink-0 items-center gap-1">
               <Button
                 variant="ghost"
@@ -111,9 +118,22 @@ function TemplateCard({
             })}
           </span>
         </div>
-        <Button size="sm" className="w-full" onClick={() => onUse(template.id)}>
-          {t("pdfTemplates.useTemplate")}
-        </Button>
+        <div className="flex gap-2">
+          <Button size="sm" className="flex-1" onClick={() => onUse(template.id)}>
+            {t("pdfTemplates.useTemplate")}
+          </Button>
+          {isAdmin && (
+            <Button
+              size="sm"
+              variant="outline"
+              className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+              onClick={() => onDelete(template)}
+            >
+              <Trash2Icon className="size-3.5" />
+              {t("pdfTemplates.deleteTemplate")}
+            </Button>
+          )}
+        </div>
       </CardContent>
     </Card>
   )
@@ -194,10 +214,12 @@ export function CreatePdfPage() {
                 ? t("pdfTemplates.converting")
                 : t("pdfTemplates.uploadPdf")}
             </Button>
-            <Button onClick={() => void navigate({ to: ROUTES.CREATE_PDF_TEMPLATE_NEW })}>
-              <PlusIcon className="size-4" />
-              {t("pdfTemplates.newTemplate")}
-            </Button>
+            {SHOW_TEMPLATE_MANAGEMENT && (
+              <Button onClick={() => void navigate({ to: ROUTES.CREATE_PDF_TEMPLATE_NEW })}>
+                <PlusIcon className="size-4" />
+                {t("pdfTemplates.newTemplate")}
+              </Button>
+            )}
           </div>
         )}
       </header>
@@ -243,7 +265,7 @@ export function CreatePdfPage() {
                     {t("pdfTemplates.noTemplatesDesc")}
                   </p>
                 </div>
-                {isAdmin && (
+                {isAdmin && SHOW_TEMPLATE_MANAGEMENT && (
                   <Button
                     size="sm"
                     onClick={() => void navigate({ to: ROUTES.CREATE_PDF_TEMPLATE_NEW })}

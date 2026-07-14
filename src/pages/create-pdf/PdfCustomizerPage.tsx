@@ -149,14 +149,53 @@ const IFRAME_INJECTION = `
     });
   });
 
+  /* ──────────── FIT FIXED-WIDTH PAGES TO THE CONTAINER ──────────── */
+  //
+  // Auto-generated templates have fixed-size pages (794px A4) tagged with
+  // data-pdf-page. Scale them so the design fills the full paper width —
+  // the wrapper is unwrapped again on export so the downloaded PDF stays
+  // pixel-exact at the original size.
+  var _fitWrap = null;
+  function fitToWidth() {
+    var pages = document.querySelectorAll('[data-pdf-page]');
+    if (!pages.length) return;
+
+    if (!_fitWrap) {
+      _fitWrap = document.createElement('div');
+      _fitWrap.setAttribute('data-pdf-fitwrap', '1');
+      while (document.body.firstChild) _fitWrap.appendChild(document.body.firstChild);
+      document.body.appendChild(_fitWrap);
+      document.body.style.margin = '0';
+      document.body.style.overflow = 'hidden';
+    }
+
+    // Measure the natural page width with the transform disabled
+    _fitWrap.style.transform = 'none';
+    var pageW = pages[0].offsetWidth || 794;
+    var avail = document.documentElement.clientWidth;
+    var scale = pageW > 0 ? avail / pageW : 1;
+
+    _fitWrap.style.transformOrigin = 'top left';
+    _fitWrap.style.width = pageW + 'px';
+    _fitWrap.style.transform = Math.abs(scale - 1) > 0.005 ? 'scale(' + scale + ')' : 'none';
+  }
+
   /* ──────────── HEIGHT REPORTING ──────────── */
   function reportHeight() {
-    var h = Math.max(
-      document.body.scrollHeight,
-      document.body.offsetHeight,
-      document.documentElement.scrollHeight,
-      document.documentElement.offsetHeight
-    );
+    fitToWidth();
+    var h;
+    if (_fitWrap) {
+      // Transformed content: layout height ignores the visual scale, so
+      // measure the rendered rectangle instead
+      h = _fitWrap.getBoundingClientRect().height;
+    } else {
+      h = Math.max(
+        document.body.scrollHeight,
+        document.body.offsetHeight,
+        document.documentElement.scrollHeight,
+        document.documentElement.offsetHeight
+      );
+    }
     window.parent.postMessage({ type: 'pdf-height', value: h }, '*');
   }
 
@@ -167,6 +206,7 @@ const IFRAME_INJECTION = `
   }, '*');
 
   window.addEventListener('load', reportHeight);
+  window.addEventListener('resize', reportHeight);
   reportHeight();
   setTimeout(reportHeight, 300);
   if (window.ResizeObserver) new ResizeObserver(reportHeight).observe(document.body);
@@ -179,6 +219,14 @@ const IFRAME_INJECTION = `
 
     // Remove all things we injected
     clone.querySelectorAll('._pz, script, input[type="file"], style').forEach(function (n) { n.remove(); });
+
+    // Undo the fit-to-width scaling: move children back out of the wrapper
+    // so the exported HTML is the original, unscaled document
+    clone.querySelectorAll('[data-pdf-fitwrap]').forEach(function (wrap) {
+      var parent = wrap.parentNode;
+      while (wrap.firstChild) parent.insertBefore(wrap.firstChild, wrap);
+      wrap.remove();
+    });
 
     // Clean slot markers & interactive styles from every slot
     clone.querySelectorAll('[data-pdf-slot]').forEach(function (el) {
