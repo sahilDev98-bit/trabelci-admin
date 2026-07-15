@@ -306,7 +306,7 @@ export function PdfCustomizerPage() {
   }
 
   if (template.template_type === "pdf_master") {
-    return <PdfMasterCustomizer template={template} />
+    return <PdfMasterCustomizer key={template.id} template={template} />
   }
 
   return <HtmlPdfCustomizer template={template} />

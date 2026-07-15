@@ -94,9 +94,18 @@ export async function editPdfMasterImage(
   })
 }
 
-/** Working-copy PDF bytes — used to (re)render pages in the browser after each edit. */
+/** Full working-copy PDF bytes — used once, for the initial render of every page. */
 export async function fetchPdfMasterSessionFile(sessionId: string): Promise<ArrayBuffer> {
   return apiFetch<ArrayBuffer>(`${API_ENDPOINTS.PDF_MASTER_SESSION}/${sessionId}/file`, {
+    responseType: "arraybuffer",
+  })
+}
+
+/** One page, sliced server-side into its own tiny PDF — used to refresh a
+ * single page's canvas after an edit without re-downloading the whole
+ * (possibly 20+ page) working document just to redraw the one page that changed. */
+export async function fetchPdfMasterSessionPage(sessionId: string, pageNumber: number): Promise<ArrayBuffer> {
+  return apiFetch<ArrayBuffer>(`${API_ENDPOINTS.PDF_MASTER_SESSION}/${sessionId}/page/${pageNumber}`, {
     responseType: "arraybuffer",
   })
 }
