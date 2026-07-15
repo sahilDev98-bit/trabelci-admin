@@ -286,59 +286,77 @@ export function ProductGroupManagePage() {
     ? totalAvailableCount - excludedProductIds.size
     : selectedProductIds.size
 
+  // Progress of a long-running bulk operation — drives button labels so the
+  // admin always sees that something is happening (and how far along it is).
+  const [bulkProgress, setBulkProgress] = useState<{ phase: "collecting" | "adding" | "removing"; done: number; total: number } | null>(null)
+
   const handleAddProducts = async () => {
-    if (!id || selectedCount === 0) return
+    if (!id || selectedCount === 0 || bulkProgress) return
 
-    let idsToAdd: number[]
+    try {
+      let idsToAdd: number[]
 
-    if (isSelectAllMode) {
-      // Paginate through ALL server pages to collect every product ID
-      const seen = new Set<string>()
-      const allIds: number[] = []
-      const fetchSize = 200
+      if (isSelectAllMode) {
+        // Paginate through ALL server pages to collect every product ID
+        setBulkProgress({ phase: "collecting", done: 0, total: totalAvailableCount })
+        const seen = new Set<string>()
+        const allIds: number[] = []
+        const fetchSize = 200
 
-      // For multi-category, fetch each category separately; otherwise single fetch
-      const categoryIdsToFetch = isMultiCategory ? selectedCategoryIds : [selectedCategoryId]
+        // For multi-category, fetch each category separately; otherwise single fetch
+        const categoryIdsToFetch = isMultiCategory ? selectedCategoryIds : [selectedCategoryId]
 
-      for (const catId of categoryIdsToFetch) {
-        let pg = 1
-        let totalPages = 1
+        for (const catId of categoryIdsToFetch) {
+          let pg = 1
+          let totalPages = 1
 
-        while (pg <= totalPages) {
-          const res = await fetchProductsPage({
-            page: pg,
-            pageSize: fetchSize,
-            search: productSearch,
-            categoryId: catId,
-          })
-          totalPages = Math.ceil(res.total / fetchSize)
+          while (pg <= totalPages) {
+            const res = await fetchProductsPage({
+              page: pg,
+              pageSize: fetchSize,
+              search: productSearch,
+              categoryId: catId,
+            })
+            totalPages = Math.ceil(res.total / fetchSize)
 
-          for (const p of res.items) {
-            const pid = String(p.id)
-            if (!seen.has(pid) && !groupProductIds.has(pid) && !excludedProductIds.has(pid)) {
-              seen.add(pid)
-              allIds.push(Number(p.id))
+            for (const p of res.items) {
+              const pid = String(p.id)
+              if (!seen.has(pid) && !groupProductIds.has(pid) && !excludedProductIds.has(pid)) {
+                seen.add(pid)
+                allIds.push(Number(p.id))
+              }
             }
+            setBulkProgress({ phase: "collecting", done: allIds.length, total: totalAvailableCount })
+            pg++
           }
-          pg++
         }
+
+        idsToAdd = allIds
+      } else {
+        idsToAdd = Array.from(selectedProductIds).map(Number)
       }
 
-      idsToAdd = allIds
-    } else {
-      idsToAdd = Array.from(selectedProductIds).map(Number)
-    }
+      if (idsToAdd.length === 0) return
 
-    if (idsToAdd.length === 0) return
-
-    const batches = chunk(idsToAdd, BATCH_SIZE)
-    for (const batch of batches) {
-      await addMutation.mutateAsync({ productIds: batch })
+      const batches = chunk(idsToAdd, BATCH_SIZE)
+      let done = 0
+      setBulkProgress({ phase: "adding", done, total: idsToAdd.length })
+      for (const batch of batches) {
+        await addMutation.mutateAsync({ productIds: batch })
+        done += batch.length
+        setBulkProgress({ phase: "adding", done, total: idsToAdd.length })
+      }
+      toast.success(t("productGroups.productsAddedToGroup"), {
+        description: t("productGroups.productsAddedToGroupDesc", { count: idsToAdd.length, name: group?.name }),
+      })
+      handleClearSelection()
+    } catch (error) {
+      toast.error(t("productGroups.failedToAddProducts"), {
+        description: error instanceof Error ? error.message : undefined,
+      })
+    } finally {
+      setBulkProgress(null)
     }
-    toast.success(t("productGroups.productsAddedToGroup"), {
-      description: t("productGroups.productsAddedToGroupDesc", { count: idsToAdd.length, name: group?.name }),
-    })
-    handleClearSelection()
   }
 
   // ---------------------------------------------------------------------------
@@ -381,25 +399,43 @@ export function ProductGroupManagePage() {
 
   const handleRemoveProduct = async (productId: string) => {
     if (!id) return
-    await removeMutation.mutateAsync({ productIds: [Number(productId)] })
-    toast.success(t("productGroups.productRemovedFromGroup"), {
-      description: t("productGroups.productRemovedFromGroupDesc"),
-    })
+    try {
+      await removeMutation.mutateAsync({ productIds: [Number(productId)] })
+      toast.success(t("productGroups.productRemovedFromGroup"), {
+        description: t("productGroups.productRemovedFromGroupDesc"),
+      })
+    } catch (error) {
+      toast.error(t("productGroups.failedToRemoveProducts"), {
+        description: error instanceof Error ? error.message : undefined,
+      })
+    }
   }
 
   const handleRemoveAll = useCallback(async () => {
-    if (!id || !groupProducts || groupProducts.length === 0) return
-    const allIds = groupProducts.map((p) => Number(p.id))
-    const batches = chunk(allIds, BATCH_SIZE)
-    for (const batch of batches) {
-      await removeMutation.mutateAsync({ productIds: batch })
+    if (!id || !groupProducts || groupProducts.length === 0 || bulkProgress) return
+    try {
+      const allIds = groupProducts.map((p) => Number(p.id))
+      const batches = chunk(allIds, BATCH_SIZE)
+      let done = 0
+      setBulkProgress({ phase: "removing", done, total: allIds.length })
+      for (const batch of batches) {
+        await removeMutation.mutateAsync({ productIds: batch })
+        done += batch.length
+        setBulkProgress({ phase: "removing", done, total: allIds.length })
+      }
+      toast.success(t("productGroups.allProductsRemovedFromGroup"), {
+        description: t("productGroups.allProductsRemovedFromGroupDesc", { count: allIds.length, name: group?.name }),
+      })
+      setRemoveAllOpen(false)
+      setCurrentPage(1)
+    } catch (error) {
+      toast.error(t("productGroups.failedToRemoveProducts"), {
+        description: error instanceof Error ? error.message : undefined,
+      })
+    } finally {
+      setBulkProgress(null)
     }
-    toast.success(t("productGroups.allProductsRemovedFromGroup"), {
-      description: t("productGroups.allProductsRemovedFromGroupDesc", { count: allIds.length, name: group?.name }),
-    })
-    setRemoveAllOpen(false)
-    setCurrentPage(1)
-  }, [id, groupProducts, removeMutation, group?.name, t])
+  }, [id, groupProducts, removeMutation, group?.name, t, bulkProgress])
 
   return (
     <div className="grid gap-6">
@@ -455,12 +491,16 @@ export function ProductGroupManagePage() {
           <CardTitle>{t("productGroups.addProducts")}</CardTitle>
           <Button
             size="sm"
-            disabled={selectedCount === 0 || addMutation.isPending}
+            disabled={selectedCount === 0 || !!bulkProgress || addMutation.isPending}
             onClick={handleAddProducts}
           >
-            {addMutation.isPending
-              ? t("products.adding")
-              : t("productGroups.addSelectedCount", { count: selectedCount })}
+            {bulkProgress?.phase === "collecting"
+              ? t("productGroups.collectingProgress", { done: bulkProgress.done, total: bulkProgress.total })
+              : bulkProgress?.phase === "adding"
+                ? t("productGroups.addingProgress", { done: bulkProgress.done, total: bulkProgress.total })
+                : addMutation.isPending
+                  ? t("products.adding")
+                  : t("productGroups.addSelectedCount", { count: selectedCount })}
           </Button>
         </CardHeader>
         <CardContent>
@@ -661,11 +701,13 @@ export function ProductGroupManagePage() {
             <Button
               variant="destructive"
               size="sm"
-              disabled={removeMutation.isPending}
+              disabled={removeMutation.isPending || !!bulkProgress}
               onClick={() => setRemoveAllOpen(true)}
             >
               <Trash2 className="me-1.5 size-3.5" />
-              {t("productGroups.removeAll")}
+              {bulkProgress?.phase === "removing"
+                ? t("productGroups.removingProgress", { done: bulkProgress.done, total: bulkProgress.total })
+                : t("productGroups.removeAll")}
             </Button>
           )}
         </CardHeader>
