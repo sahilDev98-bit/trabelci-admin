@@ -92,6 +92,7 @@ const he = {
     skuDropdowns: "רשימות",
     skuTemplates: "תבניות",
     createPdf: "צור PDF",
+    generateAiImages: "יצירת תמונות AI",
   },
   breadcrumb: {
     dashboard: "לוח בקרה",
@@ -115,6 +116,7 @@ const he = {
     dropdowns: "רשימות",
     templates: "תבניות",
     "create-pdf": "צור PDF",
+    "ai-images": "יצירת תמונות AI",
   },
   auth: {
     adminSignIn: "כניסת מנהל",
@@ -990,6 +992,12 @@ const he = {
     masterLoading: "פותח את קובץ ה-PDF לעריכה…",
     masterEditFailed: "לא ניתן היה לשמור את השינוי — נסה שוב",
     masterImageReplaced: "התמונה הוחלפה",
+  },
+  aiImages: {
+    title: "יצירת תמונות AI",
+    unavailableTitle: "שרת ה-Room Visualizer אינו פועל",
+    unavailableDesc: "הפעל את השרת מקומית ולאחר מכן נסה שוב:",
+    retry: "נסה שוב",
   },
 } as const
 

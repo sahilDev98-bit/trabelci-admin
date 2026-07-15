@@ -12,6 +12,7 @@ dist
 dist-ssr
 *.local
 python-works/openai-output/
+python-works/modeling-automation/storage/
 
 # Editor directories and files
 .vscode/*
@@ -25,3 +26,15 @@ python-works/openai-output/
 *.sw?
 .env
 .env.local
+pdfs
+__pycache__
+trabelci-admin\python-works\openai-output
+photo-llm
+check_openai_key.py
+
+# Stray/unused files not part of any tracked feature
+python-works/empty-rooms/
+python-works/import_form.html
+python-works/pdf_ocr.py
+python-works/workflow.py
+python-works/modeling-automation/empty_room_medium.png

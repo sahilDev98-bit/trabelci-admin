@@ -92,6 +92,7 @@ const en = {
     skuDropdowns: "Dropdowns",
     skuTemplates: "Templates",
     createPdf: "Create PDF",
+    generateAiImages: "Generate AI Images",
   },
   breadcrumb: {
     dashboard: "Dashboard",
@@ -115,6 +116,7 @@ const en = {
     dropdowns: "Dropdowns",
     templates: "Templates",
     "create-pdf": "Create PDF",
+    "ai-images": "Generate AI Images",
   },
   auth: {
     adminSignIn: "Admin sign in",
@@ -1006,6 +1008,12 @@ const en = {
     masterLoading: "Opening your PDF for editing…",
     masterEditFailed: "Could not save that change — please try again",
     masterImageReplaced: "Image replaced",
+  },
+  aiImages: {
+    title: "Generate AI Images",
+    unavailableTitle: "Room Visualizer is not running",
+    unavailableDesc: "Start the visualizer server locally, then retry:",
+    retry: "Retry",
   },
 } as const
 

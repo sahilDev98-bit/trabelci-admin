@@ -29,4 +29,5 @@ export const ROUTES = {
   CREATE_PDF_TEMPLATE_NEW: "/create-pdf/templates/new",
   CREATE_PDF_TEMPLATE_EDIT: "/create-pdf/templates/$templateId",
   CREATE_PDF_CUSTOMIZE: "/create-pdf/customize/$templateId",
+  CREATE_PDF_AI_IMAGES: "/create-pdf/ai-images",
 } as const
