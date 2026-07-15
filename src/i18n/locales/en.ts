@@ -998,6 +998,9 @@ const en = {
     preview: "Preview",
     slotLegend: "Blue outline = text slot · Orange = image slot",
     pdfDownloaded: "PDF downloaded.",
+    masterLoading: "Opening your PDF for editing…",
+    masterEditFailed: "Could not save that change — please try again",
+    masterImageReplaced: "Image replaced",
   },
 } as const
 

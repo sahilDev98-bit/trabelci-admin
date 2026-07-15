@@ -22,7 +22,7 @@ import {
 import {
   usePdfTemplatesQuery,
   useDeletePdfTemplateMutation,
-  useCreatePdfTemplateFromPdfMutation,
+  useCreatePdfMasterTemplateMutation,
 } from "@/features/pdfTemplates/api"
 import type { PdfTemplate } from "@/features/pdfTemplates/types"
 
@@ -31,16 +31,29 @@ import type { PdfTemplate } from "@/features/pdfTemplates/types"
 // "New Template" button and the per-card edit/delete icons.
 const SHOW_TEMPLATE_MANAGEMENT = false
 
-function countSlots(html: string): number {
-  const matches = html.match(/data-pdf-slot=/g)
-  return matches ? matches.length : 0
-}
+function MiniPreview({ template }: { template: PdfTemplate }) {
+  if (template.template_type === "pdf_master") {
+    return (
+      <div className="relative h-32 w-full overflow-hidden rounded-md border bg-white">
+        {template.preview_image_url ? (
+          <img
+            src={template.preview_image_url}
+            alt=""
+            className="absolute inset-0 h-full w-full object-cover object-top"
+          />
+        ) : (
+          <div className="flex h-full w-full items-center justify-center text-muted-foreground">
+            <FileTextIcon className="size-8" />
+          </div>
+        )}
+      </div>
+    )
+  }
 
-function MiniPreview({ html }: { html: string }) {
   return (
     <div className="relative h-32 w-full overflow-hidden rounded-md border bg-white">
       <iframe
-        srcDoc={html}
+        srcDoc={template.html_content ?? ""}
         className="pointer-events-none absolute inset-0 h-150 w-200 origin-top-left"
         style={{ transform: "scale(0.18)", transformOrigin: "0 0" }}
         sandbox=""
@@ -64,7 +77,6 @@ function TemplateCard({
   onUse: (id: string) => void
 }) {
   const { t } = useTranslation()
-  const slotCount = countSlots(template.html_content)
 
   return (
     <Card className="flex flex-col overflow-hidden transition-shadow hover:shadow-md">
@@ -105,19 +117,7 @@ function TemplateCard({
         </div>
       </CardHeader>
       <CardContent className="flex flex-1 flex-col gap-3 pt-0">
-        <MiniPreview html={template.html_content} />
-        {/* <div className="flex items-center justify-between gap-2">
-          {slotCount > 0 && (
-            <span className="text-xs text-muted-foreground">
-              {t("pdfTemplates.slotsCount", { count: slotCount })}
-            </span>
-          )}
-          <span className="ml-auto text-xs text-muted-foreground">
-            {t("pdfTemplates.lastUpdated", {
-              date: new Date(template.updated_at).toLocaleDateString(),
-            })}
-          </span>
-        </div> */}
+        <MiniPreview template={template} />
         <div className="flex gap-2">
           <Button size="sm" className="flex-1" onClick={() => onUse(template.id)}>
             {t("pdfTemplates.useTemplate")}
@@ -147,7 +147,7 @@ export function CreatePdfPage() {
 
   const { data: templates, isLoading, isError } = usePdfTemplatesQuery()
   const deleteMutation = useDeletePdfTemplateMutation()
-  const fromPdfMutation = useCreatePdfTemplateFromPdfMutation()
+  const fromPdfMutation = useCreatePdfMasterTemplateMutation()
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const [toDelete, setToDelete] = useState<PdfTemplate | null>(null)

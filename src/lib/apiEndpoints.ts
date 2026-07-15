@@ -55,4 +55,8 @@ export const API_ENDPOINTS = {
   // PDF Templates
   PDF_TEMPLATES: "/pdf-templates",
   PDF_TEMPLATES_FROM_PDF: "/pdf-templates/from-pdf",
+
+  // PDF Master (in-place PDF editing)
+  PDF_MASTER_TEMPLATES: "/pdf-master/templates",
+  PDF_MASTER_SESSION: "/pdf-master/session",
 } as const

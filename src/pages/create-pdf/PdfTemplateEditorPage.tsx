@@ -390,7 +390,7 @@ function EditTemplateEditor({ templateId }: { templateId: string }) {
     <EditorForm
       initialName={template.name}
       initialDescription={template.description ?? ""}
-      initialHtml={template.html_content}
+      initialHtml={template.html_content ?? ""}
       isSaving={updateMutation.isPending}
       onSave={handleSave}
     />

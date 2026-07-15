@@ -74,9 +74,14 @@ api.interceptors.response.use(
   },
 )
 
+interface ApiFetchInit extends RequestInit {
+  /** Forwarded to axios — use "blob" or "arraybuffer" for binary downloads (e.g. PDF export). */
+  responseType?: "json" | "blob" | "arraybuffer"
+}
+
 export async function apiFetch<TResponse>(
   pathname: string,
-  init?: RequestInit,
+  init?: ApiFetchInit,
 ): Promise<TResponse> {
   const url = buildAdminApiUrl(pathname)
   const method = (init?.method ?? "GET").toUpperCase()
@@ -107,6 +112,7 @@ export async function apiFetch<TResponse>(
     method,
     headers,
     data: init?.body,
+    responseType: init?.responseType,
   })
 
   return response.data

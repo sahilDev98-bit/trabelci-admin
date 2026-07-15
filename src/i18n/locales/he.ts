@@ -982,6 +982,9 @@ const he = {
     preview: "תצוגה מקדימה",
     slotLegend: "מסגרת כחולה = טקסט · כתומה = תמונה",
     pdfDownloaded: "PDF הורד בהצלחה.",
+    masterLoading: "פותח את קובץ ה-PDF לעריכה…",
+    masterEditFailed: "לא ניתן היה לשמור את השינוי — נסה שוב",
+    masterImageReplaced: "התמונה הוחלפה",
   },
 } as const
 

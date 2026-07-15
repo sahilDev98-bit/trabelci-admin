@@ -2,7 +2,12 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { apiFetch } from "@/lib/apiClient"
 import { API_ENDPOINTS } from "@/lib/apiEndpoints"
 import { pdfTemplatesQueryKeys } from "./queryKeys"
-import type { CreatePdfTemplateInput, PdfTemplate, UpdatePdfTemplateInput } from "./types"
+import type {
+  CreatePdfTemplateInput,
+  PdfTemplate,
+  UpdatePdfTemplateInput,
+  PdfSession,
+} from "./types"
 
 // ── Fetch helpers ─────────────────────────────────────────────────────────────
 
@@ -44,6 +49,66 @@ export async function createPdfTemplateFromPdf(file: File): Promise<PdfTemplate>
     body: form,
   })
   return res.template
+}
+
+// ── PDF master (in-place editing) ──────────────────────────────────────────────
+
+export async function createPdfMasterTemplate(file: File): Promise<PdfTemplate> {
+  const form = new FormData()
+  form.append("pdf", file)
+  const res = await apiFetch<{ template: PdfTemplate }>(API_ENDPOINTS.PDF_MASTER_TEMPLATES, {
+    method: "POST",
+    body: form,
+  })
+  return res.template
+}
+
+export async function startPdfMasterSession(templateId: string): Promise<PdfSession> {
+  return apiFetch<PdfSession>(`${API_ENDPOINTS.PDF_MASTER_TEMPLATES}/${templateId}/session`, {
+    method: "POST",
+  })
+}
+
+export async function editPdfMasterText(
+  sessionId: string,
+  hotspotId: string,
+  newText: string,
+): Promise<void> {
+  await apiFetch(`${API_ENDPOINTS.PDF_MASTER_SESSION}/${sessionId}/edit-text`, {
+    method: "POST",
+    body: JSON.stringify({ hotspotId, newText }),
+  })
+}
+
+export async function editPdfMasterImage(
+  sessionId: string,
+  hotspotId: string,
+  file: File,
+): Promise<void> {
+  const form = new FormData()
+  form.append("hotspotId", hotspotId)
+  form.append("image", file)
+  await apiFetch(`${API_ENDPOINTS.PDF_MASTER_SESSION}/${sessionId}/edit-image`, {
+    method: "POST",
+    body: form,
+  })
+}
+
+/** Working-copy PDF bytes — used to (re)render pages in the browser after each edit. */
+export async function fetchPdfMasterSessionFile(sessionId: string): Promise<ArrayBuffer> {
+  return apiFetch<ArrayBuffer>(`${API_ENDPOINTS.PDF_MASTER_SESSION}/${sessionId}/file`, {
+    responseType: "arraybuffer",
+  })
+}
+
+export async function exportPdfMasterSession(sessionId: string): Promise<Blob> {
+  return apiFetch<Blob>(`${API_ENDPOINTS.PDF_MASTER_SESSION}/${sessionId}/export`, {
+    responseType: "blob",
+  })
+}
+
+export async function closePdfMasterSession(sessionId: string): Promise<void> {
+  await apiFetch(`${API_ENDPOINTS.PDF_MASTER_SESSION}/${sessionId}`, { method: "DELETE" })
 }
 
 // ── React Query hooks ─────────────────────────────────────────────────────────
@@ -89,6 +154,14 @@ export function useCreatePdfTemplateFromPdfMutation() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: createPdfTemplateFromPdf,
+    onSuccess: () => qc.invalidateQueries({ queryKey: pdfTemplatesQueryKeys.all }),
+  })
+}
+
+export function useCreatePdfMasterTemplateMutation() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: createPdfMasterTemplate,
     onSuccess: () => qc.invalidateQueries({ queryKey: pdfTemplatesQueryKeys.all }),
   })
 }

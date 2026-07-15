@@ -7,6 +7,8 @@ import { toast } from "sonner"
 import { usePdfTemplateQuery } from "@/features/pdfTemplates/api"
 import { ROUTES } from "@/lib/routes"
 import { Button } from "@/components/ui/button"
+import { PdfMasterCustomizer } from "./PdfMasterCustomizer"
+import type { PdfTemplate } from "@/features/pdfTemplates/types"
 
 // ── What gets injected into the iframe ────────────────────────────────────────
 //
@@ -269,7 +271,12 @@ function requestContent(iframe: HTMLIFrameElement): Promise<string> {
   })
 }
 
-// ── Page ──────────────────────────────────────────────────────────────────────
+// ── Page (dispatcher) ────────────────────────────────────────────────────────
+//
+// Templates come in two kinds (see features/pdfTemplates/types.ts):
+//   • pdf_master — uploaded PDF, edited in place (PdfMasterCustomizer)
+//   • html       — hand-authored/legacy-converted HTML template (this file's
+//     original iframe-based customizer, kept below as HtmlPdfCustomizer)
 
 export function PdfCustomizerPage() {
   const { t } = useTranslation()
@@ -277,6 +284,37 @@ export function PdfCustomizerPage() {
   const { templateId } = useParams({ from: "/_app/create-pdf/customize/$templateId" })
 
   const { data: template, isLoading, isError } = usePdfTemplateQuery(templateId)
+
+  if (isLoading) {
+    return (
+      <div className="flex min-h-96 items-center justify-center">
+        <Loader2Icon className="size-5 animate-spin text-muted-foreground" />
+      </div>
+    )
+  }
+
+  if (isError || !template) {
+    return (
+      <div className="flex min-h-96 flex-col items-center justify-center gap-3">
+        <p className="text-sm text-destructive">{t("common.error")}</p>
+        <Button variant="outline" size="sm" onClick={() => void navigate({ to: ROUTES.CREATE_PDF })}>
+          <ArrowLeftIcon className="size-4" />
+          {t("common.back")}
+        </Button>
+      </div>
+    )
+  }
+
+  if (template.template_type === "pdf_master") {
+    return <PdfMasterCustomizer template={template} />
+  }
+
+  return <HtmlPdfCustomizer template={template} />
+}
+
+function HtmlPdfCustomizer({ template }: { template: PdfTemplate }) {
+  const { t } = useTranslation()
+  const navigate = useNavigate()
 
   const iframeRef = useRef<HTMLIFrameElement>(null)
   const [iframeHeight, setIframeHeight] = useState(600)
@@ -388,26 +426,6 @@ export function PdfCustomizerPage() {
     }
   }
 
-  if (isLoading) {
-    return (
-      <div className="flex min-h-96 items-center justify-center">
-        <Loader2Icon className="size-5 animate-spin text-muted-foreground" />
-      </div>
-    )
-  }
-
-  if (isError || !template) {
-    return (
-      <div className="flex min-h-96 flex-col items-center justify-center gap-3">
-        <p className="text-sm text-destructive">{t("common.error")}</p>
-        <Button variant="outline" size="sm" onClick={() => void navigate({ to: ROUTES.CREATE_PDF })}>
-          <ArrowLeftIcon className="size-4" />
-          {t("common.back")}
-        </Button>
-      </div>
-    )
-  }
-
   return (
     <div className="-m-6 flex flex-col" style={{ minHeight: "calc(100vh - 57px)" }}>
 
@@ -481,7 +499,7 @@ export function PdfCustomizerPage() {
         >
           <iframe
             ref={iframeRef}
-            srcDoc={buildSrcDoc(template.html_content)}
+            srcDoc={buildSrcDoc(template.html_content ?? "")}
             title={template.name}
             className="block w-full"
             style={{ height: iframeHeight, border: "none" }}
