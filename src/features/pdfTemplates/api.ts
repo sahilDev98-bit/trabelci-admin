@@ -6,7 +6,8 @@ import type {
   CreatePdfTemplateInput,
   PdfTemplate,
   UpdatePdfTemplateInput,
-  PdfSession,
+  PdfSessionJobStart,
+  PdfSessionJobStatus,
 } from "./types"
 
 // ── Fetch helpers ─────────────────────────────────────────────────────────────
@@ -63,9 +64,16 @@ export async function createPdfMasterTemplate(file: File): Promise<PdfTemplate> 
   return res.template
 }
 
-export async function startPdfMasterSession(templateId: string): Promise<PdfSession> {
-  return apiFetch<PdfSession>(`${API_ENDPOINTS.PDF_MASTER_TEMPLATES}/${templateId}/session`, {
+export async function startPdfMasterSession(templateId: string): Promise<PdfSessionJobStart> {
+  return apiFetch<PdfSessionJobStart>(`${API_ENDPOINTS.PDF_MASTER_TEMPLATES}/${templateId}/session`, {
     method: "POST",
+  })
+}
+
+/** One-shot status check — meant to be called on an interval until status is "done"/"failed". */
+export async function fetchPdfMasterSessionJobStatus(jobId: string): Promise<PdfSessionJobStatus> {
+  return apiFetch<PdfSessionJobStatus>(`${API_ENDPOINTS.PDF_MASTER_JOBS}/${jobId}`, {
+    method: "GET",
   })
 }
 

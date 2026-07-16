@@ -972,6 +972,7 @@ const en = {
     converting: "Converting…",
     pdfConverted: "Template \"{{name}}\" created from your PDF",
     pdfConvertFailed: "Could not convert the PDF — try a different file",
+    pdfTooManyPages: "This PDF has {{count}} pages — the Create PDF module supports up to {{max}} pages on this server. Please split it into smaller files.",
     editTemplate: "Edit Template",
     templateName: "Template name…",
     descriptionPlaceholder: "Description (optional)",

@@ -956,6 +956,7 @@ const he = {
     converting: "ממיר…",
     pdfConverted: "התבנית \"{{name}}\" נוצרה מקובץ ה-PDF שלך",
     pdfConvertFailed: "המרת ה-PDF נכשלה — נסה קובץ אחר",
+    pdfTooManyPages: "לקובץ ה-PDF הזה יש {{count}} עמודים — מודול יצירת ה-PDF תומך עד {{max}} עמודים בשרת זה. יש לפצל לקבצים קטנים יותר.",
     editTemplate: "ערוך תבנית",
     templateName: "שם תבנית…",
     descriptionPlaceholder: "תיאור (אופציונלי)",

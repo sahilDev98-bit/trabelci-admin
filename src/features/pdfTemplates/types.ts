@@ -63,3 +63,20 @@ export interface PdfSession {
   pages: PdfSessionPage[]
   hotspots: PdfHotspot[]
 }
+
+/** Immediate response from starting a session — analysis runs as a background
+ * job (can take minutes for a large catalog), so this returns right away with
+ * a jobId instead of the full session. Poll fetchPdfMasterSessionJobStatus
+ * with it until status is "done". */
+export interface PdfSessionJobStart {
+  jobId: string
+  templateId: string
+  templateName: string
+}
+
+export type PdfSessionJobResult = Omit<PdfSession, "templateId" | "templateName">
+
+export type PdfSessionJobStatus =
+  | { status: "pending" }
+  | { status: "done"; result: PdfSessionJobResult }
+  | { status: "failed"; error: string }

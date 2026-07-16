@@ -3,6 +3,7 @@ import { useNavigate } from "@tanstack/react-router"
 import { useTranslation } from "react-i18next"
 import { FileTextIcon, Loader2Icon, PlusIcon, PencilIcon, Trash2Icon, UploadIcon } from "lucide-react"
 import { toast } from "sonner"
+import * as pdfjsLib from "pdfjs-dist"
 
 import { useAppSelector } from "@/store"
 import { USER_ROLES } from "@/lib/roles"
@@ -30,6 +31,29 @@ import type { PdfTemplate } from "@/features/pdfTemplates/types"
 // only supported way to create templates. Flip this back on to restore the
 // "New Template" button and the per-card edit/delete icons.
 const SHOW_TEMPLATE_MANAGEMENT = false
+
+// Vite statically detects this `new URL(..., import.meta.url)` pattern and
+// bundles the worker as a proper asset (see PdfMasterCustomizer.tsx, which
+// sets up the same worker for the same reason).
+pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
+  "pdfjs-dist/build/pdf.worker.mjs",
+  import.meta.url,
+).toString()
+
+// Client-side pre-check only, for fast feedback before even uploading —
+// the backend enforces the real, authoritative limit. Keep this in sync with
+// MAX_PDF_MASTER_PAGES in trabelci-api-main's services/pdfMasterService.js.
+const MAX_PDF_MASTER_PAGES = 15
+
+async function getPdfPageCount(file: File): Promise<number> {
+  const buffer = await file.arrayBuffer()
+  const doc = await pdfjsLib.getDocument({ data: buffer }).promise
+  try {
+    return doc.numPages
+  } finally {
+    await doc.destroy()
+  }
+}
 
 function MiniPreview({ template }: { template: PdfTemplate }) {
   if (template.template_type === "pdf_master") {
@@ -156,11 +180,23 @@ export function CreatePdfPage() {
     const file = e.target.files?.[0]
     e.target.value = "" // allow re-selecting the same file later
     if (!file) return
+
+    try {
+      const pageCount = await getPdfPageCount(file)
+      if (pageCount > MAX_PDF_MASTER_PAGES) {
+        toast.error(t("pdfTemplates.pdfTooManyPages", { count: pageCount, max: MAX_PDF_MASTER_PAGES }))
+        return
+      }
+    } catch {
+      // Couldn't even read the page count client-side — don't block the
+      // upload on that; the backend enforces the real limit regardless.
+    }
+
     try {
       const template = await fromPdfMutation.mutateAsync(file)
       toast.success(t("pdfTemplates.pdfConverted", { name: template.name }))
-    } catch {
-      toast.error(t("pdfTemplates.pdfConvertFailed"))
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : t("pdfTemplates.pdfConvertFailed"))
     }
   }
 

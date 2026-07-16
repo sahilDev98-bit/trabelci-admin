@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button"
 import { ROUTES } from "@/lib/routes"
 import {
   startPdfMasterSession,
+  fetchPdfMasterSessionJobStatus,
   editPdfMasterText,
   editPdfMasterImage,
   fetchPdfMasterSessionFile,
@@ -34,6 +35,28 @@ const IMAGE_OUTLINE = "rgba(245,158,11,0.8)"
 const IMAGE_OUTLINE_BG = "rgba(245,158,11,0.08)"
 
 const PAPER_TARGET_WIDTH = 1000 // CSS px the page renders at before browser scaling
+
+// Analysis of a large, image-heavy catalog can legitimately take minutes —
+// far longer than Cloudflare's ~100s ceiling for a single response. So the
+// backend only starts the job and returns immediately; this polls a
+// lightweight status endpoint instead of one long-held request.
+const JOB_POLL_INTERVAL_MS = 2_000
+const JOB_POLL_TIMEOUT_MS = 10 * 60 * 1000 // generous ceiling for a very heavy catalog
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+async function waitForSessionJob(jobId: string): Promise<Omit<PdfSession, "templateId" | "templateName">> {
+  const deadline = Date.now() + JOB_POLL_TIMEOUT_MS
+  while (true) {
+    const status = await fetchPdfMasterSessionJobStatus(jobId)
+    if (status.status === "done") return status.result
+    if (status.status === "failed") throw new Error(status.error)
+    if (Date.now() > deadline) throw new Error("PDF analysis is taking too long — try a smaller file")
+    await sleep(JOB_POLL_INTERVAL_MS)
+  }
+}
 
 interface PdfMasterCustomizerProps {
   template: PdfTemplate
@@ -213,7 +236,13 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
       setIsLoading(true)
       setLoadError(null)
       try {
-        const result = await startPdfMasterSession(template.id)
+        const jobStart = await startPdfMasterSession(template.id)
+        const jobResult = await waitForSessionJob(jobStart.jobId)
+        const result: PdfSession = {
+          ...jobResult,
+          templateId: jobStart.templateId,
+          templateName: jobStart.templateName,
+        }
         sessionIdRef.current = result.session_id
         setHotspots(Object.fromEntries(result.hotspots.map((h) => [h.id, h])))
 

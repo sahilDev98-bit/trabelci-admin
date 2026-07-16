@@ -59,6 +59,7 @@ export const API_ENDPOINTS = {
   // PDF Master (in-place PDF editing)
   PDF_MASTER_TEMPLATES: "/pdf-master/templates",
   PDF_MASTER_SESSION: "/pdf-master/session",
+  PDF_MASTER_JOBS: "/pdf-master/jobs",
 
   // AI image generation (Generate AI Images — independent nav item)
   AI_IMAGES_GENERATE: "/ai-images/generate",
