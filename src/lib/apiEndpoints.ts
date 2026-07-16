@@ -60,6 +60,6 @@ export const API_ENDPOINTS = {
   PDF_MASTER_TEMPLATES: "/pdf-master/templates",
   PDF_MASTER_SESSION: "/pdf-master/session",
 
-  // AI image generation (Create PDF → Generate AI Images)
+  // AI image generation (Generate AI Images — independent nav item)
   AI_IMAGES_GENERATE: "/ai-images/generate",
 } as const

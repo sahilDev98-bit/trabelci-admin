@@ -348,7 +348,7 @@ const pdfCustomizerRoute = createRoute({
 
 const aiImagesRoute = createRoute({
   getParentRoute: () => appLayoutRoute,
-  path: "/create-pdf/ai-images",
+  path: "/ai-images",
   component: AiImagesPage,
 })
 

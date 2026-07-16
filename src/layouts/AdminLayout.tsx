@@ -142,7 +142,7 @@ const navEntries: NavEntry[] = [
     ],
   },
   { type: "link", to: ROUTES.CREATE_PDF, icon: FileTextIcon, labelKey: "nav.createPdf" },
-  { type: "link", to: ROUTES.CREATE_PDF_AI_IMAGES, icon: SparklesIcon, labelKey: "nav.generateAiImages" },
+  { type: "link", to: ROUTES.AI_IMAGES, icon: SparklesIcon, labelKey: "nav.generateAiImages" },
   { type: "link", to: ROUTES.SETTINGS, icon: SettingsIcon, labelKey: "nav.settings" },
 ]
 
