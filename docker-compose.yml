@@ -10,6 +10,7 @@ services:
         VITE_SUPABASE_URL: ${VITE_SUPABASE_URL}
         VITE_SUPABASE_ANON_KEY: ${VITE_SUPABASE_ANON_KEY}
         VITE_ADMIN_API_BASE_URL: ${VITE_ADMIN_API_BASE_URL}
+        VITE_ROOM_VISUALIZER_URL: ${VITE_ROOM_VISUALIZER_URL}
     container_name: admin-panel
     networks:
       - custom_trabelci_network

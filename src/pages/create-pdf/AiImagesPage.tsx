@@ -9,9 +9,16 @@ import { useAppSelector } from "@/store"
 // The Marble SKU Room Visualizer is the standalone app in
 // python-works/modeling-automation, served by its Flask server (server.py).
 // It keeps its own workflow/state, so it's embedded whole rather than ported.
+//
+// VITE_ROOM_VISUALIZER_URL overrides this when set, but otherwise the
+// fallback is environment-aware rather than one fixed value: import.meta.env
+// is baked in at build time, so `npm run dev` (PROD=false) falls back to the
+// local server.py, while a production build (`vite build`, PROD=true) falls
+// back to the live proxy — instead of one .env value winning for both,
+// which previously made local dev call the live API too.
 const VISUALIZER_URL =
   (import.meta.env.VITE_ROOM_VISUALIZER_URL as string | undefined)?.trim().replace(/\/+$/, "") ||
-  "http://localhost:5057"
+  (import.meta.env.PROD ? "https://api.trabelcigroup.com/room-visualizer" : "http://localhost:5057")
 
 type VisualizerStatus = "checking" | "up" | "down"
 
