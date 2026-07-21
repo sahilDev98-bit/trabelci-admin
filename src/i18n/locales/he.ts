@@ -93,6 +93,7 @@ const he = {
     skuTemplates: "תבניות",
     createPdf: "צור PDF",
     generateAiImages: "יצירת תמונות AI",
+    extractProductPdf: "חילוץ מוצרים מ-PDF",
   },
   breadcrumb: {
     dashboard: "לוח בקרה",
@@ -998,6 +999,12 @@ const he = {
     title: "יצירת תמונות AI",
     unavailableTitle: "שרת ה-Room Visualizer אינו פועל",
     unavailableDesc: "הפעל את השרת מקומית ולאחר מכן נסה שוב:",
+    retry: "נסה שוב",
+  },
+  extractProductPdf: {
+    title: "חילוץ מוצרים מ-PDF",
+    unavailableTitle: "שרת החילוץ אינו פועל",
+    unavailableDesc: "הפעל את שרת החילוץ מקומית ולאחר מכן נסה שוב:",
     retry: "נסה שוב",
   },
 } as const

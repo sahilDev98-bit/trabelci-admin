@@ -93,6 +93,7 @@ const en = {
     skuTemplates: "Templates",
     createPdf: "Create PDF",
     generateAiImages: "Generate AI Images",
+    extractProductPdf: "Extract Product from PDF",
   },
   breadcrumb: {
     dashboard: "Dashboard",
@@ -1014,6 +1015,12 @@ const en = {
     title: "Generate AI Images",
     unavailableTitle: "Room Visualizer is not running",
     unavailableDesc: "Start the visualizer server locally, then retry:",
+    retry: "Retry",
+  },
+  extractProductPdf: {
+    title: "Extract Product from PDF",
+    unavailableTitle: "Extractor is not running",
+    unavailableDesc: "Start the extractor server locally, then retry:",
     retry: "Retry",
   },
 } as const

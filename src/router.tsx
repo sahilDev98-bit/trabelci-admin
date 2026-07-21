@@ -47,6 +47,7 @@ const CreatePdfPage = lazy(() => import("@/pages/create-pdf/CreatePdfPage").then
 const PdfTemplateEditorPage = lazy(() => import("@/pages/create-pdf/PdfTemplateEditorPage").then(m => ({ default: m.PdfTemplateEditorPage })))
 const PdfCustomizerPage = lazy(() => import("@/pages/create-pdf/PdfCustomizerPage").then(m => ({ default: m.PdfCustomizerPage })))
 const AiImagesPage = lazy(() => import("@/pages/create-pdf/AiImagesPage").then(m => ({ default: m.AiImagesPage })))
+const ExtractProductPdfPage = lazy(() => import("@/pages/extract-product-pdf/ExtractProductPdfPage").then(m => ({ default: m.ExtractProductPdfPage })))
 
 const SuspenseFallback = (
   <div className="flex min-h-screen items-center justify-center">
@@ -352,6 +353,12 @@ const aiImagesRoute = createRoute({
   component: AiImagesPage,
 })
 
+const extractProductPdfRoute = createRoute({
+  getParentRoute: () => appLayoutRoute,
+  path: "/extract-product-pdf",
+  component: ExtractProductPdfPage,
+})
+
 const routeTree = rootRoute.addChildren([
   loginRoute,
   forgotPasswordRoute,
@@ -385,6 +392,7 @@ const routeTree = rootRoute.addChildren([
     pdfTemplateEditRoute,
     pdfCustomizerRoute,
     aiImagesRoute,
+    extractProductPdfRoute,
   ]),
 ])
 

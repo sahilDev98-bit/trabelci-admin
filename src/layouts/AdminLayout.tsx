@@ -27,6 +27,7 @@ import {
   ScanBarcodeIcon,
   FileTextIcon,
   SparklesIcon,
+  ImagesIcon,
 } from "lucide-react"
 
 import { useQueryClient } from "@tanstack/react-query"
@@ -143,6 +144,7 @@ const navEntries: NavEntry[] = [
   },
   { type: "link", to: ROUTES.CREATE_PDF, icon: FileTextIcon, labelKey: "nav.createPdf" },
   { type: "link", to: ROUTES.AI_IMAGES, icon: SparklesIcon, labelKey: "nav.generateAiImages" },
+  { type: "link", to: ROUTES.EXTRACT_PRODUCT_PDF, icon: ImagesIcon, labelKey: "nav.extractProductPdf" },
   { type: "link", to: ROUTES.SETTINGS, icon: SettingsIcon, labelKey: "nav.settings" },
 ]
 
