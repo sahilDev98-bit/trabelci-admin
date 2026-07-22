@@ -45,6 +45,11 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
 // MAX_PDF_MASTER_PAGES in trabelci-api-main's services/pdfMasterService.js.
 const MAX_PDF_MASTER_PAGES = 15
 
+// Client-side pre-check only — mirrors MAX_MB_PER_PAGE in trabelci-api-main's
+// services/pdfMasterService.js (catches a file with very few pages but huge,
+// high-resolution images crammed into them, which a page-count check alone misses).
+const MAX_MB_PER_PAGE = 5
+
 async function getPdfPageCount(file: File): Promise<number> {
   const buffer = await file.arrayBuffer()
   const doc = await pdfjsLib.getDocument({ data: buffer }).promise
@@ -185,6 +190,12 @@ export function CreatePdfPage() {
       const pageCount = await getPdfPageCount(file)
       if (pageCount > MAX_PDF_MASTER_PAGES) {
         toast.error(t("pdfTemplates.pdfTooManyPages", { count: pageCount, max: MAX_PDF_MASTER_PAGES }))
+        return
+      }
+
+      const mbPerPage = file.size / (1024 * 1024) / pageCount
+      if (mbPerPage > MAX_MB_PER_PAGE) {
+        toast.error(t("pdfTemplates.pdfTooHeavyPerPage", { mb: mbPerPage.toFixed(1), max: MAX_MB_PER_PAGE }))
         return
       }
     } catch {
