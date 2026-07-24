@@ -77,31 +77,6 @@ export async function fetchPdfMasterSessionJobStatus(jobId: string): Promise<Pdf
   })
 }
 
-export async function editPdfMasterText(
-  sessionId: string,
-  hotspotId: string,
-  newText: string,
-): Promise<void> {
-  await apiFetch(`${API_ENDPOINTS.PDF_MASTER_SESSION}/${sessionId}/edit-text`, {
-    method: "POST",
-    body: JSON.stringify({ hotspotId, newText }),
-  })
-}
-
-export async function editPdfMasterImage(
-  sessionId: string,
-  hotspotId: string,
-  file: File,
-): Promise<void> {
-  const form = new FormData()
-  form.append("hotspotId", hotspotId)
-  form.append("image", file)
-  await apiFetch(`${API_ENDPOINTS.PDF_MASTER_SESSION}/${sessionId}/edit-image`, {
-    method: "POST",
-    body: form,
-  })
-}
-
 /** Full working-copy PDF bytes — used once, for the initial render of every page. */
 export async function fetchPdfMasterSessionFile(sessionId: string): Promise<ArrayBuffer> {
   return apiFetch<ArrayBuffer>(`${API_ENDPOINTS.PDF_MASTER_SESSION}/${sessionId}/file`, {
@@ -109,17 +84,37 @@ export async function fetchPdfMasterSessionFile(sessionId: string): Promise<Arra
   })
 }
 
-/** One page, sliced server-side into its own tiny PDF — used to refresh a
- * single page's canvas after an edit without re-downloading the whole
- * (possibly 20+ page) working document just to redraw the one page that changed. */
-export async function fetchPdfMasterSessionPage(sessionId: string, pageNumber: number): Promise<ArrayBuffer> {
-  return apiFetch<ArrayBuffer>(`${API_ENDPOINTS.PDF_MASTER_SESSION}/${sessionId}/page/${pageNumber}`, {
-    responseType: "arraybuffer",
-  })
-}
+export type PdfMasterPendingEdit =
+  | { hotspotId: string; type: "text"; value: string }
+  | { hotspotId: string; type: "image"; file: File }
 
-export async function exportPdfMasterSession(sessionId: string): Promise<Blob> {
-  return apiFetch<Blob>(`${API_ENDPOINTS.PDF_MASTER_SESSION}/${sessionId}/export`, {
+/**
+ * Apply every pending text/image edit in one pass and return the final PDF.
+ * Called once, at Download time — editing itself happens entirely client-side
+ * (drawn straight onto the canvas), so this is the only request that ever
+ * touches the session's document on the server.
+ */
+export async function applyPdfMasterEditsAndExport(
+  sessionId: string,
+  edits: PdfMasterPendingEdit[],
+): Promise<Blob> {
+  const form = new FormData()
+  form.append(
+    "edits",
+    JSON.stringify(
+      edits.map((e) => ({
+        hotspot_id: e.hotspotId,
+        type: e.type,
+        ...(e.type === "text" ? { value: e.value } : {}),
+      })),
+    ),
+  )
+  for (const e of edits) {
+    if (e.type === "image") form.append(`image_${e.hotspotId}`, e.file)
+  }
+  return apiFetch<Blob>(`${API_ENDPOINTS.PDF_MASTER_SESSION}/${sessionId}/apply-edits`, {
+    method: "POST",
+    body: form,
     responseType: "blob",
   })
 }

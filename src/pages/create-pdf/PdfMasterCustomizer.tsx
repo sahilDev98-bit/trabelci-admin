@@ -10,13 +10,11 @@ import { ROUTES } from "@/lib/routes"
 import {
   startPdfMasterSession,
   fetchPdfMasterSessionJobStatus,
-  editPdfMasterText,
-  editPdfMasterImage,
   fetchPdfMasterSessionFile,
-  fetchPdfMasterSessionPage,
-  exportPdfMasterSession,
+  applyPdfMasterEditsAndExport,
   closePdfMasterSession,
 } from "@/features/pdfTemplates/api"
+import type { PdfMasterPendingEdit } from "@/features/pdfTemplates/api"
 import type { PdfHotspot, PdfSession, PdfTemplate } from "@/features/pdfTemplates/types"
 
 // Vite statically detects this `new URL(..., import.meta.url)` pattern and
@@ -149,11 +147,20 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
   const sessionIdRef = useRef<string | null>(null)
   const sessionStartedRef = useRef(false)
   const pagesContainerRef = useRef<HTMLDivElement>(null)
-  // The parsed working copy. The PDF is downloaded and parsed ONCE per
-  // version (initial load + once after each edit) and every page renders from
-  // this shared document — re-downloading the full multi-MB file per page is
-  // what originally made large catalogs take minutes to open.
+  // The parsed original PDF, downloaded and parsed exactly once (initial
+  // load). Every page renders from this shared document; edits after that
+  // are drawn straight onto each page's own canvas (see
+  // drawTextEditOnCanvas/drawImageEditOnCanvas) and never touch this again.
   const pdfDocRef = useRef<pdfjsLib.PDFDocumentProxy | null>(null)
+  // Guards against committing the same text edit twice: pressing Enter (or
+  // Escape) unmounts the still-focused textarea, and a focused element being
+  // removed from the DOM fires a native blur on its way out — which would
+  // otherwise re-invoke the onBlur handler a second time, against a stale
+  // snapshot of state from before the first commit. Reset per edit in
+  // beginEditText; the ref itself (unlike the state it guards) is the same
+  // mutable object across both the fresh and the stale closure, which is
+  // exactly what makes it work as a guard here.
+  const commitInFlightRef = useRef(false)
 
   /** Download the current working copy once and (re)parse it. */
   const reloadDocument = useCallback(async () => {
@@ -200,23 +207,73 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
   }, [drawPageToCanvas])
 
   /**
-   * After an edit: fetch ONLY the edited page (sliced server-side into its
-   * own tiny PDF) and repaint just that one canvas — not the whole document.
-   * Re-downloading and re-parsing the full working copy per edit was the
-   * exact reason edits felt slow on large catalogs.
+   * Pending edits, keyed by hotspot id — the entire reason this exists is to
+   * avoid calling the server per edit. Every text/image change is drawn
+   * straight onto the canvas below and just remembered here; the server
+   * only ever sees this list once, in one batch, at Download time. A ref
+   * (not state) because writes here don't need to trigger a re-render —
+   * the canvas draw is what actually updates what the user sees.
    */
-  const refreshPageAfterEdit = useCallback(async (pageNumber: number) => {
-    const sessionId = sessionIdRef.current
-    if (!sessionId) return
-    const bytes = await fetchPdfMasterSessionPage(sessionId, pageNumber)
-    const doc = await pdfjsLib.getDocument({ data: bytes }).promise
+  const pendingEditsRef = useRef<Record<string, PdfMasterPendingEdit>>({})
+
+  /**
+   * Draw a text edit directly onto the page's canvas — no network call.
+   * Mirrors the server's own approach (cover the old line, draw the new one
+   * on top) so it looks right immediately. The server redoes this exactly
+   * once, with the PDF's real embedded fonts, when Download is clicked —
+   * this preview uses the browser's own font rendering instead, which can
+   * differ very slightly from the final file (spacing/kerning), but keeps
+   * every edit instant instead of round-tripping to the server for each one.
+   */
+  const drawTextEditOnCanvas = useCallback((hotspot: PdfHotspot, newText: string, backgroundColor: string) => {
+    if (hotspot.type !== "text") return
+    const canvas = canvasRefs.current[hotspot.page]
+    const pageInfo = session?.pages.find((p) => p.page === hotspot.page)
+    const ctx = canvas?.getContext("2d")
+    if (!canvas || !pageInfo || !ctx) return
+
+    const pxPerPoint = canvas.width / pageInfo.width
+    const [x0, y0, x1, y1] = hotspot.bbox
+    const pad = 1.5 * pxPerPoint
+
+    // Cover the old line (same padding the server uses around the bbox)
+    ctx.fillStyle = backgroundColor
+    ctx.fillRect(x0 * pxPerPoint - pad, y0 * pxPerPoint - pad, (x1 - x0) * pxPerPoint + pad * 2, (y1 - y0) * pxPerPoint + pad * 2)
+
+    const trimmed = newText.trim()
+    if (!trimmed) return
+
+    const fontSizePx = hotspot.size * pxPerPoint
+    const isBold = hotspot.font.toLowerCase().includes("bold")
+    ctx.font = `${isBold ? "bold " : ""}${fontSizePx}px system-ui, sans-serif`
+    ctx.fillStyle = colorIntToCss(hotspot.color)
+    ctx.direction = hotspot.rtl ? "rtl" : "ltr"
+    ctx.textAlign = hotspot.rtl ? "right" : "left"
+    ctx.textBaseline = "alphabetic"
+
+    // No baseline info reaches the frontend (see PdfTextHotspot) — same
+    // fallback the server itself uses when it's missing.
+    const originY = y1 - hotspot.size * 0.2
+    const x = (hotspot.rtl ? x1 : x0) * pxPerPoint
+    ctx.fillText(trimmed, x, originY * pxPerPoint)
+  }, [session])
+
+  /** Draw a replacement image directly onto the page's canvas — no network call. */
+  const drawImageEditOnCanvas = useCallback(async (hotspot: PdfHotspot, file: File) => {
+    const canvas = canvasRefs.current[hotspot.page]
+    const pageInfo = session?.pages.find((p) => p.page === hotspot.page)
+    const ctx = canvas?.getContext("2d")
+    if (!canvas || !pageInfo || !ctx) return
+
+    const bitmap = await createImageBitmap(file)
     try {
-      const page = await doc.getPage(1) // the slice always has exactly one page
-      await drawPageToCanvas(page, pageNumber)
+      const pxPerPoint = canvas.width / pageInfo.width
+      const [x0, y0, x1, y1] = hotspot.bbox
+      ctx.drawImage(bitmap, x0 * pxPerPoint, y0 * pxPerPoint, (x1 - x0) * pxPerPoint, (y1 - y0) * pxPerPoint)
     } finally {
-      await doc.destroy()
+      bitmap.close()
     }
-  }, [drawPageToCanvas])
+  }, [session])
 
   // ── Initial load ────────────────────────────────────────────────────────────
   //
@@ -322,12 +379,19 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
     const canvas = canvasRefs.current[hotspot.page]
     const pageInfo = session?.pages.find((p) => p.page === hotspot.page)
     const bg = canvas && pageInfo ? sampleBackgroundColor(canvas, hotspot.bbox, pageInfo.width) : "#ffffff"
+    commitInFlightRef.current = false // re-arm the guard for this new edit
     setEditingHotspotId(hotspot.id)
     setEditingValue(hotspot.text)
     setEditingBackground(bg)
   }
 
-  async function commitEditText() {
+  function commitEditText() {
+    // See commitInFlightRef's declaration: Enter/Escape unmount this
+    // still-focused textarea, which fires a second, stale onBlur — this
+    // makes that second call a no-op instead of re-processing old state.
+    if (commitInFlightRef.current) return
+    commitInFlightRef.current = true
+
     const hotspot = editingHotspotId ? hotspots[editingHotspotId] : null
     setEditingHotspotId(null)
     if (!hotspot || hotspot.type !== "text" || !session) return
@@ -335,17 +399,10 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
     const newText = editingValue
     if (newText === hotspot.text) return
 
-    setBusyHotspotId(hotspot.id)
-    try {
-      await editPdfMasterText(session.session_id, hotspot.id, newText)
-      setHotspots((prev) => ({ ...prev, [hotspot.id]: { ...hotspot, text: newText } }))
-      await refreshPageAfterEdit(hotspot.page)
-    } catch (err) {
-      console.error(err)
-      toast.error(t("pdfTemplates.masterEditFailed"))
-    } finally {
-      setBusyHotspotId(null)
-    }
+    // No server round-trip — just draw it and remember it for Download.
+    drawTextEditOnCanvas(hotspot, newText, editingBackground)
+    pendingEditsRef.current[hotspot.id] = { hotspotId: hotspot.id, type: "text", value: newText }
+    setHotspots((prev) => ({ ...prev, [hotspot.id]: { ...hotspot, text: newText } }))
   }
 
   // ── Image editing ────────────────────────────────────────────────────────────
@@ -367,8 +424,9 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
 
     setBusyHotspotId(hotspotId)
     try {
-      await editPdfMasterImage(session.session_id, hotspotId, file)
-      await refreshPageAfterEdit(hotspot.page)
+      // No server round-trip — just draw it and remember it for Download.
+      await drawImageEditOnCanvas(hotspot, file)
+      pendingEditsRef.current[hotspotId] = { hotspotId, type: "image", file }
       toast.success(t("pdfTemplates.masterImageReplaced"))
     } catch (err) {
       console.error(err)
@@ -384,7 +442,9 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
     if (!session) return
     setIsExporting(true)
     try {
-      const blob = await exportPdfMasterSession(session.session_id)
+      // The only point the server's copy of the document is touched — every
+      // edit up to now only ever changed the canvas in this browser tab.
+      const blob = await applyPdfMasterEditsAndExport(session.session_id, Object.values(pendingEditsRef.current))
       const url = URL.createObjectURL(blob)
       const a = document.createElement("a")
       a.href = url
@@ -542,6 +602,11 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
                                 }
                                 if (e.key === "Escape") {
                                   e.preventDefault()
+                                  // Also unmounts this focused textarea, which
+                                  // fires the same stale onBlur commitEditText
+                                  // guards against — without this, Escape
+                                  // would silently commit instead of cancel.
+                                  commitInFlightRef.current = true
                                   setEditingHotspotId(null)
                                 }
                               }}
