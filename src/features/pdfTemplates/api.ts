@@ -84,33 +84,57 @@ export async function fetchPdfMasterSessionFile(sessionId: string): Promise<Arra
   })
 }
 
+// hotspotId is the client-namespaced id (unique per editor-page instance,
+// see PdfHotspotBase) — used here purely to give each edit's uploaded file
+// (if any) a unique form field name. originalHotspotId is the plain id from
+// the one-time analysis, which is what the server actually looks up.
 export type PdfMasterPendingEdit =
-  | { hotspotId: string; type: "text"; value: string }
-  | { hotspotId: string; type: "image"; file: File }
+  | { hotspotId: string; originalHotspotId: string; type: "text"; value: string }
+  | { hotspotId: string; originalHotspotId: string; type: "image"; file: File }
+  | { hotspotId: string; originalHotspotId: string; type: "image"; remove: true }
 
 /**
- * Apply every pending text/image edit in one pass and return the final PDF.
- * Called once, at Download time — editing itself happens entirely client-side
- * (drawn straight onto the canvas), so this is the only request that ever
- * touches the session's document on the server.
+ * One page of the final document, in final display order. originalPage
+ * references a page of the ORIGINAL pristine PDF — the same originalPage can
+ * appear more than once (a duplicated page), each with its own edits.
+ * Pages the user removed in the editor simply aren't included at all.
+ */
+export interface PdfMasterPagePlanEntry {
+  originalPage: number
+  edits: PdfMasterPendingEdit[]
+}
+
+/**
+ * Build the final document from the current page plan and return it.
+ * Called once, at Download time — editing (text/image changes, page
+ * add/remove/duplicate) all happens entirely client-side up to this point,
+ * so this is the only request that ever touches the session's document on
+ * the server.
  */
 export async function applyPdfMasterEditsAndExport(
   sessionId: string,
-  edits: PdfMasterPendingEdit[],
+  pagePlan: PdfMasterPagePlanEntry[],
 ): Promise<Blob> {
   const form = new FormData()
   form.append(
-    "edits",
+    "page_plan",
     JSON.stringify(
-      edits.map((e) => ({
-        hotspot_id: e.hotspotId,
-        type: e.type,
-        ...(e.type === "text" ? { value: e.value } : {}),
+      pagePlan.map((page) => ({
+        original_page: page.originalPage,
+        edits: page.edits.map((e) => ({
+          edit_id: e.hotspotId,
+          hotspot_id: e.originalHotspotId,
+          type: e.type,
+          ...(e.type === "text" ? { value: e.value } : {}),
+          ...(e.type === "image" && "remove" in e ? { remove: true } : {}),
+        })),
       })),
     ),
   )
-  for (const e of edits) {
-    if (e.type === "image") form.append(`image_${e.hotspotId}`, e.file)
+  for (const page of pagePlan) {
+    for (const e of page.edits) {
+      if (e.type === "image" && !("remove" in e)) form.append(`image_${e.hotspotId}`, e.file)
+    }
   }
   return apiFetch<Blob>(`${API_ENDPOINTS.PDF_MASTER_SESSION}/${sessionId}/apply-edits`, {
     method: "POST",

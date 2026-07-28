@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import { useNavigate } from "@tanstack/react-router"
 import { useTranslation } from "react-i18next"
-import { ArrowLeftIcon, DownloadIcon, Loader2Icon, UploadIcon } from "lucide-react"
+import { ArrowLeftIcon, CopyIcon, DownloadIcon, Loader2Icon, Trash2Icon, UploadIcon, XIcon } from "lucide-react"
 import { toast } from "sonner"
 import * as pdfjsLib from "pdfjs-dist"
 
@@ -14,8 +14,8 @@ import {
   applyPdfMasterEditsAndExport,
   closePdfMasterSession,
 } from "@/features/pdfTemplates/api"
-import type { PdfMasterPendingEdit } from "@/features/pdfTemplates/api"
-import type { PdfHotspot, PdfSession, PdfTemplate } from "@/features/pdfTemplates/types"
+import type { PdfMasterPagePlanEntry, PdfMasterPendingEdit } from "@/features/pdfTemplates/api"
+import type { EditorPage, PdfHotspot, PdfSession, PdfTemplate } from "@/features/pdfTemplates/types"
 
 // Vite statically detects this `new URL(..., import.meta.url)` pattern and
 // bundles the worker as a proper asset — no ambient module typing needed
@@ -41,6 +41,11 @@ const PAPER_TARGET_WIDTH = 1000 // CSS px the page renders at before browser sca
 const JOB_POLL_INTERVAL_MS = 2_000
 const JOB_POLL_TIMEOUT_MS = 10 * 60 * 1000 // generous ceiling for a very heavy catalog
 
+// Separator between an editor page's clientId and a hotspot's original id —
+// see PdfHotspotBase.id. Chosen over ":" since generated ids (crypto
+// randomUUID, server-issued hotspot ids like "p1-t1") never contain it.
+const ID_NAMESPACE_SEP = "::"
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
@@ -61,7 +66,9 @@ interface PdfMasterCustomizerProps {
 }
 
 interface PageRenderState {
-  page: number
+  /** An editor page's clientId — NOT a raw page number, since page order/
+   * count can now change (duplicate/remove) after the initial analysis. */
+  page: string
   cssWidth: number
   cssHeight: number
 }
@@ -83,6 +90,11 @@ function colorIntToCss(color: number): string {
   return `rgb(${r}, ${g}, ${b})`
 }
 
+/** Which editor page (clientId) a namespaced hotspot id/hotspot belongs to. */
+function ownerClientId(namespacedId: string): string {
+  return namespacedId.split(ID_NAMESPACE_SEP)[0]
+}
+
 // Approximates the real page background behind a hotspot by sampling pixels
 // already rendered on the page's own canvas, just outside its box — same
 // idea as the server's own background-cover logic, done client-side so the
@@ -99,14 +111,22 @@ function sampleBackgroundColor(
 
   const pxPerPoint = canvas.width / pageWidthPts
   const [x0, y0, x1, y1] = bbox
-  const pad = 4
+  // Further out than the element's own edge (clears rounded corners/thin
+  // borders sitting right at the boundary) and sampled around the FULL
+  // perimeter, not just the top/bottom edges with a single point on each
+  // side — a lone side-point on a large element can land on something else
+  // entirely and still "win" the majority vote if it's the only side sample.
+  const pad = 10
+  const steps = 12
   const points: [number, number][] = []
-  const steps = 6
   for (let i = 0; i <= steps; i++) {
     const fx = x0 + ((x1 - x0) * i) / steps
     points.push([fx, y0 - pad], [fx, y1 + pad])
   }
-  points.push([x0 - pad, (y0 + y1) / 2], [x1 + pad, (y0 + y1) / 2])
+  for (let i = 0; i <= steps; i++) {
+    const fy = y0 + ((y1 - y0) * i) / steps
+    points.push([x0 - pad, fy], [x1 + pad, fy])
+  }
 
   const counts = new Map<string, number>()
   for (const [px, py] of points) {
@@ -125,11 +145,58 @@ function sampleBackgroundColor(
   return `rgb(${best[0]})`
 }
 
+// For removing an image entirely (as opposed to covering a line of text
+// before writing new text over it): sampling right around the removed
+// element — even across its full perimeter — can still pick up a shadow,
+// gradient, or antialiasing from the element's own rounded corners instead
+// of the true page background. The page's own corners are virtually always
+// genuine, unobstructed background for this kind of flat-background design,
+// completely independent of whatever shape used to sit near the removed
+// image, so they're a far more reliable source for "what should this blank
+// space look like" than anything sampled locally.
+function samplePageBackgroundColor(canvas: HTMLCanvasElement): string {
+  const ctx = canvas.getContext("2d")
+  if (!ctx || canvas.width === 0 || canvas.height === 0) return "#ffffff"
+
+  const inset = 6
+  const corners: [number, number][] = [
+    [inset, inset],
+    [canvas.width - inset, inset],
+    [inset, canvas.height - inset],
+    [canvas.width - inset, canvas.height - inset],
+  ]
+
+  const counts = new Map<string, number>()
+  for (const [cx, cy] of corners) {
+    for (let dx = -2; dx <= 2; dx++) {
+      for (let dy = -2; dy <= 2; dy++) {
+        const ix = Math.min(canvas.width - 1, Math.max(0, cx + dx))
+        const iy = Math.min(canvas.height - 1, Math.max(0, cy + dy))
+        try {
+          const [r, g, b] = ctx.getImageData(ix, iy, 1, 1).data
+          const key = `${r},${g},${b}`
+          counts.set(key, (counts.get(key) ?? 0) + 1)
+        } catch {
+          // tainted canvas — skip this sample point
+        }
+      }
+    }
+  }
+  if (counts.size === 0) return "#ffffff"
+  const [best] = [...counts.entries()].sort((a, b) => b[1] - a[1])
+  return `rgb(${best[0]})`
+}
+
 export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
   const { t } = useTranslation()
   const navigate = useNavigate()
 
   const [session, setSession] = useState<PdfSession | null>(null)
+  // Current arrangement of pages in the editor — distinct from
+  // session.pages (the fixed, one-time analysis result). This is what
+  // actually drives display order/composition once pages can be
+  // duplicated/removed. See EditorPage.
+  const [editorPages, setEditorPages] = useState<EditorPage[]>([])
   const [hotspots, setHotspots] = useState<Record<string, PdfHotspot>>({})
   const [isLoading, setIsLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -140,17 +207,27 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
   const [editingBackground, setEditingBackground] = useState("#ffffff")
   const [isExporting, setIsExporting] = useState(false)
   const [containerWidth, setContainerWidth] = useState<number | null>(null)
+  // Hotspots cleared via their "✕" (or committed to empty text) — the
+  // overlay's border/tint/remove-button are what actually made a cleared
+  // area still look like an occupied box, so this drives hiding them,
+  // making the area behave like genuinely empty space. State, not a ref,
+  // since it has to trigger a re-render of the overlay itself.
+  const [removedHotspotIds, setRemovedHotspotIds] = useState<Set<string>>(new Set())
 
-  const canvasRefs = useRef<Record<number, HTMLCanvasElement | null>>({})
+  // Keyed by editor page clientId (not a raw page number) — a duplicated
+  // page needs its own independent canvas even though it started as a copy
+  // of another page's content.
+  const canvasRefs = useRef<Record<string, HTMLCanvasElement | null>>({})
   const fileInputRef = useRef<HTMLInputElement>(null)
   const pendingImageHotspotId = useRef<string | null>(null)
   const sessionIdRef = useRef<string | null>(null)
   const sessionStartedRef = useRef(false)
   const pagesContainerRef = useRef<HTMLDivElement>(null)
   // The parsed original PDF, downloaded and parsed exactly once (initial
-  // load). Every page renders from this shared document; edits after that
-  // are drawn straight onto each page's own canvas (see
-  // drawTextEditOnCanvas/drawImageEditOnCanvas) and never touch this again.
+  // load). Every ORIGINAL page renders from this shared document; edits,
+  // and duplicated pages, are drawn straight onto each page's own canvas
+  // (see drawTextEditOnCanvas/drawImageEditOnCanvas/duplicatePage) and never
+  // touch this again.
   const pdfDocRef = useRef<pdfjsLib.PDFDocumentProxy | null>(null)
   // Guards against committing the same text edit twice: pressing Enter (or
   // Escape) unmounts the still-focused textarea, and a focused element being
@@ -161,6 +238,16 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
   // mutable object across both the fresh and the stale closure, which is
   // exactly what makes it work as a guard here.
   const commitInFlightRef = useRef(false)
+  // Every clientId that has already had its canvas painted at least once
+  // (either from the original PDF via pdf.js, or as a duplicate's pixel
+  // copy) — the paint-pages effect only ever touches a clientId once,
+  // otherwise re-painting would wipe out any edits already drawn on it.
+  const renderedClientIdsRef = useRef<Set<string>>(new Set())
+  // A duplicated page's snapshot, captured synchronously from its source
+  // canvas at the moment of duplication, waiting for its own canvas to
+  // exist in the DOM so it can be painted onto it (see the bitmap-paint
+  // effect below).
+  const pendingPageBitmapRef = useRef<Record<string, ImageBitmap>>({})
 
   /** Download the current working copy once and (re)parse it. */
   const reloadDocument = useCallback(async () => {
@@ -173,14 +260,14 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
     if (old) void old.destroy()
   }, [])
 
-  /** Paint a parsed pdf.js page onto the target page number's canvas. */
-  const drawPageToCanvas = useCallback(async (page: pdfjsLib.PDFPageProxy, targetPageNumber: number) => {
+  /** Paint a parsed pdf.js page onto an editor page's canvas. */
+  const drawPageToCanvas = useCallback(async (page: pdfjsLib.PDFPageProxy, clientId: string) => {
     const baseViewport = page.getViewport({ scale: 1 })
     const scale = PAPER_TARGET_WIDTH / baseViewport.width
     const dpr = window.devicePixelRatio || 1
     const viewport = page.getViewport({ scale: scale * dpr })
 
-    const canvas = canvasRefs.current[targetPageNumber]
+    const canvas = canvasRefs.current[clientId]
     if (!canvas) return
     canvas.width = viewport.width
     canvas.height = viewport.height
@@ -192,26 +279,26 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
     await page.render({ canvasContext: ctx, viewport }).promise
 
     setPageStates((prev) => {
-      const next = prev.filter((p) => p.page !== targetPageNumber)
-      next.push({ page: targetPageNumber, cssWidth: viewport.width / dpr, cssHeight: viewport.height / dpr })
-      return next.sort((a, b) => a.page - b.page)
+      const next = prev.filter((p) => p.page !== clientId)
+      next.push({ page: clientId, cssWidth: viewport.width / dpr, cssHeight: viewport.height / dpr })
+      return next
     })
   }, [])
 
-  /** Render one page from the already-parsed full document (initial load only). */
-  const renderPage = useCallback(async (pageNumber: number) => {
+  /** Render one ORIGINAL page from the already-parsed document onto the given editor page's canvas. */
+  const renderPage = useCallback(async (originalPageNumber: number, clientId: string) => {
     const doc = pdfDocRef.current
     if (!doc) return
-    const page = await doc.getPage(pageNumber)
-    await drawPageToCanvas(page, pageNumber)
+    const page = await doc.getPage(originalPageNumber)
+    await drawPageToCanvas(page, clientId)
   }, [drawPageToCanvas])
 
   /**
-   * Pending edits, keyed by hotspot id — the entire reason this exists is to
-   * avoid calling the server per edit. Every text/image change is drawn
-   * straight onto the canvas below and just remembered here; the server
-   * only ever sees this list once, in one batch, at Download time. A ref
-   * (not state) because writes here don't need to trigger a re-render —
+   * Pending edits, keyed by (namespaced) hotspot id — the entire reason this
+   * exists is to avoid calling the server per edit. Every text/image change
+   * is drawn straight onto the canvas below and just remembered here; the
+   * server only ever sees this list once, in one batch, at Download time. A
+   * ref (not state) because writes here don't need to trigger a re-render —
    * the canvas draw is what actually updates what the user sees.
    */
   const pendingEditsRef = useRef<Record<string, PdfMasterPendingEdit>>({})
@@ -227,7 +314,7 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
    */
   const drawTextEditOnCanvas = useCallback((hotspot: PdfHotspot, newText: string, backgroundColor: string) => {
     if (hotspot.type !== "text") return
-    const canvas = canvasRefs.current[hotspot.page]
+    const canvas = canvasRefs.current[ownerClientId(hotspot.id)]
     const pageInfo = session?.pages.find((p) => p.page === hotspot.page)
     const ctx = canvas?.getContext("2d")
     if (!canvas || !pageInfo || !ctx) return
@@ -260,7 +347,7 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
 
   /** Draw a replacement image directly onto the page's canvas — no network call. */
   const drawImageEditOnCanvas = useCallback(async (hotspot: PdfHotspot, file: File) => {
-    const canvas = canvasRefs.current[hotspot.page]
+    const canvas = canvasRefs.current[ownerClientId(hotspot.id)]
     const pageInfo = session?.pages.find((p) => p.page === hotspot.page)
     const ctx = canvas?.getContext("2d")
     if (!canvas || !pageInfo || !ctx) return
@@ -273,6 +360,25 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
     } finally {
       bitmap.close()
     }
+  }, [session])
+
+  /** Cover an image hotspot with the page's own background — leaves blank
+   * space, no network call. Uses samplePageBackgroundColor (the page's
+   * corners), not the local edge-sampling used for text — an image being
+   * removed is often large with its own rounded corners/shadow, which local
+   * sampling can pick up instead of the true background. */
+  const drawImageRemovalOnCanvas = useCallback((hotspot: PdfHotspot) => {
+    const canvas = canvasRefs.current[ownerClientId(hotspot.id)]
+    const pageInfo = session?.pages.find((p) => p.page === hotspot.page)
+    const ctx = canvas?.getContext("2d")
+    if (!canvas || !pageInfo || !ctx) return
+
+    const bg = samplePageBackgroundColor(canvas)
+    const pxPerPoint = canvas.width / pageInfo.width
+    const [x0, y0, x1, y1] = hotspot.bbox
+    const pad = 1.5 * pxPerPoint
+    ctx.fillStyle = bg
+    ctx.fillRect(x0 * pxPerPoint - pad, y0 * pxPerPoint - pad, (x1 - x0) * pxPerPoint + pad * 2, (y1 - y0) * pxPerPoint + pad * 2)
   }, [session])
 
   // ── Initial load ────────────────────────────────────────────────────────────
@@ -301,7 +407,24 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
           templateName: jobStart.templateName,
         }
         sessionIdRef.current = result.session_id
-        setHotspots(Object.fromEntries(result.hotspots.map((h) => [h.id, h])))
+
+        const pages: EditorPage[] = result.pages.map((p) => ({
+          clientId: crypto.randomUUID(),
+          originalPage: p.page,
+          width: p.width,
+          height: p.height,
+        }))
+        const pageByOriginal = new Map(pages.map((p) => [p.originalPage, p]))
+
+        const namespacedHotspots: Record<string, PdfHotspot> = {}
+        for (const h of result.hotspots) {
+          const owner = pageByOriginal.get(h.page)
+          if (!owner) continue
+          const id = `${owner.clientId}${ID_NAMESPACE_SEP}${h.id}`
+          namespacedHotspots[id] = { ...h, id, originalId: h.id }
+        }
+        setHotspots(namespacedHotspots)
+        setEditorPages(pages)
 
         // One download + one parse for the whole document
         await reloadDocument()
@@ -312,7 +435,7 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
         // is exactly what left pages blank/collapsed before this fix: the
         // old code tried to paint onto canvases in this same async function,
         // before React had ever mounted them — every draw silently no-opped).
-        setPageStates(result.pages.map((p) => ({ page: p.page, ...pageSizeToCss(p.width, p.height) })))
+        setPageStates(pages.map((p) => ({ page: p.clientId, ...pageSizeToCss(p.width, p.height) })))
 
         // Setting `session` last is what triggers the paint effect below,
         // and only after this render commits are the <canvas> elements for
@@ -340,19 +463,49 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
 
   // ── Paint pages once their canvases actually exist ──────────────────────────
   //
-  // Runs after the effect above sets `session`, which is what makes the page
-  // cards (and their <canvas> refs) mount. Effects always run after React has
-  // committed the DOM, so canvasRefs are guaranteed populated here — unlike
-  // the old code, which tried to paint inside the same async load() call,
-  // before isLoading ever flipped false and the cards existed at all.
+  // Runs after the effect above sets `session` (initial mount), and again
+  // whenever a page is added — but only ever paints a clientId ONCE
+  // (renderedClientIdsRef), since re-running drawPageToCanvas on a page that
+  // already has edits drawn on it would wipe them out (setting canvas.width/
+  // height clears the canvas). Duplicated pages are excluded here entirely —
+  // they're painted by the bitmap-copy effect below instead of via pdf.js.
   useEffect(() => {
     if (!session) return
-    void Promise.all(
-      session.pages.map((p) =>
-        renderPage(p.page).catch((err) => console.error(`Failed to render page ${p.page}`, err)),
-      ),
+    const toRender = editorPages.filter(
+      (p) => !renderedClientIdsRef.current.has(p.clientId) && !pendingPageBitmapRef.current[p.clientId],
     )
-  }, [session, renderPage])
+    if (toRender.length === 0) return
+    void Promise.all(
+      toRender.map(async (p) => {
+        renderedClientIdsRef.current.add(p.clientId)
+        try {
+          await renderPage(p.originalPage, p.clientId)
+        } catch (err) {
+          console.error(`Failed to render page ${p.clientId}`, err)
+        }
+      }),
+    )
+  }, [session, editorPages, renderPage])
+
+  // ── Paint duplicated pages from their captured snapshot ─────────────────────
+  //
+  // duplicatePage captures a bitmap of the source page's CURRENT pixels
+  // (including any edits already drawn) before the new page's canvas even
+  // exists in the DOM. This runs once that canvas has mounted and paints it.
+  useEffect(() => {
+    for (const p of editorPages) {
+      const bitmap = pendingPageBitmapRef.current[p.clientId]
+      if (!bitmap) continue
+      const canvas = canvasRefs.current[p.clientId]
+      if (!canvas) continue
+      canvas.width = bitmap.width
+      canvas.height = bitmap.height
+      const ctx = canvas.getContext("2d")
+      ctx?.drawImage(bitmap, 0, 0)
+      bitmap.close()
+      delete pendingPageBitmapRef.current[p.clientId]
+    }
+  }, [editorPages])
 
   // ── Responsive scaling ───────────────────────────────────────────────────────
   //
@@ -372,17 +525,115 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
     return () => observer.disconnect()
   }, [])
 
+  // ── Page management (duplicate / remove) ────────────────────────────────────
+
+  async function duplicatePage(sourcePage: EditorPage) {
+    const sourceCanvas = canvasRefs.current[sourcePage.clientId]
+    if (!sourceCanvas) return
+
+    // Snapshot the source's CURRENT pixels now (includes any edits already
+    // made) — independent of whatever happens to the source canvas later.
+    const bitmap = await createImageBitmap(sourceCanvas)
+    const newClientId = crypto.randomUUID()
+    renderedClientIdsRef.current.add(newClientId) // never rendered via pdf.js — the bitmap effect handles it
+    pendingPageBitmapRef.current[newClientId] = bitmap
+
+    const clonedHotspots: Record<string, PdfHotspot> = {}
+    const clonedEdits: Record<string, PdfMasterPendingEdit> = {}
+    const clonedRemovedIds: string[] = []
+    for (const h of Object.values(hotspots)) {
+      if (ownerClientId(h.id) !== sourcePage.clientId) continue
+      const newId = `${newClientId}${ID_NAMESPACE_SEP}${h.originalId}`
+      clonedHotspots[newId] = { ...h, id: newId }
+      const existingEdit = pendingEditsRef.current[h.id]
+      if (existingEdit) clonedEdits[newId] = { ...existingEdit, hotspotId: newId }
+      if (removedHotspotIds.has(h.id)) clonedRemovedIds.push(newId)
+    }
+    if (Object.keys(clonedHotspots).length > 0) {
+      setHotspots((prev) => ({ ...prev, ...clonedHotspots }))
+    }
+    Object.assign(pendingEditsRef.current, clonedEdits)
+    if (clonedRemovedIds.length > 0) {
+      setRemovedHotspotIds((prev) => new Set([...prev, ...clonedRemovedIds]))
+    }
+
+    const newPage: EditorPage = {
+      clientId: newClientId,
+      originalPage: sourcePage.originalPage,
+      width: sourcePage.width,
+      height: sourcePage.height,
+    }
+    setEditorPages((prev) => {
+      const idx = prev.findIndex((p) => p.clientId === sourcePage.clientId)
+      const next = [...prev]
+      next.splice(idx + 1, 0, newPage)
+      return next
+    })
+    setPageStates((prev) => {
+      const src = prev.find((p) => p.page === sourcePage.clientId)
+      if (!src) return prev
+      return [...prev, { page: newClientId, cssWidth: src.cssWidth, cssHeight: src.cssHeight }]
+    })
+    toast.success(t("pdfTemplates.pageDuplicated"))
+  }
+
+  function removePage(pageToRemove: EditorPage) {
+    if (editorPages.length <= 1) {
+      toast.error(t("pdfTemplates.cannotRemoveLastPage"))
+      return
+    }
+    setEditorPages((prev) => prev.filter((p) => p.clientId !== pageToRemove.clientId))
+    setHotspots((prev) => {
+      const next = { ...prev }
+      for (const id of Object.keys(next)) {
+        if (ownerClientId(id) === pageToRemove.clientId) delete next[id]
+      }
+      return next
+    })
+    setRemovedHotspotIds((prev) => {
+      const next = new Set(prev)
+      for (const id of next) {
+        if (ownerClientId(id) === pageToRemove.clientId) next.delete(id)
+      }
+      return next
+    })
+    for (const id of Object.keys(pendingEditsRef.current)) {
+      if (ownerClientId(id) === pageToRemove.clientId) delete pendingEditsRef.current[id]
+    }
+    delete canvasRefs.current[pageToRemove.clientId]
+    renderedClientIdsRef.current.delete(pageToRemove.clientId)
+    delete pendingPageBitmapRef.current[pageToRemove.clientId]
+    setPageStates((prev) => prev.filter((p) => p.page !== pageToRemove.clientId))
+    if (editingHotspotId && ownerClientId(editingHotspotId) === pageToRemove.clientId) {
+      setEditingHotspotId(null)
+    }
+    toast.success(t("pdfTemplates.pageRemoved"))
+  }
+
   // ── Text editing ─────────────────────────────────────────────────────────────
 
   function beginEditText(hotspot: PdfHotspot) {
     if (hotspot.type !== "text" || busyHotspotId) return
-    const canvas = canvasRefs.current[hotspot.page]
+    const canvas = canvasRefs.current[ownerClientId(hotspot.id)]
     const pageInfo = session?.pages.find((p) => p.page === hotspot.page)
     const bg = canvas && pageInfo ? sampleBackgroundColor(canvas, hotspot.bbox, pageInfo.width) : "#ffffff"
     commitInFlightRef.current = false // re-arm the guard for this new edit
     setEditingHotspotId(hotspot.id)
     setEditingValue(hotspot.text)
     setEditingBackground(bg)
+  }
+
+  /** Marks whether a hotspot is currently "empty" (removed text/image) —
+   * drives hiding its overlay border/tint/buttons so it reads as genuinely
+   * blank space rather than a still-outlined box. */
+  function markHotspotRemoved(id: string, removed: boolean) {
+    setRemovedHotspotIds((prev) => {
+      if (prev.has(id) === removed) return prev
+      const next = new Set(prev)
+      if (removed) next.add(id)
+      else next.delete(id)
+      return next
+    })
   }
 
   function commitEditText() {
@@ -401,8 +652,34 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
 
     // No server round-trip — just draw it and remember it for Download.
     drawTextEditOnCanvas(hotspot, newText, editingBackground)
-    pendingEditsRef.current[hotspot.id] = { hotspotId: hotspot.id, type: "text", value: newText }
+    pendingEditsRef.current[hotspot.id] = {
+      hotspotId: hotspot.id,
+      originalHotspotId: hotspot.originalId,
+      type: "text",
+      value: newText,
+    }
     setHotspots((prev) => ({ ...prev, [hotspot.id]: { ...hotspot, text: newText } }))
+    markHotspotRemoved(hotspot.id, newText.trim() === "")
+  }
+
+  /** Clear a text hotspot straight from its "✕" button — same result as
+   * opening it, deleting everything, and committing, without the detour. */
+  function removeText(hotspot: PdfHotspot) {
+    if (hotspot.type !== "text" || busyHotspotId) return
+    const canvas = canvasRefs.current[ownerClientId(hotspot.id)]
+    const pageInfo = session?.pages.find((p) => p.page === hotspot.page)
+    const bg = canvas && pageInfo ? sampleBackgroundColor(canvas, hotspot.bbox, pageInfo.width) : "#ffffff"
+
+    drawTextEditOnCanvas(hotspot, "", bg)
+    pendingEditsRef.current[hotspot.id] = {
+      hotspotId: hotspot.id,
+      originalHotspotId: hotspot.originalId,
+      type: "text",
+      value: "",
+    }
+    setHotspots((prev) => ({ ...prev, [hotspot.id]: { ...hotspot, text: "" } }))
+    markHotspotRemoved(hotspot.id, true)
+    toast.success(t("pdfTemplates.masterTextRemoved"))
   }
 
   // ── Image editing ────────────────────────────────────────────────────────────
@@ -426,7 +703,12 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
     try {
       // No server round-trip — just draw it and remember it for Download.
       await drawImageEditOnCanvas(hotspot, file)
-      pendingEditsRef.current[hotspotId] = { hotspotId, type: "image", file }
+      pendingEditsRef.current[hotspotId] = {
+        hotspotId,
+        originalHotspotId: hotspot.originalId,
+        type: "image",
+        file,
+      }
       toast.success(t("pdfTemplates.masterImageReplaced"))
     } catch (err) {
       console.error(err)
@@ -436,6 +718,19 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
     }
   }
 
+  function removeImage(hotspot: PdfHotspot) {
+    if (hotspot.type !== "image" || busyHotspotId) return
+    drawImageRemovalOnCanvas(hotspot)
+    pendingEditsRef.current[hotspot.id] = {
+      hotspotId: hotspot.id,
+      originalHotspotId: hotspot.originalId,
+      type: "image",
+      remove: true,
+    }
+    markHotspotRemoved(hotspot.id, true)
+    toast.success(t("pdfTemplates.masterImageRemoved"))
+  }
+
   // ── Export ───────────────────────────────────────────────────────────────────
 
   async function handleDownload() {
@@ -443,8 +738,14 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
     setIsExporting(true)
     try {
       // The only point the server's copy of the document is touched — every
-      // edit up to now only ever changed the canvas in this browser tab.
-      const blob = await applyPdfMasterEditsAndExport(session.session_id, Object.values(pendingEditsRef.current))
+      // edit and page change up to now only ever changed canvases in this
+      // browser tab. Pages the user removed simply aren't in editorPages
+      // anymore, so they're naturally excluded here too.
+      const pagePlan: PdfMasterPagePlanEntry[] = editorPages.map((p) => ({
+        originalPage: p.originalPage,
+        edits: Object.values(pendingEditsRef.current).filter((e) => ownerClientId(e.hotspotId) === p.clientId),
+      }))
+      const blob = await applyPdfMasterEditsAndExport(session.session_id, pagePlan)
       const url = URL.createObjectURL(blob)
       const a = document.createElement("a")
       a.href = url
@@ -456,7 +757,7 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
       toast.success(t("pdfTemplates.pdfDownloaded"))
     } catch (err) {
       console.error(err)
-      toast.error(t("common.error"))
+      toast.error(err instanceof Error ? err.message : t("common.error"))
     } finally {
       setIsExporting(false)
     }
@@ -511,27 +812,46 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
           <>
             <p className="pt-4 text-center text-[11px] text-stone-400">{t("pdfTemplates.slotLegend")}</p>
 
-            {session?.pages.map((p) => {
-              const pageState = pageStates.find((ps) => ps.page === p.page)
+            {editorPages.map((ep) => {
+              const pageState = pageStates.find((ps) => ps.page === ep.clientId)
               // Hotspot positions stay in this "natural" (unscaled,
               // PAPER_TARGET_WIDTH-wide) coordinate space — the whole
               // subtree (canvas + overlays) is shrunk together below via a
               // single CSS transform, so this math never needs to change.
-              const scale = pageState ? pageState.cssWidth / p.width : PAPER_TARGET_WIDTH / p.width
-              const pageHotspots = hotspotList.filter((h) => h.page === p.page)
+              const scale = pageState ? pageState.cssWidth / ep.width : PAPER_TARGET_WIDTH / ep.width
+              const pageHotspots = hotspotList.filter((h) => ownerClientId(h.id) === ep.clientId)
 
               const naturalWidth = pageState?.cssWidth ?? PAPER_TARGET_WIDTH
-              const naturalHeight = pageState?.cssHeight ?? naturalWidth * (p.height / p.width)
+              const naturalHeight = pageState?.cssHeight ?? naturalWidth * (ep.height / ep.width)
               // Never upscale past native raster resolution (would blur) —
               // only ever shrink to fit narrower viewports.
               const displayScale = containerWidth ? Math.min(1, (containerWidth - 48) / naturalWidth) : 1
 
               return (
                 <div
-                  key={p.page}
-                  className="mx-auto my-6"
+                  key={ep.clientId}
+                  className="relative mx-auto my-6"
                   style={{ width: naturalWidth * displayScale, height: naturalHeight * displayScale }}
                 >
+                  <div className="absolute -top-3 right-0 z-10 flex gap-1">
+                    <button
+                      type="button"
+                      onClick={() => void duplicatePage(ep)}
+                      title={t("pdfTemplates.duplicatePage")}
+                      className="flex size-7 items-center justify-center rounded-full border bg-background text-muted-foreground shadow-sm transition-colors hover:text-foreground"
+                    >
+                      <CopyIcon className="size-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => removePage(ep)}
+                      title={t("pdfTemplates.removePage")}
+                      className="flex size-7 items-center justify-center rounded-full border bg-background text-muted-foreground shadow-sm transition-colors hover:text-destructive"
+                    >
+                      <Trash2Icon className="size-3.5" />
+                    </button>
+                  </div>
+
                   <div
                     className="relative overflow-hidden rounded-sm bg-white"
                     style={{
@@ -543,7 +863,7 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
                     }}
                   >
                     <canvas
-                      ref={(el) => { canvasRefs.current[p.page] = el }}
+                      ref={(el) => { canvasRefs.current[ep.clientId] = el }}
                       className="block"
                     />
 
@@ -555,14 +875,21 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
                       const isText = h.type === "text"
                       const isBusy = busyHotspotId === h.id
                       const isEditing = editingHotspotId === h.id
+                      // Once cleared via "✕", a slot goes permanently inert
+                      // for the rest of this session — no click, no re-upload,
+                      // no re-typing, and its overlay (border/tint/buttons)
+                      // disappears entirely, so it behaves and looks like
+                      // genuinely empty space rather than an editable box that
+                      // merely happens to be empty right now.
+                      const isRemoved = removedHotspotIds.has(h.id)
 
                       return (
                         <div
                           key={h.id}
-                          role="button"
-                          tabIndex={0}
-                          onClick={() => (isText ? beginEditText(h) : beginEditImage(h))}
-                          onKeyDown={(e) => {
+                          role={isRemoved ? undefined : "button"}
+                          tabIndex={isRemoved ? undefined : 0}
+                          onClick={isRemoved ? undefined : () => (isText ? beginEditText(h) : beginEditImage(h))}
+                          onKeyDown={isRemoved ? undefined : (e) => {
                             if (e.key === "Enter" || e.key === " ") {
                               e.preventDefault()
                               if (isText) beginEditText(h)
@@ -575,9 +902,9 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
                             top,
                             width,
                             height,
-                            cursor: isBusy ? "wait" : "pointer",
-                            border: `1.5px dashed ${isText ? TEXT_OUTLINE : IMAGE_OUTLINE}`,
-                            background: isEditing ? "transparent" : isText ? TEXT_OUTLINE_BG : IMAGE_OUTLINE_BG,
+                            cursor: isRemoved ? "default" : isBusy ? "wait" : "pointer",
+                            border: isRemoved ? "none" : `1.5px dashed ${isText ? TEXT_OUTLINE : IMAGE_OUTLINE}`,
+                            background: isRemoved || isEditing ? "transparent" : isText ? TEXT_OUTLINE_BG : IMAGE_OUTLINE_BG,
                             boxSizing: "border-box",
                             display: "flex",
                             alignItems: "center",
@@ -585,8 +912,34 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
                           }}
                         >
                           {isBusy && <Loader2Icon className="size-4 animate-spin text-white drop-shadow" />}
-                          {!isBusy && !isText && !isEditing && (
-                            <UploadIcon className="size-4 opacity-0 transition-opacity group-hover:opacity-70" style={{ color: IMAGE_OUTLINE }} />
+                          {!isRemoved && !isBusy && !isText && !isEditing && (
+                            <>
+                              <UploadIcon className="size-4 opacity-0 transition-opacity group-hover:opacity-70" style={{ color: IMAGE_OUTLINE }} />
+                              <button
+                                type="button"
+                                title={t("pdfTemplates.removeImage")}
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  removeImage(h)
+                                }}
+                                className="absolute -right-2 -top-2 flex size-5 items-center justify-center rounded-full border bg-background text-muted-foreground shadow-sm transition-colors hover:text-destructive"
+                              >
+                                <XIcon className="size-3" />
+                              </button>
+                            </>
+                          )}
+                          {!isRemoved && !isBusy && isText && !isEditing && (
+                            <button
+                              type="button"
+                              title={t("pdfTemplates.removeText")}
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                removeText(h)
+                              }}
+                              className="absolute -right-2 -top-2 flex size-5 items-center justify-center rounded-full border bg-background text-muted-foreground shadow-sm transition-colors hover:text-destructive"
+                            >
+                              <XIcon className="size-3" />
+                            </button>
                           )}
                           {isText && isEditing && (
                             <textarea

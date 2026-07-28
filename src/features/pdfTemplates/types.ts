@@ -28,7 +28,16 @@ export interface UpdatePdfTemplateInput {
 // ─── PDF master (in-place editing) ────────────────────────────────────────────
 
 export interface PdfHotspotBase {
+  /** Namespaced as `${editorPage.clientId}:${originalId}` — unique per editor
+   * page *instance*, so a duplicated page's hotspots don't collide with the
+   * page it was duplicated from (see EditorPage). */
   id: string
+  /** The plain hotspot id from the one-time analysis, before namespacing —
+   * this is the id the server's own session metadata actually knows about. */
+  originalId: string
+  /** The ORIGINAL pristine document's page number this hotspot belongs to.
+   * Stable regardless of how pages get reordered/duplicated/removed in the
+   * editor — it's a reference into the analysis result, not display order. */
   page: number
   /** [x0, y0, x1, y1] in PDF points, top-left origin */
   bbox: [number, number, number, number]
@@ -51,6 +60,25 @@ export type PdfHotspot = PdfTextHotspot | PdfImageHotspot
 
 export interface PdfSessionPage {
   page: number
+  width: number
+  height: number
+}
+
+/**
+ * One page as currently arranged in the editor — distinct from
+ * PdfSessionPage (the one-time analysis result). Pages can be duplicated or
+ * removed after "Use Template" without re-running analysis, so this is what
+ * actually drives display order/composition; PdfSessionPage stays the fixed
+ * source of truth for "what page N of the original document looks like."
+ */
+export interface EditorPage {
+  /** Stable client-generated id — keys canvases/page-states/hotspot
+   * namespacing. Never derived from array position, since that shifts
+   * whenever a page is added/removed/reordered. */
+  clientId: string
+  /** Which page of the ORIGINAL pristine document this displays. The same
+   * originalPage can appear in more than one EditorPage (duplicates). */
+  originalPage: number
   width: number
   height: number
 }
