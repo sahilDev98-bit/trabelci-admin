@@ -1028,6 +1028,7 @@ const en = {
     cannotRemoveLastPage: "A document needs at least one page",
     pageDuplicated: "Page duplicated",
     pageRemoved: "Page removed",
+    masterTextOverflow: "This text no longer fits its original space and may overlap nearby content",
   },
   aiImages: {
     title: "Generate AI Images",

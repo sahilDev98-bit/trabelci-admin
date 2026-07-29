@@ -31,8 +31,27 @@ const TEXT_OUTLINE = "rgba(59,130,246,0.7)"
 const TEXT_OUTLINE_BG = "rgba(59,130,246,0.08)"
 const IMAGE_OUTLINE = "rgba(245,158,11,0.8)"
 const IMAGE_OUTLINE_BG = "rgba(245,158,11,0.08)"
+// A paragraph that no longer fits its original space even after wrapping —
+// distinct from IMAGE_OUTLINE's amber so the two "something needs your
+// attention" cases (a box that spilled past its original height vs. an
+// image slot) never look the same as each other.
+const TEXT_OVERFLOW_OUTLINE = "rgba(220,38,38,0.85)"
+const TEXT_OVERFLOW_OUTLINE_BG = "rgba(220,38,38,0.10)"
 
-const PAPER_TARGET_WIDTH = 1000 // CSS px the page renders at before browser scaling
+// Fallback native render resolution — only actually used for the rare page
+// that renders before the container's real width has ever been measured
+// (see renderPage/containerWidthRef below). Every other render uses the
+// container's own measured width instead, so the page fills it exactly on
+// any screen rather than being capped at one guessed number.
+const PAPER_TARGET_WIDTH = 1300
+
+// Tiny fixed breathing room around each page — just enough that its drop
+// shadow (see the page card's boxShadow below) doesn't get clipped by the
+// container's overflow-x-hidden. Kept in sync between the render
+// resolution (renderPage) and the on-screen display scale (below) so the
+// page fills the container exactly rather than being rendered at one size
+// and then still shrunk to fit a differently-computed one.
+const PAGE_SIDE_GUTTER_PX = 24
 
 // Analysis of a large, image-heavy catalog can legitimately take minutes —
 // far longer than Cloudflare's ~100s ceiling for a single response. So the
@@ -145,6 +164,62 @@ function sampleBackgroundColor(
   return `rgb(${best[0]})`
 }
 
+// Greedy word-wrap on canvas — mirrors _wrap_text_to_width in pdf_editor.py:
+// wrap decisions happen on logical (typed) text using the already-configured
+// ctx.font metrics, and the caller's own explicit newlines are kept as
+// forced breaks. ctx.direction/textAlign (set by the caller before this
+// runs) handle RTL shaping natively when each returned line is drawn — no
+// manual reordering needed here, unlike the PDF export path.
+function wrapTextToWidth(ctx: CanvasRenderingContext2D, text: string, maxWidth: number): string[] {
+  const lines: string[] = []
+  for (const paragraph of text.split("\n")) {
+    const words = paragraph.split(" ")
+    let current = words[0] ?? ""
+    for (let i = 1; i < words.length; i++) {
+      const word = words[i]
+      const candidate = current ? `${current} ${word}` : word
+      if (!current || ctx.measureText(candidate).width <= maxWidth) {
+        current = candidate
+      } else {
+        lines.push(current)
+        current = word
+      }
+    }
+    lines.push(current)
+  }
+  return lines
+}
+
+function isBoldFont(font: string): boolean {
+  return font.toLowerCase().includes("bold")
+}
+
+// Shared, lazily-created canvas used purely for text measurement (never
+// drawn to screen) — a single instance is enough since measurements are
+// synchronous and this is never called concurrently with itself.
+let _measureCtx: CanvasRenderingContext2D | null | undefined
+
+// How many lines `text` would wrap into inside a box `boxWidthPts` wide, at
+// `fontSizePts`. Deliberately takes raw PDF-point values, not on-screen
+// pixels: canvas word-wrap only depends on the RATIO between glyph widths
+// and the available width, and that ratio is identical whether you measure
+// at the real on-screen scale or directly in point units treated as px — so
+// this gives the exact same line count either way, without needing to know
+// the page's current zoom/scale at all. That's what lets both the live
+// (on-screen, scaled) preview and the point-based stored-height bookkeeping
+// share one function.
+function measureWrappedLineCount(text: string, fontSizePts: number, isBold: boolean, boxWidthPts: number): number {
+  const trimmed = text.trim()
+  if (!trimmed) return 0
+  if (_measureCtx === undefined) {
+    const canvas = typeof document !== "undefined" ? document.createElement("canvas") : null
+    _measureCtx = canvas?.getContext("2d") ?? null
+  }
+  if (!_measureCtx) return 1
+  _measureCtx.font = `${isBold ? "bold " : ""}${fontSizePts}px system-ui, sans-serif`
+  return wrapTextToWidth(_measureCtx, trimmed, boxWidthPts).length
+}
+
 // For removing an image entirely (as opposed to covering a line of text
 // before writing new text over it): sampling right around the removed
 // element — even across its full perimeter — can still pick up a shadow,
@@ -207,12 +282,26 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
   const [editingBackground, setEditingBackground] = useState("#ffffff")
   const [isExporting, setIsExporting] = useState(false)
   const [containerWidth, setContainerWidth] = useState<number | null>(null)
+  // Mirrors containerWidth for reading inside renderPage without putting it
+  // in that useCallback's deps (which would re-create it, and cascade into
+  // re-running the paint effect, on every ResizeObserver tick).
+  const containerWidthRef = useRef<number | null>(null)
   // Hotspots cleared via their "✕" (or committed to empty text) — the
   // overlay's border/tint/remove-button are what actually made a cleared
   // area still look like an occupied box, so this drives hiding them,
   // making the area behave like genuinely empty space. State, not a ref,
   // since it has to trigger a re-render of the overlay itself.
   const [removedHotspotIds, setRemovedHotspotIds] = useState<Set<string>>(new Set())
+  // A committed text edit's actual rendered height (PDF points), keyed by
+  // hotspot id — lets a paragraph's box visually shrink to what it now
+  // contains (2 lines instead of the original 10) instead of always
+  // showing the full original area. Absent entries fall back to the
+  // hotspot's own (original) bbox height, so untouched hotspots are
+  // unaffected. Never used for the actual cover/redaction area, which must
+  // always use the full ORIGINAL bbox regardless — only for this visual
+  // outline, so shorter replacement text can never leave old text peeking
+  // out from a gap the cover didn't reach.
+  const [hotspotVisualHeightPts, setHotspotVisualHeightPts] = useState<Record<string, number>>({})
 
   // Keyed by editor page clientId (not a raw page number) — a duplicated
   // page needs its own independent canvas even though it started as a copy
@@ -260,10 +349,13 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
     if (old) void old.destroy()
   }, [])
 
-  /** Paint a parsed pdf.js page onto an editor page's canvas. */
-  const drawPageToCanvas = useCallback(async (page: pdfjsLib.PDFPageProxy, clientId: string) => {
+  /** Paint a parsed pdf.js page onto an editor page's canvas, at native
+   * resolution targetWidth (see renderPage — normally the container's own
+   * measured width, so the page fills it exactly rather than being capped
+   * at one fixed guess). */
+  const drawPageToCanvas = useCallback(async (page: pdfjsLib.PDFPageProxy, clientId: string, targetWidth: number) => {
     const baseViewport = page.getViewport({ scale: 1 })
-    const scale = PAPER_TARGET_WIDTH / baseViewport.width
+    const scale = targetWidth / baseViewport.width
     const dpr = window.devicePixelRatio || 1
     const viewport = page.getViewport({ scale: scale * dpr })
 
@@ -290,7 +382,15 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
     const doc = pdfDocRef.current
     if (!doc) return
     const page = await doc.getPage(originalPageNumber)
-    await drawPageToCanvas(page, clientId)
+    // Render at the container's actual current width (set by the
+    // ResizeObserver effect below, which fires on mount well before any
+    // session finishes loading) so the page fills it exactly. Falls back to
+    // a fixed guess only if a page somehow renders before that measurement
+    // ever arrives.
+    const targetWidth = containerWidthRef.current
+      ? Math.max(300, containerWidthRef.current - PAGE_SIDE_GUTTER_PX)
+      : PAPER_TARGET_WIDTH
+    await drawPageToCanvas(page, clientId, targetWidth)
   }, [drawPageToCanvas])
 
   /**
@@ -331,18 +431,27 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
     if (!trimmed) return
 
     const fontSizePx = hotspot.size * pxPerPoint
-    const isBold = hotspot.font.toLowerCase().includes("bold")
+    const isBold = isBoldFont(hotspot.font)
     ctx.font = `${isBold ? "bold " : ""}${fontSizePx}px system-ui, sans-serif`
     ctx.fillStyle = colorIntToCss(hotspot.color)
     ctx.direction = hotspot.rtl ? "rtl" : "ltr"
     ctx.textAlign = hotspot.rtl ? "right" : "left"
     ctx.textBaseline = "alphabetic"
 
-    // No baseline info reaches the frontend (see PdfTextHotspot) — same
-    // fallback the server itself uses when it's missing.
-    const originY = y1 - hotspot.size * 0.2
+    // The real first line's baseline (server-measured) — NOT y1 (the
+    // bottom of the whole paragraph). Anchoring to y1 was fine when a
+    // hotspot was a single line (its bottom ≈ its own baseline), but for a
+    // multi-line paragraph it draws the replacement text at the very
+    // bottom of the box. A paragraph that wraps into more lines than it
+    // originally had will simply overflow past y1, same as the export.
+    const originY = hotspot.originY
+    const boxWidthPx = (x1 - x0) * pxPerPoint
+    const lines = wrapTextToWidth(ctx, trimmed, boxWidthPx)
+    const lineHeightPx = hotspot.lineHeight * pxPerPoint
     const x = (hotspot.rtl ? x1 : x0) * pxPerPoint
-    ctx.fillText(trimmed, x, originY * pxPerPoint)
+    lines.forEach((line, i) => {
+      ctx.fillText(line, x, originY * pxPerPoint + i * lineHeightPx)
+    })
   }, [session])
 
   /** Draw a replacement image directly onto the page's canvas — no network call. */
@@ -509,17 +618,24 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
 
   // ── Responsive scaling ───────────────────────────────────────────────────────
   //
-  // Pages render at a fixed native resolution (PAPER_TARGET_WIDTH) for crisp
-  // canvas output, then get shrunk to fit narrower viewports via a CSS
-  // transform on the whole "paper" (canvas + hotspot overlays together, so
-  // they always stay pixel-aligned) — no re-render, no extra network/CPU
-  // cost. Never scales up past native resolution (would blur).
+  // Pages render at the container's own measured native resolution (see
+  // renderPage) for crisp canvas output filling it exactly, then get shrunk
+  // via a CSS transform on the whole "paper" (canvas + hotspot overlays
+  // together, so they always stay pixel-aligned) if the container later
+  // gets narrower than that — no re-render, no extra network/CPU cost.
+  // Never scales up past native resolution (would blur): if the container
+  // instead gets WIDER after the initial render, the page stays at the
+  // width it already rendered at until something re-renders it (e.g.
+  // duplicating a page, or reopening the template) rather than upscaling.
   useEffect(() => {
     const el = pagesContainerRef.current
     if (!el || typeof ResizeObserver === "undefined") return
     const observer = new ResizeObserver((entries) => {
       const width = entries[0]?.contentRect.width
-      if (width) setContainerWidth(width)
+      if (width) {
+        setContainerWidth(width)
+        containerWidthRef.current = width
+      }
     })
     observer.observe(el)
     return () => observer.disconnect()
@@ -541,6 +657,7 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
     const clonedHotspots: Record<string, PdfHotspot> = {}
     const clonedEdits: Record<string, PdfMasterPendingEdit> = {}
     const clonedRemovedIds: string[] = []
+    const clonedVisualHeights: Record<string, number> = {}
     for (const h of Object.values(hotspots)) {
       if (ownerClientId(h.id) !== sourcePage.clientId) continue
       const newId = `${newClientId}${ID_NAMESPACE_SEP}${h.originalId}`
@@ -548,6 +665,8 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
       const existingEdit = pendingEditsRef.current[h.id]
       if (existingEdit) clonedEdits[newId] = { ...existingEdit, hotspotId: newId }
       if (removedHotspotIds.has(h.id)) clonedRemovedIds.push(newId)
+      const existingHeight = hotspotVisualHeightPts[h.id]
+      if (existingHeight != null) clonedVisualHeights[newId] = existingHeight
     }
     if (Object.keys(clonedHotspots).length > 0) {
       setHotspots((prev) => ({ ...prev, ...clonedHotspots }))
@@ -555,6 +674,9 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
     Object.assign(pendingEditsRef.current, clonedEdits)
     if (clonedRemovedIds.length > 0) {
       setRemovedHotspotIds((prev) => new Set([...prev, ...clonedRemovedIds]))
+    }
+    if (Object.keys(clonedVisualHeights).length > 0) {
+      setHotspotVisualHeightPts((prev) => ({ ...prev, ...clonedVisualHeights }))
     }
 
     const newPage: EditorPage = {
@@ -597,6 +719,13 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
       }
       return next
     })
+    setHotspotVisualHeightPts((prev) => {
+      const next = { ...prev }
+      for (const id of Object.keys(next)) {
+        if (ownerClientId(id) === pageToRemove.clientId) delete next[id]
+      }
+      return next
+    })
     for (const id of Object.keys(pendingEditsRef.current)) {
       if (ownerClientId(id) === pageToRemove.clientId) delete pendingEditsRef.current[id]
     }
@@ -636,6 +765,29 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
     })
   }
 
+  /** Recompute and store (or clear) how tall a paragraph's box should visually
+   * look after an edit — based on what the NEW text actually wraps into, not
+   * the original hotspot's bbox. Purely cosmetic: the cover/redaction area
+   * used to hide the OLD content always stays the full original bbox
+   * regardless of this (see hotspotVisualHeightPts's declaration). */
+  function updateHotspotVisualHeight(hotspot: PdfHotspot, text: string) {
+    if (hotspot.type !== "text") return
+    const trimmed = text.trim()
+    if (!trimmed) {
+      setHotspotVisualHeightPts((prev) => {
+        if (!(hotspot.id in prev)) return prev
+        const next = { ...prev }
+        delete next[hotspot.id]
+        return next
+      })
+      return
+    }
+    const boxWidthPts = hotspot.bbox[2] - hotspot.bbox[0]
+    const lineCount = measureWrappedLineCount(trimmed, hotspot.size, isBoldFont(hotspot.font), boxWidthPts)
+    const neededHeightPts = Math.max(lineCount, 1) * hotspot.lineHeight
+    setHotspotVisualHeightPts((prev) => ({ ...prev, [hotspot.id]: neededHeightPts }))
+  }
+
   function commitEditText() {
     // See commitInFlightRef's declaration: Enter/Escape unmount this
     // still-focused textarea, which fires a second, stale onBlur — this
@@ -660,6 +812,7 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
     }
     setHotspots((prev) => ({ ...prev, [hotspot.id]: { ...hotspot, text: newText } }))
     markHotspotRemoved(hotspot.id, newText.trim() === "")
+    updateHotspotVisualHeight(hotspot, newText)
   }
 
   /** Clear a text hotspot straight from its "✕" button — same result as
@@ -679,6 +832,7 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
     }
     setHotspots((prev) => ({ ...prev, [hotspot.id]: { ...hotspot, text: "" } }))
     markHotspotRemoved(hotspot.id, true)
+    updateHotspotVisualHeight(hotspot, "")
     toast.success(t("pdfTemplates.masterTextRemoved"))
   }
 
@@ -808,189 +962,268 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
           </div>
         )}
 
-        {!isLoading && !loadError && (
-          <>
-            <p className="pt-4 text-center text-[11px] text-stone-400">{t("pdfTemplates.slotLegend")}</p>
+        {!isLoading && !loadError &&
+          editorPages.map((ep) => {
+            const pageState = pageStates.find((ps) => ps.page === ep.clientId)
+            // Hotspot positions stay in this "natural" (unscaled,
+            // PAPER_TARGET_WIDTH-wide) coordinate space — the whole
+            // subtree (canvas + overlays) is shrunk together below via a
+            // single CSS transform, so this math never needs to change.
+            const scale = pageState ? pageState.cssWidth / ep.width : PAPER_TARGET_WIDTH / ep.width
+            const pageHotspots = hotspotList.filter((h) => ownerClientId(h.id) === ep.clientId)
 
-            {editorPages.map((ep) => {
-              const pageState = pageStates.find((ps) => ps.page === ep.clientId)
-              // Hotspot positions stay in this "natural" (unscaled,
-              // PAPER_TARGET_WIDTH-wide) coordinate space — the whole
-              // subtree (canvas + overlays) is shrunk together below via a
-              // single CSS transform, so this math never needs to change.
-              const scale = pageState ? pageState.cssWidth / ep.width : PAPER_TARGET_WIDTH / ep.width
-              const pageHotspots = hotspotList.filter((h) => ownerClientId(h.id) === ep.clientId)
+            const naturalWidth = pageState?.cssWidth ?? PAPER_TARGET_WIDTH
+            const naturalHeight = pageState?.cssHeight ?? naturalWidth * (ep.height / ep.width)
+            // Same gutter renderPage rendered this page's native resolution
+            // against, so this normally comes out to ~1 (no extra shrink
+            // needed) rather than the page having been sized for one gutter
+            // and then measured against a different one here. Never
+            // upscales past native raster resolution (would blur) — only
+            // ever shrinks further, if the container's gotten narrower since.
+            const displayScale = containerWidth ? Math.min(1, (containerWidth - PAGE_SIDE_GUTTER_PX) / naturalWidth) : 1
 
-              const naturalWidth = pageState?.cssWidth ?? PAPER_TARGET_WIDTH
-              const naturalHeight = pageState?.cssHeight ?? naturalWidth * (ep.height / ep.width)
-              // Never upscale past native raster resolution (would blur) —
-              // only ever shrink to fit narrower viewports.
-              const displayScale = containerWidth ? Math.min(1, (containerWidth - 48) / naturalWidth) : 1
-
-              return (
-                <div
-                  key={ep.clientId}
-                  className="relative mx-auto my-6"
-                  style={{ width: naturalWidth * displayScale, height: naturalHeight * displayScale }}
-                >
-                  <div className="absolute -top-3 right-0 z-10 flex gap-1">
-                    <button
-                      type="button"
-                      onClick={() => void duplicatePage(ep)}
-                      title={t("pdfTemplates.duplicatePage")}
-                      className="flex size-7 items-center justify-center rounded-full border bg-background text-muted-foreground shadow-sm transition-colors hover:text-foreground"
-                    >
-                      <CopyIcon className="size-3.5" />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => removePage(ep)}
-                      title={t("pdfTemplates.removePage")}
-                      className="flex size-7 items-center justify-center rounded-full border bg-background text-muted-foreground shadow-sm transition-colors hover:text-destructive"
-                    >
-                      <Trash2Icon className="size-3.5" />
-                    </button>
-                  </div>
-
-                  <div
-                    className="relative overflow-hidden rounded-sm bg-white"
-                    style={{
-                      width: naturalWidth,
-                      height: naturalHeight,
-                      transform: `scale(${displayScale})`,
-                      transformOrigin: "top left",
-                      boxShadow: "0 1px 2px rgba(0,0,0,.05), 0 4px 12px rgba(0,0,0,.08), 0 20px 40px rgba(0,0,0,.1)",
-                    }}
+            return (
+              <div
+                key={ep.clientId}
+                className="relative mx-auto my-3"
+                style={{ width: naturalWidth * displayScale, height: naturalHeight * displayScale }}
+              >
+                <div className="absolute -top-3 right-0 z-10 flex gap-1">
+                  <button
+                    type="button"
+                    onClick={() => void duplicatePage(ep)}
+                    title={t("pdfTemplates.duplicatePage")}
+                    className="flex size-7 items-center justify-center rounded-full border bg-background text-muted-foreground shadow-sm transition-colors hover:text-foreground"
                   >
-                    <canvas
-                      ref={(el) => { canvasRefs.current[ep.clientId] = el }}
-                      className="block"
-                    />
+                    <CopyIcon className="size-3.5" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => removePage(ep)}
+                    title={t("pdfTemplates.removePage")}
+                    className="flex size-7 items-center justify-center rounded-full border bg-background text-muted-foreground shadow-sm transition-colors hover:text-destructive"
+                  >
+                    <Trash2Icon className="size-3.5" />
+                  </button>
+                </div>
 
-                    {pageHotspots.map((h) => {
-                      const left = h.bbox[0] * scale
-                      const top = h.bbox[1] * scale
-                      const width = (h.bbox[2] - h.bbox[0]) * scale
-                      const height = (h.bbox[3] - h.bbox[1]) * scale
-                      const isText = h.type === "text"
-                      const isBusy = busyHotspotId === h.id
-                      const isEditing = editingHotspotId === h.id
-                      // Once cleared via "✕", a slot goes permanently inert
-                      // for the rest of this session — no click, no re-upload,
-                      // no re-typing, and its overlay (border/tint/buttons)
-                      // disappears entirely, so it behaves and looks like
-                      // genuinely empty space rather than an editable box that
-                      // merely happens to be empty right now.
-                      const isRemoved = removedHotspotIds.has(h.id)
+                <div
+                  className="relative overflow-hidden rounded-sm bg-white"
+                  style={{
+                    width: naturalWidth,
+                    height: naturalHeight,
+                    transform: `scale(${displayScale})`,
+                    transformOrigin: "top left",
+                    boxShadow: "0 1px 2px rgba(0,0,0,.05), 0 4px 12px rgba(0,0,0,.08), 0 20px 40px rgba(0,0,0,.1)",
+                  }}
+                >
+                  <canvas
+                    ref={(el) => { canvasRefs.current[ep.clientId] = el }}
+                    className="block"
+                  />
 
-                      return (
-                        <div
-                          key={h.id}
-                          role={isRemoved ? undefined : "button"}
-                          tabIndex={isRemoved ? undefined : 0}
-                          onClick={isRemoved ? undefined : () => (isText ? beginEditText(h) : beginEditImage(h))}
-                          onKeyDown={isRemoved ? undefined : (e) => {
-                            if (e.key === "Enter" || e.key === " ") {
-                              e.preventDefault()
-                              if (isText) beginEditText(h)
-                              else beginEditImage(h)
-                            }
-                          }}
-                          style={{
-                            position: "absolute",
-                            left,
-                            top,
-                            width,
-                            height,
-                            cursor: isRemoved ? "default" : isBusy ? "wait" : "pointer",
-                            border: isRemoved ? "none" : `1.5px dashed ${isText ? TEXT_OUTLINE : IMAGE_OUTLINE}`,
-                            background: isRemoved || isEditing ? "transparent" : isText ? TEXT_OUTLINE_BG : IMAGE_OUTLINE_BG,
-                            boxSizing: "border-box",
-                            display: "flex",
-                            alignItems: "center",
-                            justifyContent: "center",
-                          }}
-                        >
-                          {isBusy && <Loader2Icon className="size-4 animate-spin text-white drop-shadow" />}
-                          {!isRemoved && !isBusy && !isText && !isEditing && (
-                            <>
-                              <UploadIcon className="size-4 opacity-0 transition-opacity group-hover:opacity-70" style={{ color: IMAGE_OUTLINE }} />
-                              <button
-                                type="button"
-                                title={t("pdfTemplates.removeImage")}
-                                onClick={(e) => {
-                                  e.stopPropagation()
-                                  removeImage(h)
-                                }}
-                                className="absolute -right-2 -top-2 flex size-5 items-center justify-center rounded-full border bg-background text-muted-foreground shadow-sm transition-colors hover:text-destructive"
-                              >
-                                <XIcon className="size-3" />
-                              </button>
-                            </>
-                          )}
-                          {!isRemoved && !isBusy && isText && !isEditing && (
+                  {pageHotspots.map((h) => {
+                    const left = h.bbox[0] * scale
+                    const top = h.bbox[1] * scale
+                    const width = (h.bbox[2] - h.bbox[0]) * scale
+                    const isText = h.type === "text"
+                    const isBusy = busyHotspotId === h.id
+                    const isEditing = editingHotspotId === h.id
+                    // Once cleared via "✕", a slot goes permanently inert
+                    // for the rest of this session — no click, no re-upload,
+                    // no re-typing, and its overlay (border/tint/buttons)
+                    // disappears entirely, so it behaves and looks like
+                    // genuinely empty space rather than an editable box that
+                    // merely happens to be empty right now.
+                    const isRemoved = removedHotspotIds.has(h.id)
+
+                    // A paragraph's box visually tracks what its last
+                    // COMMITTED content actually needs — shrinks toward
+                    // fewer lines, grows (and flags as overflowing) past
+                    // its original space — instead of always showing the
+                    // full original area. Purely cosmetic: h.bbox itself
+                    // (the cover/redaction area, and what future
+                    // re-edits/removal target) never changes because of
+                    // this.
+                    //
+                    // Deliberately NOT applied while isEditing: hiding the
+                    // OLD content only happens once, at commit time (see
+                    // drawTextEditOnCanvas, called from commitEditText) —
+                    // the canvas still shows the untouched original
+                    // underneath for as long as you're still typing. If
+                    // the box itself shrank live to match what you'd typed
+                    // so far, that uncovered original would show through
+                    // below it. So while editing, the box stays at its
+                    // full original size (with editingBackground filling
+                    // it) exactly as it always did — only the border
+                    // color reacts live, as an early "this won't fit"
+                    // signal, without the box changing size until commit.
+                    const originalHeightPts = h.bbox[3] - h.bbox[1]
+                    let effectiveHeightPts = originalHeightPts
+                    let isOverflowing = false
+                    if (isText) {
+                      const boxWidthPts = h.bbox[2] - h.bbox[0]
+                      if (isEditing) {
+                        const lineCount = measureWrappedLineCount(editingValue, h.size, isBoldFont(h.font), boxWidthPts)
+                        const neededHeightPts = Math.max(lineCount, 1) * h.lineHeight
+                        isOverflowing = neededHeightPts > originalHeightPts + 0.5
+                      } else {
+                        const stored = hotspotVisualHeightPts[h.id]
+                        if (stored != null) effectiveHeightPts = stored
+                        isOverflowing = effectiveHeightPts > originalHeightPts + 0.5
+                      }
+                    }
+                    const height = effectiveHeightPts * scale
+
+                    return (
+                      <div
+                        key={h.id}
+                        title={isOverflowing ? t("pdfTemplates.masterTextOverflow") : undefined}
+                        // "group" so the ✕ button (and, for images, the
+                        // upload icon) can stay hidden until this specific
+                        // box is hovered — with paragraph-level boxes now
+                        // far bigger than a single line, a permanently
+                        // visible ✕ per box is no longer the clutter it
+                        // was, but hover-only keeps the page readable when
+                        // scanning it without editing anything.
+                        className="group"
+                        role={isRemoved || isEditing ? undefined : "button"}
+                        tabIndex={isRemoved || isEditing ? undefined : 0}
+                        // Disabled while isEditing as a second line of
+                        // defense — the textarea below also stops its own
+                        // click/keydown from bubbling here, but a hotspot
+                        // this large (a whole paragraph, not one line) is
+                        // exactly the box the user is clicking/typing
+                        // *inside of* while editing, so this can't rely on
+                        // the event-stopping alone.
+                        onClick={isRemoved || isEditing ? undefined : () => (isText ? beginEditText(h) : beginEditImage(h))}
+                        onKeyDown={isRemoved || isEditing ? undefined : (e) => {
+                          if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault()
+                            if (isText) beginEditText(h)
+                            else beginEditImage(h)
+                          }
+                        }}
+                        style={{
+                          position: "absolute",
+                          left,
+                          top,
+                          width,
+                          height,
+                          cursor: isRemoved ? "default" : isBusy ? "wait" : "pointer",
+                          border: isRemoved
+                            ? "none"
+                            : `1.5px dashed ${isText ? (isOverflowing ? TEXT_OVERFLOW_OUTLINE : TEXT_OUTLINE) : IMAGE_OUTLINE}`,
+                          background: isRemoved || isEditing
+                            ? "transparent"
+                            : isText ? (isOverflowing ? TEXT_OVERFLOW_OUTLINE_BG : TEXT_OUTLINE_BG) : IMAGE_OUTLINE_BG,
+                          boxSizing: "border-box",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                        }}
+                      >
+                        {isBusy && <Loader2Icon className="size-4 animate-spin text-white drop-shadow" />}
+                        {!isRemoved && !isBusy && !isText && !isEditing && (
+                          <>
+                            <UploadIcon className="size-4 opacity-0 transition-opacity group-hover:opacity-70" style={{ color: IMAGE_OUTLINE }} />
                             <button
                               type="button"
-                              title={t("pdfTemplates.removeText")}
+                              title={t("pdfTemplates.removeImage")}
                               onClick={(e) => {
                                 e.stopPropagation()
-                                removeText(h)
+                                removeImage(h)
                               }}
-                              className="absolute -right-2 -top-2 flex size-5 items-center justify-center rounded-full border bg-background text-muted-foreground shadow-sm transition-colors hover:text-destructive"
+                              className="absolute -right-2 -top-2 flex size-5 items-center justify-center rounded-full border bg-background text-muted-foreground opacity-0 shadow-sm transition group-hover:opacity-100 hover:text-destructive"
                             >
                               <XIcon className="size-3" />
                             </button>
-                          )}
-                          {isText && isEditing && (
-                            <textarea
-                              autoFocus
-                              dir={h.rtl ? "rtl" : "ltr"}
-                              value={editingValue}
-                              onChange={(e) => setEditingValue(e.target.value)}
-                              onBlur={() => void commitEditText()}
-                              onKeyDown={(e) => {
-                                if (e.key === "Enter" && !e.shiftKey) {
-                                  e.preventDefault()
-                                  void commitEditText()
-                                }
-                                if (e.key === "Escape") {
-                                  e.preventDefault()
-                                  // Also unmounts this focused textarea, which
-                                  // fires the same stale onBlur commitEditText
-                                  // guards against — without this, Escape
-                                  // would silently commit instead of cancel.
-                                  commitInFlightRef.current = true
-                                  setEditingHotspotId(null)
-                                }
-                              }}
-                              style={{
-                                width: "100%",
-                                height: "100%",
-                                resize: "none",
-                                border: "none",
-                                outline: "none",
-                                // Sampled from the real page pixels around this
-                                // hotspot (see beginEditText) instead of a fixed
-                                // white/black box, so editing feels like it's
-                                // happening on the actual design, not a form
-                                // field pasted on top of it.
-                                background: editingBackground,
-                                color: colorIntToCss(h.color),
-                                fontSize: Math.max(10, h.size * scale * 0.92),
-                                textAlign: h.rtl ? "right" : "left",
-                                padding: 2,
-                              }}
-                            />
-                          )}
-                        </div>
-                      )
-                    })}
-                  </div>
+                          </>
+                        )}
+                        {!isRemoved && !isBusy && isText && !isEditing && (
+                          <button
+                            type="button"
+                            title={t("pdfTemplates.removeText")}
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              removeText(h)
+                            }}
+                            className="absolute -right-2 -top-2 flex size-5 items-center justify-center rounded-full border bg-background text-muted-foreground opacity-0 shadow-sm transition group-hover:opacity-100 hover:text-destructive"
+                          >
+                            <XIcon className="size-3" />
+                          </button>
+                        )}
+                        {isText && isEditing && (
+                          <textarea
+                            autoFocus
+                            dir={h.rtl ? "rtl" : "ltr"}
+                            value={editingValue}
+                            onChange={(e) => setEditingValue(e.target.value)}
+                            onBlur={() => void commitEditText()}
+                            // Without stopping propagation here, every
+                            // click/keystroke inside this textarea also
+                            // bubbled up to the box's own onClick/onKeyDown
+                            // (see above) — which re-opened this same
+                            // hotspot from scratch on ANY click, and on
+                            // Space/Enter specifically (its onKeyDown
+                            // matched those keys too) would preventDefault
+                            // the keystroke AND reset editingValue back to
+                            // the original text, silently discarding
+                            // whatever had just been typed. That's exactly
+                            // what made editing feel broken: typing a
+                            // space, or clicking to reposition the cursor,
+                            // could wipe out the edit in progress.
+                            onClick={(e) => e.stopPropagation()}
+                            onKeyDown={(e) => {
+                              e.stopPropagation()
+                              // Chatbot convention: Enter commits (so you
+                              // immediately see the result in place, rather
+                              // than the cursor just moving down inside a
+                              // still-open box); Shift+Enter or Ctrl/Cmd+Enter
+                              // inserts a newline instead. Only plain Enter
+                              // needs handling here — the other combinations
+                              // fall through to the textarea's own default
+                              // newline-on-Enter behaviour.
+                              if (e.key === "Enter" && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
+                                e.preventDefault()
+                                void commitEditText()
+                              }
+                              if (e.key === "Escape") {
+                                e.preventDefault()
+                                // Also unmounts this focused textarea, which
+                                // fires the same stale onBlur commitEditText
+                                // guards against — without this, Escape
+                                // would silently commit instead of cancel.
+                                commitInFlightRef.current = true
+                                setEditingHotspotId(null)
+                              }
+                            }}
+                            style={{
+                              width: "100%",
+                              height: "100%",
+                              resize: "none",
+                              border: "none",
+                              outline: "none",
+                              // Sampled from the real page pixels around this
+                              // hotspot (see beginEditText) instead of a fixed
+                              // white/black box, so editing feels like it's
+                              // happening on the actual design, not a form
+                              // field pasted on top of it.
+                              background: editingBackground,
+                              color: colorIntToCss(h.color),
+                              fontSize: Math.max(10, h.size * scale * 0.92),
+                              textAlign: h.rtl ? "right" : "left",
+                              padding: 2,
+                            }}
+                          />
+                        )}
+                      </div>
+                    )
+                  })}
                 </div>
-              )
-            })}
-          </>
-        )}
+              </div>
+            )
+          })}
 
         <div className="h-12" />
       </div>

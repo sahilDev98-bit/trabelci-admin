@@ -1012,6 +1012,7 @@ const he = {
     cannotRemoveLastPage: "המסמך חייב לכלול לפחות עמוד אחד",
     pageDuplicated: "העמוד שוכפל",
     pageRemoved: "העמוד הוסר",
+    masterTextOverflow: "הטקסט הזה כבר לא נכנס לשטח המקורי שלו ועלול לחפוף לתוכן סמוך",
   },
   aiImages: {
     title: "יצירת תמונות AI",

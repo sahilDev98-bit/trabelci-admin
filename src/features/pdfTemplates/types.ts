@@ -45,10 +45,21 @@ export interface PdfHotspotBase {
 
 export interface PdfTextHotspot extends PdfHotspotBase {
   type: "text"
+  /** One paragraph — may contain "\n" between its original wrapped lines. */
   text: string
   font: string
   size: number
   color: number
+  /** Average baseline-to-baseline gap between this paragraph's original
+   * lines (server-measured, not assumed) — drives preview line spacing when
+   * replacement text wraps across more than one line. */
+  lineHeight: number
+  /** Baseline y (PDF points) of the FIRST line — where the preview anchors
+   * the first drawn line. Without this the only information available is
+   * the bbox's bottom edge, which used to be a fine stand-in for a
+   * single-line box but anchors a multi-line paragraph's replacement text
+   * at the very bottom of the whole block. */
+  originY: number
   rtl: boolean
 }
 
