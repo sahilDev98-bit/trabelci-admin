@@ -133,6 +133,8 @@ const COLUMNS: CeramicColumn[] = [
   // shade is a free-text field like supplier/series/color (no dropdown)
   { field: "size",               type: "dropdown",              minWidth: 130, dropdownKey: "size"              },
   { field: "finish",             type: "dropdown",              minWidth: 125, dropdownKey: "finish"            },
+  { field: "tile_type",          type: "dropdown",              minWidth: 110, dropdownKey: "tile_type"         },
+  { field: "price",              type: "text",                  minWidth: 100 },
   { field: "product_image_urls", type: "image-multi",           minWidth: 170, imageType: "product" },
   { field: "gallery_image_urls", type: "image-multi",           minWidth: 170, imageType: "gallery" },
   { field: "country_of_origin",  type: "dropdown",              minWidth: 130, dropdownKey: "country_of_origin" },

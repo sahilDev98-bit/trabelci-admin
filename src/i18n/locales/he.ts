@@ -783,6 +783,8 @@ const he = {
       qty_per_carton: "כמות לקרטון",
       qty_per_pallet: "כמות למשטח",
       shade: "גוון",
+      tile_type: "סוג אריח",
+      price: "מחיר",
       supplier_code: "קוד ספק",
       supplier_name_en: "שם יצרן (אנגלית)",
       series_en: "סדרה (אנגלית)",
@@ -880,6 +882,12 @@ const he = {
       failedToSave: "שמירת תבנית נכשלה",
       edit: "ערוך",
       cancel: "ביטול",
+      setDefault: "הגדר כברירת מחדל",
+      setDefaultSuccess: "תבנית ברירת המחדל עודכנה",
+      setDefaultFailed: "עדכון תבנית ברירת המחדל נכשל",
+      activeTemplateLabel: "תבנית פעילה:",
+      activeTemplateHelp: "— זו התבנית המשמשת לבדיקת שדות וליצירת שם בעת יצירת SKU חדש.",
+      noActiveTemplate: "לא הוגדרה תבנית פעילה — בדיקת שדות חובה/מומלצים לא תפעל עד שתסמן תבנית כברירת מחדל.",
     },
 
     pdfExtract: {

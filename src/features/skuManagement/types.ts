@@ -26,6 +26,8 @@ export interface SkuMetadataRow {
   finish?: string;
   country_of_origin?: string;
   shade?: string;
+  tile_type?: string;
+  price?: string;
   qty_per_carton?: string;
   qty_per_pallet?: string;
 

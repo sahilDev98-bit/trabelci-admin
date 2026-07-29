@@ -799,6 +799,8 @@ const en = {
       qty_per_carton: "Quantity per Carton",
       qty_per_pallet: "Quantity per Pallet",
       shade: "Shade",
+      tile_type: "Tile Type",
+      price: "Price",
       supplier_code: "Supplier Code",
       supplier_name_en: "Supplier Name (EN)",
       series_en: "Series (English)",
@@ -896,6 +898,12 @@ const en = {
       failedToSave: "Failed to save template",
       edit: "Edit",
       cancel: "Cancel",
+      setDefault: "Set as default",
+      setDefaultSuccess: "Default template updated",
+      setDefaultFailed: "Failed to set default template",
+      activeTemplateLabel: "Active template:",
+      activeTemplateHelp: "— this is the one used for validation and name generation when creating new SKUs.",
+      noActiveTemplate: "No active template set — required/recommended field validation will not run until one is marked default.",
     },
 
     dropdowns: {

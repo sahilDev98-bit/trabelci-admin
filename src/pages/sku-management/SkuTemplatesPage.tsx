@@ -17,7 +17,8 @@ import type { SkuTemplate } from "@/features/skuManagement/types"
 
 const AVAILABLE_FIELDS = [
   "supplier", "series", "color", "size", "finish",
-  "country_of_origin", "shade", "qty_per_carton", "qty_per_pallet",
+  "country_of_origin", "shade", "tile_type", "price",
+  "qty_per_carton", "qty_per_pallet",
   "supplier_code", "supplier_sku", "series_en", "color_en",
   "product_image_urls", "gallery_image_urls",
 ]
@@ -55,7 +56,7 @@ function TemplateForm({ initial = {}, onSave, onCancel, isSaving }: TemplateForm
   const [name, setName] = useState(initial.name ?? "")
   const [description, setDescription] = useState(initial.description ?? "")
   const [pattern, setPattern] = useState(
-    initial.name_pattern ?? "{supplier} | {series} {color} | {size} | {finish}"
+    initial.name_pattern ?? "{supplier}  {series} {color}  {size}  {finish}"
   )
   const [requiredFields, setRequiredFields] = useState<string[]>(
     initial.required_fields ?? ["supplier", "series", "color", "size", "finish"]
@@ -108,7 +109,7 @@ function TemplateForm({ initial = {}, onSave, onCancel, isSaving }: TemplateForm
         <Input
           value={pattern}
           onChange={(e) => setPattern(e.target.value)}
-          placeholder="{supplier} | {series} {color} | {size} | {finish}"
+          placeholder="{supplier}  {series} {color}  {size}  {finish}"
           className="font-mono text-sm"
         />
         <p className="text-xs text-muted-foreground">
@@ -188,6 +189,16 @@ export function SkuTemplatesPage() {
 
   const [showNew, setShowNew] = useState(false)
   const [editingId, setEditingId] = useState<number | null>(null)
+  const activeTemplate = templates.find((tmpl) => tmpl.is_default)
+
+  const handleSetDefault = async (id: number) => {
+    try {
+      await update.mutateAsync({ id, payload: { is_default: true } })
+      toast.success(t("sku.templates.setDefaultSuccess"))
+    } catch {
+      toast.error(t("sku.templates.setDefaultFailed"))
+    }
+  }
 
   const handleCreate = async (data: Omit<SkuTemplate, "id" | "created_at">) => {
     try {
@@ -231,6 +242,21 @@ export function SkuTemplatesPage() {
         </Button>
       </div>
 
+      <div className="rounded-md border bg-muted/30 px-3 py-2 text-sm">
+        {activeTemplate ? (
+          <>
+            <span className="text-muted-foreground">{t("sku.templates.activeTemplateLabel")} </span>
+            <span className="font-medium">{activeTemplate.name}</span>
+            <span className="text-muted-foreground">
+              {" "}
+              {t("sku.templates.activeTemplateHelp")}
+            </span>
+          </>
+        ) : (
+          <span className="text-amber-600">{t("sku.templates.noActiveTemplate")}</span>
+        )}
+      </div>
+
       {showNew && (
         <Card>
           <CardHeader className="pb-2">
@@ -262,15 +288,27 @@ export function SkuTemplatesPage() {
                     )}
                     <CardTitle className="text-sm">{tmpl.name}</CardTitle>
                   </div>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => setEditingId(editingId === tmpl.id ? null : tmpl.id)}
-                  >
-                    {editingId === tmpl.id
-                      ? t("sku.templates.cancel")
-                      : t("sku.templates.edit")}
-                  </Button>
+                  <div className="flex items-center gap-1">
+                    {!tmpl.is_default && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={update.isPending}
+                        onClick={() => handleSetDefault(tmpl.id)}
+                      >
+                        {t("sku.templates.setDefault")}
+                      </Button>
+                    )}
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setEditingId(editingId === tmpl.id ? null : tmpl.id)}
+                    >
+                      {editingId === tmpl.id
+                        ? t("sku.templates.cancel")
+                        : t("sku.templates.edit")}
+                    </Button>
+                  </div>
                 </div>
                 {tmpl.description && (
                   <p className="text-xs text-muted-foreground">{tmpl.description}</p>
