@@ -7,6 +7,7 @@ import * as pdfjsLib from "pdfjs-dist"
 
 import { Button } from "@/components/ui/button"
 import { ROUTES } from "@/lib/routes"
+import type { DownloadProgress } from "@/lib/apiClient"
 import {
   startPdfMasterSession,
   fetchPdfMasterSessionJobStatus,
@@ -60,6 +61,31 @@ const PAGE_SIDE_GUTTER_PX = 24
 const JOB_POLL_INTERVAL_MS = 2_000
 const JOB_POLL_TIMEOUT_MS = 10 * 60 * 1000 // generous ceiling for a very heavy catalog
 
+// ── Loading-progress phase boundaries (percent) ─────────────────────────────
+//
+// The initial load has three phases with very different characters, so one
+// uniform bar would either lie (claim more progress than we actually know)
+// or stall (sit frozen while real work happens). Each phase is handled
+// honestly instead:
+//   1. Start session — a single request; jumps straight to its endpoint the
+//      moment it resolves, nothing to show in between.
+//   2. Analysis (job polling) — the server only ever reports "still
+//      processing" or "done" (see waitForSessionJob), no page-by-page
+//      signal. With nothing real to measure, this phase creeps toward its
+//      ceiling on every poll tick and deliberately never touches it —
+//      the moment the real "done" arrives, it snaps straight to the ceiling.
+//   3. File download — a real binary transfer, so this is genuine
+//      bytes-received-vs-total progress (see DownloadProgress), mapped onto
+//      the remaining slice of the bar.
+const PROGRESS_SESSION_STARTED_PCT = 12
+const PROGRESS_ANALYSIS_CEILING_PCT = 65
+const PROGRESS_FILE_DOWNLOAD_END_PCT = 97
+// How much of the remaining gap to the analysis ceiling each poll tick
+// closes — smaller = slower, more gradual crawl. 0.15 reaches ~90% of the
+// way to the ceiling after 5 ticks (~10s) and keeps visibly, gently
+// creeping for as long as the analysis actually takes.
+const PROGRESS_ANALYSIS_TICK_FACTOR = 0.15
+
 // Separator between an editor page's clientId and a hotspot's original id —
 // see PdfHotspotBase.id. Chosen over ":" since generated ids (crypto
 // randomUUID, server-issued hotspot ids like "p1-t1") never contain it.
@@ -69,13 +95,20 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
-async function waitForSessionJob(jobId: string): Promise<Omit<PdfSession, "templateId" | "templateName">> {
+/** onTick fires once per "still processing" poll (not on the final, done
+ * check) — the caller uses it to nudge a progress indicator, since this
+ * function itself has no notion of percentages. */
+async function waitForSessionJob(
+  jobId: string,
+  onTick?: () => void,
+): Promise<Omit<PdfSession, "templateId" | "templateName">> {
   const deadline = Date.now() + JOB_POLL_TIMEOUT_MS
   while (true) {
     const status = await fetchPdfMasterSessionJobStatus(jobId)
     if (status.status === "done") return status.result
     if (status.status === "failed") throw new Error(status.error)
     if (Date.now() > deadline) throw new Error("PDF analysis is taking too long — try a smaller file")
+    onTick?.()
     await sleep(JOB_POLL_INTERVAL_MS)
   }
 }
@@ -274,6 +307,8 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
   const [editorPages, setEditorPages] = useState<EditorPage[]>([])
   const [hotspots, setHotspots] = useState<Record<string, PdfHotspot>>({})
   const [isLoading, setIsLoading] = useState(true)
+  // 0–100. See the PROGRESS_* constants above for what drives each phase.
+  const [loadProgress, setLoadProgress] = useState(0)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [pageStates, setPageStates] = useState<PageRenderState[]>([])
   const [busyHotspotId, setBusyHotspotId] = useState<string | null>(null)
@@ -338,11 +373,13 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
   // effect below).
   const pendingPageBitmapRef = useRef<Record<string, ImageBitmap>>({})
 
-  /** Download the current working copy once and (re)parse it. */
-  const reloadDocument = useCallback(async () => {
+  /** Download the current working copy once and (re)parse it.
+   * onDownloadProgress (optional) reports real bytes-received-vs-total as
+   * the file streams in, for the initial-load progress bar. */
+  const reloadDocument = useCallback(async (onDownloadProgress?: (progress: DownloadProgress) => void) => {
     const sessionId = sessionIdRef.current
     if (!sessionId) return
-    const bytes = await fetchPdfMasterSessionFile(sessionId)
+    const bytes = await fetchPdfMasterSessionFile(sessionId, onDownloadProgress)
     const doc = await pdfjsLib.getDocument({ data: bytes }).promise
     const old = pdfDocRef.current
     pdfDocRef.current = doc
@@ -506,10 +543,21 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
 
     async function load() {
       setIsLoading(true)
+      setLoadProgress(0)
       setLoadError(null)
       try {
         const jobStart = await startPdfMasterSession(template.id)
-        const jobResult = await waitForSessionJob(jobStart.jobId)
+        // Phase 1 done: nothing to show in between a single request resolving.
+        setLoadProgress(PROGRESS_SESSION_STARTED_PCT)
+
+        // Phase 2: no real signal (see waitForSessionJob) — creep toward the
+        // ceiling on every poll tick without ever reaching it, then snap to
+        // it the instant the real "done" arrives below.
+        const jobResult = await waitForSessionJob(jobStart.jobId, () => {
+          setLoadProgress((prev) => prev + (PROGRESS_ANALYSIS_CEILING_PCT - prev) * PROGRESS_ANALYSIS_TICK_FACTOR)
+        })
+        setLoadProgress(PROGRESS_ANALYSIS_CEILING_PCT)
+
         const result: PdfSession = {
           ...jobResult,
           templateId: jobStart.templateId,
@@ -535,8 +583,21 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
         setHotspots(namespacedHotspots)
         setEditorPages(pages)
 
-        // One download + one parse for the whole document
-        await reloadDocument()
+        // Phase 3: a real binary transfer, so this is genuine bytes-received-
+        // vs-total progress, mapped onto the remaining slice of the bar. If
+        // the response has no Content-Length to compare against, fall back
+        // to the same honest crawl phase 2 used, just within this phase's
+        // own slice — one download + one parse for the whole document.
+        await reloadDocument(({ loaded, total }) => {
+          if (total) {
+            const fraction = Math.min(1, loaded / total)
+            setLoadProgress(
+              PROGRESS_ANALYSIS_CEILING_PCT + fraction * (PROGRESS_FILE_DOWNLOAD_END_PCT - PROGRESS_ANALYSIS_CEILING_PCT),
+            )
+          } else {
+            setLoadProgress((prev) => prev + (PROGRESS_FILE_DOWNLOAD_END_PCT - prev) * PROGRESS_ANALYSIS_TICK_FACTOR)
+          }
+        })
 
         // Pre-size every page card from the session's own PDF-point
         // dimensions — cards mount at their correct final height immediately,
@@ -545,6 +606,20 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
         // old code tried to paint onto canvases in this same async function,
         // before React had ever mounted them — every draw silently no-opped).
         setPageStates(pages.map((p) => ({ page: p.clientId, ...pageSizeToCss(p.width, p.height) })))
+        setLoadProgress(100)
+
+        // Let "100%" actually register on screen for a beat before swapping
+        // to the loaded document — without this, isLoading flips false in
+        // the very same tick this reaches 100%, so the number never really
+        // gets seen. Deliberately placed BEFORE setSession, not after: this
+        // is an await, and setSession must land in the SAME commit as
+        // isLoading turning false below (no await between them) — that's
+        // what guarantees the page canvases already exist in the DOM by the
+        // time the paint effect's passive phase runs (see the comment above
+        // this same effect). An await sitting between setSession and
+        // isLoading going false would reintroduce exactly the blank-page bug
+        // that comment describes, just moved a few lines down.
+        await sleep(1500)
 
         // Setting `session` last is what triggers the paint effect below,
         // and only after this render commits are the <canvas> elements for
@@ -950,15 +1025,43 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
       <div ref={pagesContainerRef} className="flex-1 overflow-x-hidden" style={{ background: "#EEECE6" }}>
         {isLoading && (
           <div className="flex flex-col items-center justify-center gap-3 py-24">
-            <Loader2Icon className="size-6 animate-spin text-muted-foreground" />
-            <p className="text-sm text-muted-foreground">{t("pdfTemplates.masterLoading")}</p>
+            {/* Fixed colors, not bg-muted/bg-primary: this sits on the fixed
+                #EEECE6 above (the page-preview area always reads as light
+                paper, independent of app theme — see its own hardcoded
+                background), but bg-primary flips to near-white in dark mode
+                (correct for the app's own dark surfaces) — placed here
+                instead it would wash out to invisible against this same
+                light backdrop. Same reasoning as TEXT_OUTLINE/IMAGE_OUTLINE
+                above being fixed rgba rather than theme classes. Fill color
+                is --primary's own LIGHT-mode value (rgb(23,23,23), see
+                index.css), hardcoded — the same near-black the rest of the
+                app's primary actions (e.g. the Download PDF button) use in
+                light mode, so this reads as "the" emphasis color rather than
+                an unrelated accent hue. */}
+            <div className="h-1.5 w-64 max-w-[70vw] overflow-hidden rounded-full" style={{ background: "rgba(0,0,0,0.1)" }}>
+              {/* width, not transform: this updates in small, frequent steps
+                  (poll ticks, byte-progress events) rather than one big jump,
+                  so a transform-based approach would fight itself restarting
+                  mid-transition on every step instead of just growing. */}
+              <div
+                className="h-full rounded-full transition-[width] duration-300 ease-out"
+                style={{ width: `${loadProgress}%`, background: "rgb(23,23,23)" }}
+              />
+            </div>
+            <p className="text-sm" style={{ color: "rgba(0,0,0,0.55)" }}>
+              {t("pdfTemplates.masterLoading", { percent: Math.round(loadProgress) })}
+            </p>
           </div>
         )}
 
         {!isLoading && loadError && (
+          // Fixed colors here too, same reasoning as the loading state above:
+          // text-destructive/text-muted-foreground are tuned for the app's
+          // own dark surfaces in dark mode and wash out against this area's
+          // fixed light background.
           <div className="flex flex-col items-center justify-center gap-3 py-24 text-center">
-            <p className="text-sm text-destructive">{t("common.error")}</p>
-            <p className="max-w-md text-xs text-muted-foreground">{loadError}</p>
+            <p className="text-sm" style={{ color: "rgb(185,28,28)" }}>{t("common.error")}</p>
+            <p className="max-w-md text-xs" style={{ color: "rgba(0,0,0,0.55)" }}>{loadError}</p>
           </div>
         )}
 

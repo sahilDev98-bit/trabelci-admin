@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { apiFetch } from "@/lib/apiClient"
+import { apiFetch, type DownloadProgress } from "@/lib/apiClient"
 import { API_ENDPOINTS } from "@/lib/apiEndpoints"
 import { pdfTemplatesQueryKeys } from "./queryKeys"
 import type {
@@ -77,10 +77,16 @@ export async function fetchPdfMasterSessionJobStatus(jobId: string): Promise<Pdf
   })
 }
 
-/** Full working-copy PDF bytes — used once, for the initial render of every page. */
-export async function fetchPdfMasterSessionFile(sessionId: string): Promise<ArrayBuffer> {
+/** Full working-copy PDF bytes — used once, for the initial render of every
+ * page. onDownloadProgress (optional) reports real bytes-received-vs-total
+ * as this streams in, for callers driving a progress indicator off it. */
+export async function fetchPdfMasterSessionFile(
+  sessionId: string,
+  onDownloadProgress?: (progress: DownloadProgress) => void,
+): Promise<ArrayBuffer> {
   return apiFetch<ArrayBuffer>(`${API_ENDPOINTS.PDF_MASTER_SESSION}/${sessionId}/file`, {
     responseType: "arraybuffer",
+    onDownloadProgress,
   })
 }
 

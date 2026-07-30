@@ -1000,7 +1000,7 @@ const he = {
     preview: "תצוגה מקדימה",
     slotLegend: "מסגרת כחולה = טקסט · כתומה = תמונה",
     pdfDownloaded: "PDF הורד בהצלחה.",
-    masterLoading: "פותח את קובץ ה-PDF לעריכה…",
+    masterLoading: "פותח את קובץ ה-PDF לעריכה… {{percent}}%",
     masterEditFailed: "לא ניתן היה לשמור את השינוי — נסה שוב",
     masterImageReplaced: "התמונה הוחלפה",
     masterImageRemoved: "התמונה הוסרה",

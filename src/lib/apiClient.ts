@@ -74,9 +74,20 @@ api.interceptors.response.use(
   },
 )
 
+export interface DownloadProgress {
+  loaded: number
+  /** Undefined if the response has no Content-Length header to compare against. */
+  total?: number
+}
+
 interface ApiFetchInit extends RequestInit {
   /** Forwarded to axios — use "blob" or "arraybuffer" for binary downloads (e.g. PDF export). */
   responseType?: "json" | "blob" | "arraybuffer"
+  /** Fires repeatedly as a binary response streams in (use with responseType
+   * "blob"/"arraybuffer") — real byte-level progress for a large download,
+   * as opposed to a guess. Kept as a small local shape rather than axios's
+   * own AxiosProgressEvent so callers don't need to import axios directly. */
+  onDownloadProgress?: (progress: DownloadProgress) => void
 }
 
 export async function apiFetch<TResponse>(
@@ -107,12 +118,16 @@ export async function apiFetch<TResponse>(
     headers["Content-Type"] = undefined as unknown as string
   }
 
+  const onDownloadProgress = init?.onDownloadProgress
   const response = await api.request<TResponse>({
     url,
     method,
     headers,
     data: init?.body,
     responseType: init?.responseType,
+    onDownloadProgress: onDownloadProgress
+      ? (e) => onDownloadProgress({ loaded: e.loaded, total: e.total })
+      : undefined,
   })
 
   return response.data

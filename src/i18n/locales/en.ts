@@ -1016,7 +1016,7 @@ const en = {
     preview: "Preview",
     slotLegend: "Blue outline = text slot · Orange = image slot",
     pdfDownloaded: "PDF downloaded.",
-    masterLoading: "Opening your PDF for editing…",
+    masterLoading: "Opening your PDF for editing… {{percent}}%",
     masterEditFailed: "Could not save that change — please try again",
     masterImageReplaced: "Image replaced",
     masterImageRemoved: "Image removed",
