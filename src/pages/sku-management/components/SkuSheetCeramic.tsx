@@ -2676,6 +2676,10 @@ export const SkuSheetCeramic = forwardRef<SkuSheetCeramicHandle, SkuSheetCeramic
           const targetRowIdx = startRow + ri
           if (targetRowIdx >= newRows.length) break
 
+          // Blank pasted cells are skipped — pasting "" over an already-filled
+          // cell would silently wipe it (mirrors the same guard in fillDownRange)
+          if (!pasteCols[ci].trim()) continue
+
           newRows[targetRowIdx] = {
             ...newRows[targetRowIdx],
             [col.field]: pasteCols[ci],
