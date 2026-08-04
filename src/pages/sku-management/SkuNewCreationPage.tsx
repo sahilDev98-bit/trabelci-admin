@@ -30,6 +30,9 @@ function makeEmptyRow(): SkuMetadataRow {
     workflow_type: "new_creation",
     status: "draft",
     tile_type: "Floor",
+    item_group_code: "102",
+    buy_unit_msr: "מ\"ר",
+    manage_batch_numbers: "Y",
     _validationStatus: "unchecked",
     _isDirty: true,
     _clientId: crypto.randomUUID(),
@@ -46,9 +49,11 @@ function makeEmptyRow(): SkuMetadataRow {
 // never shows dead space below the last row
 const MIN_TRAILING_EMPTY_ROWS = 40
 
-// Note: tile_type is deliberately excluded — makeEmptyRow() pre-fills it
-// with "Floor", so including it here would make isRowEmpty() always false
-// (every row, even untouched padding, would have a truthy tile_type).
+// Note: tile_type, item_group_code, buy_unit_msr, and manage_batch_numbers
+// are deliberately excluded — makeEmptyRow() pre-fills them
+// ("Floor" / "102" / מ"ר / "Y"), so including them here would make
+// isRowEmpty() always false (every row, even untouched padding, would have
+// a truthy value for them).
 const USER_DATA_FIELDS = [
   "sku", "supplier", "series", "color", "size", "finish",
   "country_of_origin", "qty_per_carton", "qty_per_pallet", "shade", "price",

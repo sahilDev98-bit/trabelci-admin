@@ -28,6 +28,9 @@ export interface SkuMetadataRow {
   shade?: string;
   tile_type?: string;
   price?: string;
+  buy_unit_msr?: string;
+  item_group_code?: string;
+  manage_batch_numbers?: string;
   qty_per_carton?: string;
   qty_per_pallet?: string;
 
@@ -113,6 +116,10 @@ export interface SkuTemplate {
   required_fields: string[];
   recommended_fields: string[];
   is_default: boolean;
+  /** Exact SAP Items OData property name this template's generated value is
+   *  written to on SAP item creation (e.g. ItemName, ForeignName, U_GenFrgn).
+   *  Unset = preview-only, not applied to SAP. */
+  sap_field_name?: string;
   created_at?: string;
 }
 
