@@ -1,22 +1,36 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import { useNavigate } from "@tanstack/react-router"
 import { useTranslation } from "react-i18next"
-import { ArrowLeftIcon, CopyIcon, DownloadIcon, Loader2Icon, Trash2Icon, UploadIcon, XIcon } from "lucide-react"
+import { ArrowLeftIcon, DownloadIcon, Loader2Icon, UploadIcon, XIcon } from "lucide-react"
 import { toast } from "sonner"
 import * as pdfjsLib from "pdfjs-dist"
 
 import { Button } from "@/components/ui/button"
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import { Textarea } from "@/components/ui/textarea"
+import { PdfEditorRail, type PdfContentMode, type PdfOrganizerMode } from "./PdfEditorRail"
+import { PdfPageOrganizer, type OrganizerPage } from "./PdfPageOrganizer"
+import { PdfTextPreview } from "./PdfTextPreview"
+import { hotspotCanvasFont, loadPdfSessionFonts, unloadPdfSessionFonts } from "./pdfFonts"
+import { fitText, type FitResult } from "./pdfTextFit"
 import { ROUTES } from "@/lib/routes"
 import type { DownloadProgress } from "@/lib/apiClient"
 import {
   startPdfMasterSession,
   fetchPdfMasterSessionJobStatus,
   fetchPdfMasterSessionFile,
+  fetchPdfMasterSessionFonts,
   applyPdfMasterEditsAndExport,
   closePdfMasterSession,
 } from "@/features/pdfTemplates/api"
 import type { PdfMasterPagePlanEntry, PdfMasterPendingEdit } from "@/features/pdfTemplates/api"
-import type { EditorPage, PdfHotspot, PdfSession, PdfTemplate } from "@/features/pdfTemplates/types"
+import type { EditorPage, PdfHotspot, PdfSession, PdfTemplate, PdfTextHotspot } from "@/features/pdfTemplates/types"
 
 // Vite statically detects this `new URL(..., import.meta.url)` pattern and
 // bundles the worker as a proper asset — no ambient module typing needed
@@ -197,60 +211,22 @@ function sampleBackgroundColor(
   return `rgb(${best[0]})`
 }
 
-// Greedy word-wrap on canvas — mirrors _wrap_text_to_width in pdf_editor.py:
-// wrap decisions happen on logical (typed) text using the already-configured
-// ctx.font metrics, and the caller's own explicit newlines are kept as
-// forced breaks. ctx.direction/textAlign (set by the caller before this
-// runs) handle RTL shaping natively when each returned line is drawn — no
-// manual reordering needed here, unlike the PDF export path.
-function wrapTextToWidth(ctx: CanvasRenderingContext2D, text: string, maxWidth: number): string[] {
-  const lines: string[] = []
-  for (const paragraph of text.split("\n")) {
-    const words = paragraph.split(" ")
-    let current = words[0] ?? ""
-    for (let i = 1; i < words.length; i++) {
-      const word = words[i]
-      const candidate = current ? `${current} ${word}` : word
-      if (!current || ctx.measureText(candidate).width <= maxWidth) {
-        current = candidate
-      } else {
-        lines.push(current)
-        current = word
-      }
-    }
-    lines.push(current)
-  }
-  return lines
-}
+// Text wrapping/measurement/auto-fit all moved to pdfTextFit.ts, which does
+// it in the document's OWN embedded typeface (see pdfFonts.ts) rather than
+// the generic system-ui face used here before. That mattered: the export
+// draws in the real font, so measuring in a different one meant the preview
+// and the downloaded file could legitimately disagree about where lines
+// wrap and whether the text fit at all.
 
-function isBoldFont(font: string): boolean {
-  return font.toLowerCase().includes("bold")
-}
-
-// Shared, lazily-created canvas used purely for text measurement (never
-// drawn to screen) — a single instance is enough since measurements are
-// synchronous and this is never called concurrently with itself.
-let _measureCtx: CanvasRenderingContext2D | null | undefined
-
-// How many lines `text` would wrap into inside a box `boxWidthPts` wide, at
-// `fontSizePts`. Deliberately takes raw PDF-point values, not on-screen
-// pixels: canvas word-wrap only depends on the RATIO between glyph widths
-// and the available width, and that ratio is identical whether you measure
-// at the real on-screen scale or directly in point units treated as px — so
-// this gives the exact same line count either way, without needing to know
-// the page's current zoom/scale at all. That's what lets both the live
-// (on-screen, scaled) preview and the point-based stored-height bookkeeping
-// share one function.
-function measureWrappedLineCount(text: string, fontSizePts: number, isBold: boolean, boxWidthPts: number): number {
-  const trimmed = text.trim()
-  if (!trimmed) return 0
-  if (_measureCtx === undefined) {
-    const canvas = typeof document !== "undefined" ? document.createElement("canvas") : null
-    _measureCtx = canvas?.getContext("2d") ?? null
-  }
-  if (!_measureCtx) return 1
-  _measureCtx.font = `${isBold ? "bold " : ""}${fontSizePts}px system-ui, sans-serif`
-  return wrapTextToWidth(_measureCtx, trimmed, boxWidthPts).length
+// Defense in depth alongside the server's own fix (see pdf_editor.py's
+// _extract_hotspots): a hotspot with a missing/zero/degenerate lineHeight —
+// whatever the source, past or future — must never be allowed to collapse
+// every wrapped line onto the same baseline again (that's exactly what
+// produced illegible overlapping text and a squashed-to-nothing box for a
+// real table-of-contents row). Falls back to the same size*1.2 default used
+// server-side.
+function effectiveLineHeight(hotspot: { size: number; lineHeight: number }): number {
+  return hotspot.lineHeight > hotspot.size * 0.3 ? hotspot.lineHeight : hotspot.size * 1.2
 }
 
 // For removing an image entirely (as opposed to covering a line of text
@@ -316,6 +292,30 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
   const [editingValue, setEditingValue] = useState("")
   const [editingBackground, setEditingBackground] = useState("#ffffff")
   const [isExporting, setIsExporting] = useState(false)
+  // What clicking on a page does in the MAIN view. Page arranging isn't part
+  // of this any more — it happens entirely inside the organizer dialog, so
+  // the main view never goes half-disabled while a page tool is active.
+  const [contentMode, setContentMode] = useState<PdfContentMode>("text")
+  // Which job the organizer dialog is open for, or null when it's closed.
+  const [organizerMode, setOrganizerMode] = useState<PdfOrganizerMode | null>(null)
+  // Snapshots of each page's current appearance (data URLs, keyed by
+  // clientId), captured when the organizer opens so its thumbnails show the
+  // real document — edits included — rather than the pristine original.
+  const [pageThumbnails, setPageThumbnails] = useState<Record<string, string>>({})
+  // Viewport y the right rail pins its top edge to — measured from the
+  // sticky header rather than hardcoded, so a header that grows taller (a
+  // long template name wrapping on a narrow screen) pushes the rail down
+  // with it instead of letting it slide underneath.
+  const [railTop, setRailTop] = useState<number | null>(null)
+  // Font ids from this document that the browser successfully registered
+  // (see pdfFonts.ts). A hotspot whose fontId is in here gets measured and
+  // previewed in the page's REAL typeface — which is the same one the export
+  // draws with, so what's on screen is what lands in the file.
+  const [availableFontIds, setAvailableFontIds] = useState<Set<string>>(new Set())
+  // Auto-fit: shrink the type (down to a floor) so a replacement stays inside
+  // its box, the way a real layout tool behaves. On by default — the common
+  // case is wanting the text to work, not wanting it to spill.
+  const [autoFit, setAutoFit] = useState(true)
   const [containerWidth, setContainerWidth] = useState<number | null>(null)
   // Mirrors containerWidth for reading inside renderPage without putting it
   // in that useCallback's deps (which would re-create it, and cascade into
@@ -343,25 +343,22 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
   // of another page's content.
   const canvasRefs = useRef<Record<string, HTMLCanvasElement | null>>({})
   const fileInputRef = useRef<HTMLInputElement>(null)
+  // The text-edit modal's textarea — focused manually via DialogContent's
+  // onOpenAutoFocus (see below) instead of a plain `autoFocus` prop, since
+  // Radix's own focus-trap setup would otherwise sometimes win the race and
+  // land focus on the dialog's Cancel button instead.
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
   const pendingImageHotspotId = useRef<string | null>(null)
   const sessionIdRef = useRef<string | null>(null)
   const sessionStartedRef = useRef(false)
   const pagesContainerRef = useRef<HTMLDivElement>(null)
+  const headerRef = useRef<HTMLElement>(null)
   // The parsed original PDF, downloaded and parsed exactly once (initial
   // load). Every ORIGINAL page renders from this shared document; edits,
   // and duplicated pages, are drawn straight onto each page's own canvas
   // (see drawTextEditOnCanvas/drawImageEditOnCanvas/duplicatePage) and never
   // touch this again.
   const pdfDocRef = useRef<pdfjsLib.PDFDocumentProxy | null>(null)
-  // Guards against committing the same text edit twice: pressing Enter (or
-  // Escape) unmounts the still-focused textarea, and a focused element being
-  // removed from the DOM fires a native blur on its way out — which would
-  // otherwise re-invoke the onBlur handler a second time, against a stale
-  // snapshot of state from before the first commit. Reset per edit in
-  // beginEditText; the ref itself (unlike the state it guards) is the same
-  // mutable object across both the fresh and the stale closure, which is
-  // exactly what makes it work as a guard here.
-  const commitInFlightRef = useRef(false)
   // Every clientId that has already had its canvas painted at least once
   // (either from the original PDF via pdf.js, or as a duplicate's pixel
   // copy) — the paint-pages effect only ever touches a clientId once,
@@ -443,13 +440,15 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
   /**
    * Draw a text edit directly onto the page's canvas — no network call.
    * Mirrors the server's own approach (cover the old line, draw the new one
-   * on top) so it looks right immediately. The server redoes this exactly
-   * once, with the PDF's real embedded fonts, when Download is clicked —
-   * this preview uses the browser's own font rendering instead, which can
-   * differ very slightly from the final file (spacing/kerning), but keeps
-   * every edit instant instead of round-tripping to the server for each one.
+   * on top) so it looks right immediately.
+   *
+   * Takes the already-computed FitResult rather than re-deriving the layout:
+   * the exact same lines/size are what get sent to the server and drawn into
+   * the exported PDF, so the page you're looking at, the modal preview and
+   * the downloaded file are all guaranteed to agree. Re-wrapping here would
+   * reintroduce the possibility of them drifting apart.
    */
-  const drawTextEditOnCanvas = useCallback((hotspot: PdfHotspot, newText: string, backgroundColor: string) => {
+  const drawTextEditOnCanvas = useCallback((hotspot: PdfHotspot, fit: FitResult, backgroundColor: string) => {
     if (hotspot.type !== "text") return
     const canvas = canvasRefs.current[ownerClientId(hotspot.id)]
     const pageInfo = session?.pages.find((p) => p.page === hotspot.page)
@@ -464,12 +463,9 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
     ctx.fillStyle = backgroundColor
     ctx.fillRect(x0 * pxPerPoint - pad, y0 * pxPerPoint - pad, (x1 - x0) * pxPerPoint + pad * 2, (y1 - y0) * pxPerPoint + pad * 2)
 
-    const trimmed = newText.trim()
-    if (!trimmed) return
+    if (fit.lines.length === 0) return
 
-    const fontSizePx = hotspot.size * pxPerPoint
-    const isBold = isBoldFont(hotspot.font)
-    ctx.font = `${isBold ? "bold " : ""}${fontSizePx}px system-ui, sans-serif`
+    ctx.font = hotspotCanvasFont(hotspot, session?.session_id ?? null, availableFontIds, fit.fontSize * pxPerPoint)
     ctx.fillStyle = colorIntToCss(hotspot.color)
     ctx.direction = hotspot.rtl ? "rtl" : "ltr"
     ctx.textAlign = hotspot.rtl ? "right" : "left"
@@ -482,14 +478,11 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
     // bottom of the box. A paragraph that wraps into more lines than it
     // originally had will simply overflow past y1, same as the export.
     const originY = hotspot.originY
-    const boxWidthPx = (x1 - x0) * pxPerPoint
-    const lines = wrapTextToWidth(ctx, trimmed, boxWidthPx)
-    const lineHeightPx = hotspot.lineHeight * pxPerPoint
     const x = (hotspot.rtl ? x1 : x0) * pxPerPoint
-    lines.forEach((line, i) => {
-      ctx.fillText(line, x, originY * pxPerPoint + i * lineHeightPx)
+    fit.lines.forEach((line, i) => {
+      ctx.fillText(line, x, (originY + i * fit.lineHeight) * pxPerPoint)
     })
-  }, [session])
+  }, [session, availableFontIds])
 
   /** Draw a replacement image directly onto the page's canvas — no network call. */
   const drawImageEditOnCanvas = useCallback(async (hotspot: PdfHotspot, file: File) => {
@@ -570,6 +563,7 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
           originalPage: p.page,
           width: p.width,
           height: p.height,
+          rotation: 0,
         }))
         const pageByOriginal = new Map(pages.map((p) => [p.originalPage, p]))
 
@@ -582,6 +576,17 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
         }
         setHotspots(namespacedHotspots)
         setEditorPages(pages)
+
+        // The document's own typefaces. Deliberately non-fatal and not
+        // awaited into the failure path: if this can't be fetched or a face
+        // won't parse, the editor still works exactly as before — it just
+        // measures/previews in a generic face instead of the real one.
+        try {
+          const fonts = await fetchPdfMasterSessionFonts(result.session_id)
+          setAvailableFontIds(await loadPdfSessionFonts(result.session_id, fonts))
+        } catch (err) {
+          console.warn("Could not load the document's own fonts — preview will use a fallback face", err)
+        }
 
         // Phase 3: a real binary transfer, so this is genuine bytes-received-
         // vs-total progress, mapped onto the remaining slice of the bar. If
@@ -636,7 +641,13 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
     void load()
 
     return () => {
-      if (sessionIdRef.current) void closePdfMasterSession(sessionIdRef.current)
+      // Drop this document's registered faces too — otherwise opening
+      // several templates in one page-load keeps every previous one's fonts
+      // resident for the lifetime of the tab.
+      if (sessionIdRef.current) {
+        unloadPdfSessionFonts(sessionIdRef.current)
+        void closePdfMasterSession(sessionIdRef.current)
+      }
       if (pdfDocRef.current) {
         void pdfDocRef.current.destroy()
         pdfDocRef.current = null
@@ -716,14 +727,68 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
     return () => observer.disconnect()
   }, [])
 
-  // ── Page management (duplicate / remove) ────────────────────────────────────
+  // ── Right-rail anchoring ────────────────────────────────────────────────────
+  //
+  // The rail is position:fixed (it must stay put while the pages scroll), so
+  // it can't inherit the header's position from the layout — it needs a real
+  // pixel value. Measured rather than hardcoded so a taller header (long
+  // template name wrapping on a narrow screen) moves the rail down with it.
+  // The header is sticky at the app chrome's own offset and never actually
+  // moves, so its bottom is stable and doesn't need a scroll listener.
+  useEffect(() => {
+    const el = headerRef.current
+    if (!el || typeof ResizeObserver === "undefined") return
+    // + the same my-3 (12px) each page card uses, so the rail's top edge
+    // lines up exactly with the top of the page below it rather than sitting
+    // at some unrelated offset.
+    const measure = () => setRailTop(el.getBoundingClientRect().bottom + 12)
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [])
 
-  async function duplicatePage(sourcePage: EditorPage) {
-    const sourceCanvas = canvasRefs.current[sourcePage.clientId]
-    if (!sourceCanvas) return
+  // ── Page management (via the organizer dialog) ──────────────────────────────
 
-    // Snapshot the source's CURRENT pixels now (includes any edits already
-    // made) — independent of whatever happens to the source canvas later.
+  /** Open the organizer for one job, snapshotting every page's CURRENT
+   * appearance first so the thumbnails show the real document — text edits,
+   * replaced images and all — rather than the pristine original. */
+  function openOrganizer(mode: PdfOrganizerMode) {
+    if (editingHotspotId) cancelEditText()
+    const shots: Record<string, string> = {}
+    for (const page of editorPages) {
+      const canvas = canvasRefs.current[page.clientId]
+      if (!canvas || canvas.width === 0) continue
+      try {
+        // Drawn down to a small offscreen canvas first: toDataURL on a
+        // full-resolution page canvas produces a multi-megabyte string per
+        // page, which for a 15-page catalog is enough to noticeably stall
+        // the tab just to open a dialog.
+        const targetWidth = 220
+        const shrunk = document.createElement("canvas")
+        shrunk.width = targetWidth
+        shrunk.height = Math.max(1, Math.round((canvas.height / canvas.width) * targetWidth))
+        const ctx = shrunk.getContext("2d")
+        if (!ctx) continue
+        ctx.drawImage(canvas, 0, 0, shrunk.width, shrunk.height)
+        shots[page.clientId] = shrunk.toDataURL("image/jpeg", 0.7)
+      } catch {
+        // Tainted canvas or similar — that page just shows its number instead.
+      }
+    }
+    setPageThumbnails(shots)
+    setOrganizerMode(mode)
+  }
+
+  /** Clone everything a page owns — its pixels, hotspots, pending edits — under
+   * a fresh clientId, WITHOUT placing it in the document. Ordering is the
+   * organizer's job; this only materialises the resources a new copy needs. */
+  async function clonePageResources(sourceClientId: string): Promise<string | null> {
+    const sourceCanvas = canvasRefs.current[sourceClientId]
+    if (!sourceCanvas) return null
+
+    // Snapshot the source's CURRENT pixels (includes any edits already made)
+    // — independent of whatever happens to the source canvas later.
     const bitmap = await createImageBitmap(sourceCanvas)
     const newClientId = crypto.randomUUID()
     renderedClientIdsRef.current.add(newClientId) // never rendered via pdf.js — the bitmap effect handles it
@@ -734,7 +799,7 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
     const clonedRemovedIds: string[] = []
     const clonedVisualHeights: Record<string, number> = {}
     for (const h of Object.values(hotspots)) {
-      if (ownerClientId(h.id) !== sourcePage.clientId) continue
+      if (ownerClientId(h.id) !== sourceClientId) continue
       const newId = `${newClientId}${ID_NAMESPACE_SEP}${h.originalId}`
       clonedHotspots[newId] = { ...h, id: newId }
       const existingEdit = pendingEditsRef.current[h.id]
@@ -753,65 +818,88 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
     if (Object.keys(clonedVisualHeights).length > 0) {
       setHotspotVisualHeightPts((prev) => ({ ...prev, ...clonedVisualHeights }))
     }
-
-    const newPage: EditorPage = {
-      clientId: newClientId,
-      originalPage: sourcePage.originalPage,
-      width: sourcePage.width,
-      height: sourcePage.height,
-    }
-    setEditorPages((prev) => {
-      const idx = prev.findIndex((p) => p.clientId === sourcePage.clientId)
-      const next = [...prev]
-      next.splice(idx + 1, 0, newPage)
-      return next
-    })
     setPageStates((prev) => {
-      const src = prev.find((p) => p.page === sourcePage.clientId)
+      const src = prev.find((p) => p.page === sourceClientId)
       if (!src) return prev
       return [...prev, { page: newClientId, cssWidth: src.cssWidth, cssHeight: src.cssHeight }]
     })
-    toast.success(t("pdfTemplates.pageDuplicated"))
+    return newClientId
   }
 
-  function removePage(pageToRemove: EditorPage) {
-    if (editorPages.length <= 1) {
-      toast.error(t("pdfTemplates.cannotRemoveLastPage"))
-      return
-    }
-    setEditorPages((prev) => prev.filter((p) => p.clientId !== pageToRemove.clientId))
+  /** Drop everything belonging to pages that no longer exist. Without this a
+   * deleted page's hotspots and pending edits would linger and still be sent
+   * at Download time, re-applying edits to a page that isn't there. */
+  function releasePages(ids: Set<string>) {
+    if (ids.size === 0) return
+    const owned = (id: string) => ids.has(ownerClientId(id))
+
     setHotspots((prev) => {
       const next = { ...prev }
       for (const id of Object.keys(next)) {
-        if (ownerClientId(id) === pageToRemove.clientId) delete next[id]
+        if (owned(id)) delete next[id]
       }
       return next
     })
     setRemovedHotspotIds((prev) => {
       const next = new Set(prev)
       for (const id of next) {
-        if (ownerClientId(id) === pageToRemove.clientId) next.delete(id)
+        if (owned(id)) next.delete(id)
       }
       return next
     })
     setHotspotVisualHeightPts((prev) => {
       const next = { ...prev }
       for (const id of Object.keys(next)) {
-        if (ownerClientId(id) === pageToRemove.clientId) delete next[id]
+        if (owned(id)) delete next[id]
       }
       return next
     })
     for (const id of Object.keys(pendingEditsRef.current)) {
-      if (ownerClientId(id) === pageToRemove.clientId) delete pendingEditsRef.current[id]
+      if (owned(id)) delete pendingEditsRef.current[id]
     }
-    delete canvasRefs.current[pageToRemove.clientId]
-    renderedClientIdsRef.current.delete(pageToRemove.clientId)
-    delete pendingPageBitmapRef.current[pageToRemove.clientId]
-    setPageStates((prev) => prev.filter((p) => p.page !== pageToRemove.clientId))
-    if (editingHotspotId && ownerClientId(editingHotspotId) === pageToRemove.clientId) {
-      setEditingHotspotId(null)
+    for (const clientId of ids) {
+      delete canvasRefs.current[clientId]
+      renderedClientIdsRef.current.delete(clientId)
+      delete pendingPageBitmapRef.current[clientId]
     }
-    toast.success(t("pdfTemplates.pageRemoved"))
+    setPageStates((prev) => prev.filter((p) => !ids.has(p.page)))
+    if (editingHotspotId && owned(editingHotspotId)) setEditingHotspotId(null)
+  }
+
+  /** Commit the organizer's result: the dialog decided the final order,
+   * which pages were dropped, which are new copies and how each is rotated —
+   * this turns that plan into real editor state. */
+  async function applyOrganizer(result: OrganizerPage[]) {
+    setOrganizerMode(null)
+
+    const byClientId = new Map(editorPages.map((p) => [p.clientId, p]))
+    const kept = new Set(result.map((r) => r.clientId).filter((id): id is string => id !== null))
+    const removed = new Set(editorPages.map((p) => p.clientId).filter((id) => !kept.has(id)))
+
+    // Copies are materialised BEFORE the new order is committed, since each
+    // needs a snapshot of its source's canvas — which must still be mounted.
+    const nextPages: EditorPage[] = []
+    for (const entry of result) {
+      const source = byClientId.get(entry.sourceClientId)
+      if (!source) continue
+      if (entry.clientId) {
+        nextPages.push({ ...source, rotation: entry.rotation })
+        continue
+      }
+      const newClientId = await clonePageResources(entry.sourceClientId)
+      if (!newClientId) continue
+      nextPages.push({
+        clientId: newClientId,
+        originalPage: source.originalPage,
+        width: source.width,
+        height: source.height,
+        rotation: entry.rotation,
+      })
+    }
+
+    if (nextPages.length === 0) return
+    setEditorPages(nextPages)
+    releasePages(removed)
   }
 
   // ── Text editing ─────────────────────────────────────────────────────────────
@@ -821,11 +909,40 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
     const canvas = canvasRefs.current[ownerClientId(hotspot.id)]
     const pageInfo = session?.pages.find((p) => p.page === hotspot.page)
     const bg = canvas && pageInfo ? sampleBackgroundColor(canvas, hotspot.bbox, pageInfo.width) : "#ffffff"
-    commitInFlightRef.current = false // re-arm the guard for this new edit
     setEditingHotspotId(hotspot.id)
     setEditingValue(hotspot.text)
     setEditingBackground(bg)
   }
+
+  /** Close the edit modal WITHOUT saving — Cancel button, Escape, or a click
+   * outside the dialog (all routed through the Dialog's onOpenChange). */
+  function cancelEditText() {
+    setEditingHotspotId(null)
+  }
+
+  /** Lay out `text` inside `hotspot` using the document's own typeface —
+   * the single place layout is decided, so the page canvas, the modal
+   * preview and the exported PDF can never disagree about it. */
+  const fitForHotspot = useCallback((hotspot: PdfTextHotspot, text: string): FitResult => {
+    return fitText(
+      text,
+      {
+        fontId: hotspot.fontId,
+        bold: hotspot.bold,
+        italic: hotspot.italic,
+        size: hotspot.size,
+        boxWidthPts: hotspot.bbox[2] - hotspot.bbox[0],
+        boxHeightPts: hotspot.bbox[3] - hotspot.bbox[1],
+        lineHeightPts: effectiveLineHeight(hotspot),
+      },
+      // Session STATE, not sessionIdRef: this runs during render (to lay out
+      // whatever is currently typed), and a ref read there can go stale
+      // without re-rendering.
+      session?.session_id ?? null,
+      availableFontIds,
+      autoFit,
+    )
+  }, [session, availableFontIds, autoFit])
 
   /** Marks whether a hotspot is currently "empty" (removed text/image) —
    * drives hiding its overlay border/tint/buttons so it reads as genuinely
@@ -845,10 +962,9 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
    * the original hotspot's bbox. Purely cosmetic: the cover/redaction area
    * used to hide the OLD content always stays the full original bbox
    * regardless of this (see hotspotVisualHeightPts's declaration). */
-  function updateHotspotVisualHeight(hotspot: PdfHotspot, text: string) {
+  function updateHotspotVisualHeight(hotspot: PdfHotspot, fit: FitResult) {
     if (hotspot.type !== "text") return
-    const trimmed = text.trim()
-    if (!trimmed) {
+    if (fit.lines.length === 0) {
       setHotspotVisualHeightPts((prev) => {
         if (!(hotspot.id in prev)) return prev
         const next = { ...prev }
@@ -857,37 +973,42 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
       })
       return
     }
-    const boxWidthPts = hotspot.bbox[2] - hotspot.bbox[0]
-    const lineCount = measureWrappedLineCount(trimmed, hotspot.size, isBoldFont(hotspot.font), boxWidthPts)
-    const neededHeightPts = Math.max(lineCount, 1) * hotspot.lineHeight
-    setHotspotVisualHeightPts((prev) => ({ ...prev, [hotspot.id]: neededHeightPts }))
+    setHotspotVisualHeightPts((prev) => ({ ...prev, [hotspot.id]: fit.heightPts }))
   }
 
+  /** Save — the modal's Save button (or Ctrl/Cmd+Enter) is now the ONLY path
+   * that reaches this function; there's no implicit blur-commits-your-edit
+   * behavior anymore, so no double-commit guard is needed either. */
   function commitEditText() {
-    // See commitInFlightRef's declaration: Enter/Escape unmount this
-    // still-focused textarea, which fires a second, stale onBlur — this
-    // makes that second call a no-op instead of re-processing old state.
-    if (commitInFlightRef.current) return
-    commitInFlightRef.current = true
-
     const hotspot = editingHotspotId ? hotspots[editingHotspotId] : null
-    setEditingHotspotId(null)
-    if (!hotspot || hotspot.type !== "text" || !session) return
+    if (!hotspot || hotspot.type !== "text" || !session) {
+      setEditingHotspotId(null)
+      return
+    }
 
     const newText = editingValue
+    setEditingHotspotId(null)
     if (newText === hotspot.text) return
 
+    // The layout is computed ONCE here and reused for everything: drawn on
+    // the page canvas, stored for the box's visual height, and sent to the
+    // server as the exact lines/size to draw. That's what makes the export
+    // reproduce what was previewed instead of being re-wrapped independently.
+    const fit = fitForHotspot(hotspot, newText)
+
     // No server round-trip — just draw it and remember it for Download.
-    drawTextEditOnCanvas(hotspot, newText, editingBackground)
+    drawTextEditOnCanvas(hotspot, fit, editingBackground)
     pendingEditsRef.current[hotspot.id] = {
       hotspotId: hotspot.id,
       originalHotspotId: hotspot.originalId,
       type: "text",
       value: newText,
+      lines: fit.lines,
+      fontSize: fit.fontSize,
     }
     setHotspots((prev) => ({ ...prev, [hotspot.id]: { ...hotspot, text: newText } }))
     markHotspotRemoved(hotspot.id, newText.trim() === "")
-    updateHotspotVisualHeight(hotspot, newText)
+    updateHotspotVisualHeight(hotspot, fit)
   }
 
   /** Clear a text hotspot straight from its "✕" button — same result as
@@ -898,7 +1019,8 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
     const pageInfo = session?.pages.find((p) => p.page === hotspot.page)
     const bg = canvas && pageInfo ? sampleBackgroundColor(canvas, hotspot.bbox, pageInfo.width) : "#ffffff"
 
-    drawTextEditOnCanvas(hotspot, "", bg)
+    const fit = fitForHotspot(hotspot, "")
+    drawTextEditOnCanvas(hotspot, fit, bg)
     pendingEditsRef.current[hotspot.id] = {
       hotspotId: hotspot.id,
       originalHotspotId: hotspot.originalId,
@@ -907,7 +1029,7 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
     }
     setHotspots((prev) => ({ ...prev, [hotspot.id]: { ...hotspot, text: "" } }))
     markHotspotRemoved(hotspot.id, true)
-    updateHotspotVisualHeight(hotspot, "")
+    updateHotspotVisualHeight(hotspot, fit)
     toast.success(t("pdfTemplates.masterTextRemoved"))
   }
 
@@ -972,6 +1094,10 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
       // anymore, so they're naturally excluded here too.
       const pagePlan: PdfMasterPagePlanEntry[] = editorPages.map((p) => ({
         originalPage: p.originalPage,
+        // Applied by the server AFTER this page's edits, since rotation is a
+        // page attribute rather than a redraw — so every edit keeps the
+        // coordinates it was made in and the turn is the last thing to happen.
+        rotation: p.rotation,
         edits: Object.values(pendingEditsRef.current).filter((e) => ownerClientId(e.hotspotId) === p.clientId),
       }))
       const blob = await applyPdfMasterEditsAndExport(session.session_id, pagePlan)
@@ -995,12 +1121,44 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
   // ── Render ───────────────────────────────────────────────────────────────────
 
   const hotspotList = Object.values(hotspots)
+  // Narrowed to the text variant specifically — beginEditText only ever sets
+  // editingHotspotId for a text hotspot (it bails out early otherwise), so
+  // this is always non-null-or-text at runtime; the narrowing here is just
+  // to give TypeScript that same guarantee for the .rtl/.text access below.
+  const editingHotspotRaw = editingHotspotId ? hotspots[editingHotspotId] : null
+  const editingHotspot = editingHotspotRaw?.type === "text" ? editingHotspotRaw : null
+  // Live layout of whatever is currently typed, in the document's own face.
+  // This replaced a character cap (new.length <= old.length), which was the
+  // wrong unit entirely: a box cares about WIDTH, and "WWWWW" is roughly
+  // three times the width of "iiiii" at the same character count — so the
+  // cap simultaneously blocked edits that would have fit and allowed ones
+  // that couldn't. Measuring the real thing is both more permissive and more
+  // accurate.
+  const editingFit = editingHotspot ? fitForHotspot(editingHotspot, editingValue) : null
+  // The face genuinely used for this box. When the document's own font isn't
+  // available the preview is an approximation, and saying so is better than
+  // quietly showing something that won't match the export.
+  const editingUsesRealFont = Boolean(
+    editingHotspot?.fontId && availableFontIds.has(editingHotspot.fontId),
+  )
+
+  // The current document, as the organizer needs to see it. Every entry
+  // starts out as a real page (clientId set); the dialog may add entries
+  // with a null clientId, which applyOrganizer then materialises into real
+  // copies.
+  const organizerPages: OrganizerPage[] = editorPages.map((p) => ({
+    key: p.clientId,
+    clientId: p.clientId,
+    sourceClientId: p.clientId,
+    rotation: p.rotation,
+  }))
+
 
   return (
     <div className="-m-6 flex flex-col" style={{ minHeight: "calc(100vh - 57px)" }}>
       <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={(e) => void onImageFileSelected(e)} />
 
-      <header className="sticky z-20 flex items-center gap-3 border-b bg-background/90 px-5 py-3 backdrop-blur-md" style={{ top: 57 }}>
+      <header ref={headerRef} className="sticky z-20 flex items-center gap-3 border-b bg-background/90 px-5 py-3 backdrop-blur-md" style={{ top: 57 }}>
         <button
           type="button"
           onClick={() => void navigate({ to: ROUTES.CREATE_PDF })}
@@ -1085,38 +1243,30 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
             // ever shrinks further, if the container's gotten narrower since.
             const displayScale = containerWidth ? Math.min(1, (containerWidth - PAGE_SIDE_GUTTER_PX) / naturalWidth) : 1
 
+            // A quarter-turned page occupies a box with its width and height
+            // swapped, so the slot it sits in has to swap too — otherwise a
+            // rotated landscape page overlaps its neighbours.
+            const isQuarterTurned = ep.rotation === 90 || ep.rotation === 270
+            const slotWidth = (isQuarterTurned ? naturalHeight : naturalWidth) * displayScale
+            const slotHeight = (isQuarterTurned ? naturalWidth : naturalHeight) * displayScale
+
             return (
               <div
                 key={ep.clientId}
-                className="relative mx-auto my-3"
-                style={{ width: naturalWidth * displayScale, height: naturalHeight * displayScale }}
+                // Flex-centred so the rotate/scale transform below can pivot
+                // about the page's own centre. Rotating about a corner (the
+                // top-left origin this used before rotation existed) would
+                // swing the page clean out of its slot.
+                className="mx-auto my-3 flex items-center justify-center"
+                style={{ width: slotWidth, height: slotHeight }}
               >
-                <div className="absolute -top-3 right-0 z-10 flex gap-1">
-                  <button
-                    type="button"
-                    onClick={() => void duplicatePage(ep)}
-                    title={t("pdfTemplates.duplicatePage")}
-                    className="flex size-7 items-center justify-center rounded-full border bg-background text-muted-foreground shadow-sm transition-colors hover:text-foreground"
-                  >
-                    <CopyIcon className="size-3.5" />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => removePage(ep)}
-                    title={t("pdfTemplates.removePage")}
-                    className="flex size-7 items-center justify-center rounded-full border bg-background text-muted-foreground shadow-sm transition-colors hover:text-destructive"
-                  >
-                    <Trash2Icon className="size-3.5" />
-                  </button>
-                </div>
-
                 <div
-                  className="relative overflow-hidden rounded-sm bg-white"
+                  className="relative shrink-0 overflow-hidden rounded-sm bg-white"
                   style={{
                     width: naturalWidth,
                     height: naturalHeight,
-                    transform: `scale(${displayScale})`,
-                    transformOrigin: "top left",
+                    transform: `rotate(${ep.rotation}deg) scale(${displayScale})`,
+                    transformOrigin: "center",
                     boxShadow: "0 1px 2px rgba(0,0,0,.05), 0 4px 12px rgba(0,0,0,.08), 0 20px 40px rgba(0,0,0,.1)",
                   }}
                 >
@@ -1130,6 +1280,11 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
                     const top = h.bbox[1] * scale
                     const width = (h.bbox[2] - h.bbox[0]) * scale
                     const isText = h.type === "text"
+                    // Text tool off: text hotspots don't render at all (not
+                    // just de-prioritized), so any click in this area can
+                    // only ever reach an image hotspot underneath, with no
+                    // invisible text box stealing it.
+                    if (isText && contentMode !== "text") return null
                     const isBusy = busyHotspotId === h.id
                     const isEditing = editingHotspotId === h.id
                     // Once cleared via "✕", a slot goes permanently inert
@@ -1153,23 +1308,24 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
                     // OLD content only happens once, at commit time (see
                     // drawTextEditOnCanvas, called from commitEditText) —
                     // the canvas still shows the untouched original
-                    // underneath for as long as you're still typing. If
-                    // the box itself shrank live to match what you'd typed
+                    // underneath for as long as the edit modal is open. If
+                    // the box itself shrank live to match what's been typed
                     // so far, that uncovered original would show through
-                    // below it. So while editing, the box stays at its
-                    // full original size (with editingBackground filling
-                    // it) exactly as it always did — only the border
-                    // color reacts live, as an early "this won't fit"
+                    // below it. So while editing, the box stays at its full
+                    // original size exactly as it always did — only the
+                    // border reacts live (see isEditing below: solid
+                    // instead of dashed), as an early "this won't fit"
                     // signal, without the box changing size until commit.
                     const originalHeightPts = h.bbox[3] - h.bbox[1]
                     let effectiveHeightPts = originalHeightPts
                     let isOverflowing = false
                     if (isText) {
-                      const boxWidthPts = h.bbox[2] - h.bbox[0]
                       if (isEditing) {
-                        const lineCount = measureWrappedLineCount(editingValue, h.size, isBoldFont(h.font), boxWidthPts)
-                        const neededHeightPts = Math.max(lineCount, 1) * h.lineHeight
-                        isOverflowing = neededHeightPts > originalHeightPts + 0.5
+                        // Reuses the live fit already computed for the modal
+                        // rather than measuring again — one verdict, so the
+                        // box outline and the modal can never disagree about
+                        // whether the current text fits.
+                        isOverflowing = editingFit?.overflows ?? false
                       } else {
                         const stored = hotspotVisualHeightPts[h.id]
                         if (stored != null) effectiveHeightPts = stored
@@ -1213,11 +1369,25 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
                           top,
                           width,
                           height,
+                          // Text always paints (and is clicked) above an
+                          // overlapping image — with no z-index at all here
+                          // before, DOM order (images appended after text
+                          // per page, see pdf_editor.py's _extract_hotspots)
+                          // silently made every overlapping image win the
+                          // click, which is exactly what made text sitting
+                          // on top of a background image unreachable.
+                          zIndex: isText ? 2 : 1,
                           cursor: isRemoved ? "default" : isBusy ? "wait" : "pointer",
+                          // Editing this hotspot no longer means "an inline
+                          // textarea lives inside this box" (that's the edit
+                          // modal's job now) — a solid, thicker border is the
+                          // only thing marking it as "the one currently open
+                          // in the modal" while it stays visible behind the
+                          // dialog overlay.
                           border: isRemoved
                             ? "none"
-                            : `1.5px dashed ${isText ? (isOverflowing ? TEXT_OVERFLOW_OUTLINE : TEXT_OUTLINE) : IMAGE_OUTLINE}`,
-                          background: isRemoved || isEditing
+                            : `${isEditing ? "2.5px solid" : "1.5px dashed"} ${isText ? (isOverflowing ? TEXT_OVERFLOW_OUTLINE : TEXT_OUTLINE) : IMAGE_OUTLINE}`,
+                          background: isRemoved
                             ? "transparent"
                             : isText ? (isOverflowing ? TEXT_OVERFLOW_OUTLINE_BG : TEXT_OUTLINE_BG) : IMAGE_OUTLINE_BG,
                           boxSizing: "border-box",
@@ -1256,70 +1426,6 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
                             <XIcon className="size-3" />
                           </button>
                         )}
-                        {isText && isEditing && (
-                          <textarea
-                            autoFocus
-                            dir={h.rtl ? "rtl" : "ltr"}
-                            value={editingValue}
-                            onChange={(e) => setEditingValue(e.target.value)}
-                            onBlur={() => void commitEditText()}
-                            // Without stopping propagation here, every
-                            // click/keystroke inside this textarea also
-                            // bubbled up to the box's own onClick/onKeyDown
-                            // (see above) — which re-opened this same
-                            // hotspot from scratch on ANY click, and on
-                            // Space/Enter specifically (its onKeyDown
-                            // matched those keys too) would preventDefault
-                            // the keystroke AND reset editingValue back to
-                            // the original text, silently discarding
-                            // whatever had just been typed. That's exactly
-                            // what made editing feel broken: typing a
-                            // space, or clicking to reposition the cursor,
-                            // could wipe out the edit in progress.
-                            onClick={(e) => e.stopPropagation()}
-                            onKeyDown={(e) => {
-                              e.stopPropagation()
-                              // Chatbot convention: Enter commits (so you
-                              // immediately see the result in place, rather
-                              // than the cursor just moving down inside a
-                              // still-open box); Shift+Enter or Ctrl/Cmd+Enter
-                              // inserts a newline instead. Only plain Enter
-                              // needs handling here — the other combinations
-                              // fall through to the textarea's own default
-                              // newline-on-Enter behaviour.
-                              if (e.key === "Enter" && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
-                                e.preventDefault()
-                                void commitEditText()
-                              }
-                              if (e.key === "Escape") {
-                                e.preventDefault()
-                                // Also unmounts this focused textarea, which
-                                // fires the same stale onBlur commitEditText
-                                // guards against — without this, Escape
-                                // would silently commit instead of cancel.
-                                commitInFlightRef.current = true
-                                setEditingHotspotId(null)
-                              }
-                            }}
-                            style={{
-                              width: "100%",
-                              height: "100%",
-                              resize: "none",
-                              border: "none",
-                              outline: "none",
-                              // Sampled from the real page pixels around this
-                              // hotspot (see beginEditText) instead of a fixed
-                              // white/black box, so editing feels like it's
-                              // happening on the actual design, not a form
-                              // field pasted on top of it.
-                              background: editingBackground,
-                              color: colorIntToCss(h.color),
-                              fontSize: Math.max(10, h.size * scale * 0.92),
-                              textAlign: h.rtl ? "right" : "left",
-                              padding: 2,
-                            }}
-                          />
-                        )}
                       </div>
                     )
                   })}
@@ -1330,6 +1436,159 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
 
         <div className="h-12" />
       </div>
+
+      {!isLoading && !loadError && (
+        <PdfEditorRail
+          top={railTop}
+          contentMode={contentMode}
+          onToggleContentMode={() => {
+            if (editingHotspotId) cancelEditText()
+            setContentMode((prev) => (prev === "text" ? "images" : "text"))
+          }}
+          onOpenOrganizer={openOrganizer}
+        />
+      )}
+
+      {/* Page organizer — one dialog, but opened for exactly one job at a
+          time (see PdfOrganizerMode). Nothing it does touches the document
+          until Done, so Cancel genuinely undoes the whole session. */}
+      {organizerMode && (
+        <PdfPageOrganizer
+          // Keyed by mode so switching tools remounts it with a clean draft
+          // and empty history — a previous session's changes can never leak
+          // into the next one.
+          key={organizerMode}
+          mode={organizerMode}
+          pages={organizerPages}
+          thumbnails={pageThumbnails}
+          onApply={(result) => void applyOrganizer(result)}
+          onCancel={() => setOrganizerMode(null)}
+        />
+      )}
+
+      {/* Text-edit modal — replaces the old inline textarea nested inside
+          the hotspot overlay box. That approach relied on onBlur to save,
+          which meant clicking ANY other element (another hotspot, a
+          toolbar button, even the scrollbar) silently committed whatever
+          was typed so far — plus a guard ref to stop Enter/Escape's own
+          unmount from double-firing that same onBlur. Saving here only
+          ever happens from the Save button (or Ctrl/Cmd+Enter) below, so
+          there's no implicit-commit path left to misfire, and no guard
+          needed. The hotspot itself stays visible (solid-bordered, see
+          isEditing above) behind the dialog overlay the whole time. */}
+      <Dialog
+        open={editingHotspotId !== null}
+        onOpenChange={(open) => { if (!open) cancelEditText() }}
+      >
+        <DialogContent
+          className="max-h-[90vh] overflow-y-auto sm:max-w-2xl"
+          onOpenAutoFocus={(e) => {
+            // Radix would otherwise focus the dialog's first focusable
+            // element (Cancel) — redirect straight to the textarea so
+            // typing can start immediately.
+            e.preventDefault()
+            textareaRef.current?.focus()
+            textareaRef.current?.select()
+          }}
+        >
+          <DialogHeader>
+            <DialogTitle>{t("pdfTemplates.masterEditTextTitle")}</DialogTitle>
+          </DialogHeader>
+
+          <Textarea
+            ref={textareaRef}
+            dir={editingHotspot?.rtl ? "rtl" : "ltr"}
+            value={editingValue}
+            onChange={(e) => setEditingValue(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+                e.preventDefault()
+                commitEditText()
+              }
+              // Plain Enter/Shift+Enter both just insert a newline (the
+              // textarea's own default) — unlike the old inline editor,
+              // there's no "plain Enter saves" special case here, since a
+              // modal's whole point is that saving is an explicit,
+              // unambiguous action.
+            }}
+            className="max-h-40 min-h-24 overflow-y-auto text-base"
+            style={{ textAlign: editingHotspot?.rtl ? "right" : "left" }}
+          />
+
+          {/* Live preview — the replacement drawn in the document's real
+              typeface, at its real size and line spacing, inside its real
+              box. This is what the exported PDF will contain; nothing here
+              is an approximation of it. Seeing the result while typing is
+              what the image-replacement flow already gets right and what a
+              bare textarea + character counter never could. */}
+          {editingHotspot && editingFit && (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-xs font-medium text-muted-foreground">
+                  {t("pdfTemplates.masterEditTextPreview")}
+                </span>
+                <label className="flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground">
+                  <input
+                    type="checkbox"
+                    checked={autoFit}
+                    onChange={(e) => setAutoFit(e.target.checked)}
+                    className="size-3.5 accent-current"
+                  />
+                  {t("pdfTemplates.masterEditTextAutoFit")}
+                </label>
+              </div>
+
+              <PdfTextPreview
+                hotspot={editingHotspot}
+                fit={editingFit}
+                sessionId={session?.session_id ?? null}
+                availableFontIds={availableFontIds}
+                background={editingBackground}
+              />
+
+              {/* Real fit feedback, in the units that actually matter —
+                  lines and size — instead of a character count that
+                  correlates poorly with whether anything fits. */}
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+                <span className="text-muted-foreground">
+                  {t("pdfTemplates.masterEditTextLines", { count: editingFit.lines.length })}
+                </span>
+                {editingFit.shrunk && !editingFit.overflows && (
+                  <span className="text-muted-foreground">
+                    {t("pdfTemplates.masterEditTextShrunk", {
+                      percent: Math.round((editingFit.fontSize / editingHotspot.size) * 100),
+                    })}
+                  </span>
+                )}
+                {editingFit.overflows && (
+                  <span className="font-medium text-destructive">
+                    {t("pdfTemplates.masterEditTextOverflows")}
+                  </span>
+                )}
+                {!editingUsesRealFont && (
+                  <span className="text-amber-600 dark:text-amber-500">
+                    {t("pdfTemplates.masterEditTextFallbackFont")}
+                  </span>
+                )}
+              </div>
+            </div>
+          )}
+
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={cancelEditText}>
+              {t("common.cancel")}
+            </Button>
+            {/* Never disabled on overflow any more: overflowing is now a
+                visible, understood state (you can see exactly how far past
+                the box it runs) rather than an invisible rule blocking the
+                save. Blocking it was the old character cap's job, and that
+                cap was measuring the wrong thing in the first place. */}
+            <Button type="button" onClick={commitEditText}>
+              {t("common.save")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

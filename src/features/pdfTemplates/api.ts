@@ -8,6 +8,7 @@ import type {
   UpdatePdfTemplateInput,
   PdfSessionJobStart,
   PdfSessionJobStatus,
+  PdfSessionFont,
 } from "./types"
 
 // ── Fetch helpers ─────────────────────────────────────────────────────────────
@@ -90,12 +91,34 @@ export async function fetchPdfMasterSessionFile(
   })
 }
 
+/**
+ * The document's own embedded typefaces, so the editor can preview and
+ * measure text in the real face rather than a substitute. Deliberately a
+ * separate call from the session file: it's optional enrichment, and the
+ * editor stays fully usable (just with a generic preview face) if it fails.
+ */
+export async function fetchPdfMasterSessionFonts(
+  sessionId: string,
+): Promise<Record<string, PdfSessionFont>> {
+  const res = await apiFetch<{ fonts?: Record<string, PdfSessionFont> }>(
+    `${API_ENDPOINTS.PDF_MASTER_SESSION}/${sessionId}/fonts`,
+  )
+  return res.fonts ?? {}
+}
+
 // hotspotId is the client-namespaced id (unique per editor-page instance,
 // see PdfHotspotBase) — used here purely to give each edit's uploaded file
 // (if any) a unique form field name. originalHotspotId is the plain id from
 // the one-time analysis, which is what the server actually looks up.
+//
+// `lines`/`fontSize` on a text edit carry the EXACT layout the browser
+// previewed — measured in the document's own embedded face, which the
+// export now draws with too. Sending them means the final PDF reproduces
+// what the user actually saw instead of being re-wrapped by a second,
+// independent algorithm on the server. Both are optional; the server falls
+// back to wrapping itself when they're absent.
 export type PdfMasterPendingEdit =
-  | { hotspotId: string; originalHotspotId: string; type: "text"; value: string }
+  | { hotspotId: string; originalHotspotId: string; type: "text"; value: string; lines?: string[]; fontSize?: number }
   | { hotspotId: string; originalHotspotId: string; type: "image"; file: File }
   | { hotspotId: string; originalHotspotId: string; type: "image"; remove: true }
 
@@ -108,6 +131,10 @@ export type PdfMasterPendingEdit =
 export interface PdfMasterPagePlanEntry {
   originalPage: number
   edits: PdfMasterPendingEdit[]
+  /** Quarter turns to apply to this page in the output: 0 | 90 | 180 | 270.
+   * Applied after this page's edits — rotation is a page attribute in PDF,
+   * not a redraw, so edits keep the coordinates they were made in. */
+  rotation?: number
 }
 
 /**
@@ -127,11 +154,12 @@ export async function applyPdfMasterEditsAndExport(
     JSON.stringify(
       pagePlan.map((page) => ({
         original_page: page.originalPage,
+        rotation: page.rotation ?? 0,
         edits: page.edits.map((e) => ({
           edit_id: e.hotspotId,
           hotspot_id: e.originalHotspotId,
           type: e.type,
-          ...(e.type === "text" ? { value: e.value } : {}),
+          ...(e.type === "text" ? { value: e.value, lines: e.lines, font_size: e.fontSize } : {}),
           ...(e.type === "image" && "remove" in e ? { remove: true } : {}),
         })),
       })),

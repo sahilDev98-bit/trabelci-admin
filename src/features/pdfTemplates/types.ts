@@ -48,6 +48,17 @@ export interface PdfTextHotspot extends PdfHotspotBase {
   /** One paragraph — may contain "\n" between its original wrapped lines. */
   text: string
   font: string
+  /** Id of this paragraph's OWN embedded typeface in the session's font set
+   * (see fetchPdfMasterSessionFonts). Empty when the face isn't embedded or
+   * couldn't be extracted, in which case preview/export fall back to the
+   * bundled Heebo. Matching on this is what lets the browser measure with
+   * the exact same face the export draws with. */
+  fontId: string
+  /** From the span's own flags bitfield, NOT sniffed from the font name —
+   * real catalogs embed subset faces named things like "ABCDEF+Gotham-Medium"
+   * that contain no "bold"/"italic" substring at all. */
+  bold: boolean
+  italic: boolean
   size: number
   color: number
   /** Average baseline-to-baseline gap between this paragraph's original
@@ -68,6 +79,18 @@ export interface PdfImageHotspot extends PdfHotspotBase {
 }
 
 export type PdfHotspot = PdfTextHotspot | PdfImageHotspot
+
+/** One embedded typeface lifted out of the source PDF, so the browser can
+ * register it via FontFace and preview/measure text in the document's real
+ * face instead of a generic substitute. */
+export interface PdfSessionFont {
+  /** "ttf" | "otf" — only browser-loadable formats are sent. */
+  ext: string
+  /** The face's own name, for display ("Heebo Bold"). */
+  name: string
+  /** base64-encoded font file. */
+  data: string
+}
 
 export interface PdfSessionPage {
   page: number
@@ -92,6 +115,11 @@ export interface EditorPage {
   originalPage: number
   width: number
   height: number
+  /** Quarter turns applied in the editor: 0 | 90 | 180 | 270, relative to
+   * however the source page already sat. Rotation is a page ATTRIBUTE in
+   * PDF, not a redraw — so text edits and replaced images keep their exact
+   * coordinates and the turn is applied last, at export. */
+  rotation: number
 }
 
 export interface PdfSession {
