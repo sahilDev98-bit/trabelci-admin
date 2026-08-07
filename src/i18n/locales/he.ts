@@ -697,6 +697,7 @@ const he = {
       CountryOfOrigin: "ארץ ייצור",
       U_Model: "צבע",
       U_Version: "גרסה",
+      SupplierName: "שם ספק",
     },
   },
 

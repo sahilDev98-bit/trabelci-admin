@@ -713,6 +713,7 @@ const en = {
       CountryOfOrigin: "Country of Origin",
       U_Model: "Color",
       U_Version: "Version",
+      SupplierName: "Supplier Name",
     },
   },
 
