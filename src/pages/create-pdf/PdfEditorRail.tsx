@@ -4,7 +4,9 @@ import {
   ChevronDownIcon,
   ChevronUpIcon,
   CopyIcon,
+  ImagePlusIcon,
   RotateCwIcon,
+  TextIcon,
   Trash2Icon,
   TypeIcon,
 } from "lucide-react"
@@ -35,6 +37,10 @@ interface PdfEditorRailProps {
   contentMode: PdfContentMode
   onToggleContentMode: () => void
   onOpenOrganizer: (mode: PdfOrganizerMode) => void
+  /** Add a free-floating item anywhere on the page — as opposed to editing
+   * something the PDF already contained. */
+  onAddText: () => void
+  onAddImage: () => void
 }
 
 // Only used for the very first paint, before the header has been measured
@@ -75,7 +81,14 @@ const BUTTON_DANGER = "bg-transparent text-[rgba(0,0,0,0.55)] hover:bg-[rgba(185
  * Collapsible: the chevron handle stays put at the top while the tools below
  * it fold away, so the rail never moves position when opened/closed.
  */
-export function PdfEditorRail({ top, contentMode, onToggleContentMode, onOpenOrganizer }: PdfEditorRailProps) {
+export function PdfEditorRail({
+  top,
+  contentMode,
+  onToggleContentMode,
+  onOpenOrganizer,
+  onAddText,
+  onAddImage,
+}: PdfEditorRailProps) {
   const { t } = useTranslation()
   const [expanded, setExpanded] = useState(true)
 
@@ -133,6 +146,27 @@ export function PdfEditorRail({ top, contentMode, onToggleContentMode, onOpenOrg
               <TooltipContent side="left">
                 {contentMode === "text" ? t("pdfTemplates.railTextEditingOn") : t("pdfTemplates.railTextEditingOff")}
               </TooltipContent>
+            </Tooltip>
+
+            {/* Adding new content sits with the text switch, above the page
+                tools: both are about what's ON a page, whereas the group
+                below is about the pages themselves. */}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button type="button" onClick={onAddText} className={`${BUTTON_BASE} ${BUTTON_IDLE}`}>
+                  <TextIcon className="size-4.5" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="left">{t("pdfTemplates.railAddText")}</TooltipContent>
+            </Tooltip>
+
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button type="button" onClick={onAddImage} className={`${BUTTON_BASE} ${BUTTON_IDLE}`}>
+                  <ImagePlusIcon className="size-4.5" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="left">{t("pdfTemplates.railAddImage")}</TooltipContent>
             </Tooltip>
 
             <div className="mx-auto h-px w-5" style={{ background: RAIL_DIVIDER }} />

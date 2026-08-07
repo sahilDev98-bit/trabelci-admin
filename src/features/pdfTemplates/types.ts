@@ -92,6 +92,58 @@ export interface PdfSessionFont {
   data: string
 }
 
+/**
+ * Something the user ADDED on top of a page, as opposed to a hotspot (a
+ * region the PDF already contained). Hotspots can only ever be replaced in
+ * place; an overlay can sit anywhere, at any size, at any angle — including
+ * over empty space the original document never used.
+ *
+ * Geometry is stored in PDF POINTS in the page's UNROTATED coordinate space,
+ * the same space hotspot bboxes use. Keeping it unrotated is what lets page
+ * rotation stay a page attribute applied last at export: an overlay placed
+ * on a turned page still lands where it was dropped.
+ */
+export interface PdfOverlayBase {
+  id: string
+  /** The editor page (clientId, not page number) this belongs to — so a
+   * duplicated page carries its own independent copies of the overlays. */
+  pageClientId: string
+  /** Top-left corner and size, PDF points, before the item's own rotation. */
+  x: number
+  y: number
+  width: number
+  height: number
+  /** The item's OWN rotation in degrees (any angle, not just quarter turns),
+   * about its centre. Separate from the page's rotation. */
+  rotation: number
+}
+
+export interface PdfImageOverlay extends PdfOverlayBase {
+  type: "image"
+  /** Object URL for on-screen rendering only. The real file is held
+   * separately (it isn't serialisable state) and sent at export. */
+  previewUrl: string
+}
+
+export type PdfOverlayAlign = "left" | "center" | "right"
+
+export interface PdfTextOverlay extends PdfOverlayBase {
+  type: "text"
+  text: string
+  /** Id of one of the document's own embedded faces, or "" for the bundled
+   * default — so added text can be made to match the catalogue's typeface
+   * instead of looking pasted on. */
+  fontId: string
+  fontSize: number
+  /** "#rrggbb". */
+  color: string
+  bold: boolean
+  italic: boolean
+  align: PdfOverlayAlign
+}
+
+export type PdfOverlay = PdfImageOverlay | PdfTextOverlay
+
 export interface PdfSessionPage {
   page: number
   width: number

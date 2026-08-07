@@ -17,7 +17,15 @@ import { Textarea } from "@/components/ui/textarea"
 import { PdfEditorRail, type PdfContentMode, type PdfOrganizerMode } from "./PdfEditorRail"
 import { PdfPageOrganizer, type OrganizerPage } from "./PdfPageOrganizer"
 import { PdfTextPreview } from "./PdfTextPreview"
-import { hotspotCanvasFont, loadPdfSessionFonts, unloadPdfSessionFonts } from "./pdfFonts"
+import { PdfOverlayItem } from "./PdfOverlayItem"
+import { PdfOverlayToolbar } from "./PdfOverlayToolbar"
+import {
+  FALLBACK_FONT_STACK,
+  hotspotCanvasFont,
+  loadPdfSessionFonts,
+  pdfFontFamily,
+  unloadPdfSessionFonts,
+} from "./pdfFonts"
 import { fitText, type FitResult } from "./pdfTextFit"
 import { ROUTES } from "@/lib/routes"
 import type { DownloadProgress } from "@/lib/apiClient"
@@ -26,11 +34,20 @@ import {
   fetchPdfMasterSessionJobStatus,
   fetchPdfMasterSessionFile,
   fetchPdfMasterSessionFonts,
+  fetchPdfMasterHotspotMask,
   applyPdfMasterEditsAndExport,
   closePdfMasterSession,
 } from "@/features/pdfTemplates/api"
 import type { PdfMasterPagePlanEntry, PdfMasterPendingEdit } from "@/features/pdfTemplates/api"
-import type { EditorPage, PdfHotspot, PdfSession, PdfTemplate, PdfTextHotspot } from "@/features/pdfTemplates/types"
+import type {
+  EditorPage,
+  PdfHotspot,
+  PdfOverlay,
+  PdfSession,
+  PdfSessionFont,
+  PdfTemplate,
+  PdfTextHotspot,
+} from "@/features/pdfTemplates/types"
 
 // Vite statically detects this `new URL(..., import.meta.url)` pattern and
 // bundles the worker as a proper asset — no ambient module typing needed
@@ -154,6 +171,92 @@ function colorIntToCss(color: number): string {
   const g = (color >> 8) & 255
   const b = color & 255
   return `rgb(${r}, ${g}, ${b})`
+}
+
+// Every upload is squeezed under this before being sent. A reverse proxy in
+// front of the API caps request bodies — nginx defaults to 1MB — and it
+// rejects an oversized upload BEFORE proxying it, so the request never
+// reaches the app at all: nothing in the server log, and the browser sees a
+// bare network failure with no status code, which is impossible to act on.
+// Staying comfortably under the smallest common limit means the feature
+// works regardless of how that proxy is configured.
+const UPLOAD_TARGET_BYTES = 900 * 1024
+// Progressively harder attempts. A page slot is at most a few hundred
+// points across, so even the smallest of these carries more detail than the
+// PDF can show — a modern phone photo is 4000px+ on its long edge.
+const UPLOAD_ATTEMPTS: { maxPx: number; quality: number }[] = [
+  { maxPx: 2400, quality: 0.85 },
+  { maxPx: 1800, quality: 0.8 },
+  { maxPx: 1400, quality: 0.7 },
+  { maxPx: 1000, quality: 0.6 },
+  { maxPx: 700, quality: 0.5 },
+]
+// Absolute refusal point, if even the hardest attempt can't get there.
+const MAX_UPLOAD_BYTES = 4 * 1024 * 1024
+
+async function encodeAt(
+  bitmap: ImageBitmap,
+  maxPx: number,
+  quality: number,
+  keepAlpha: boolean,
+): Promise<Blob | null> {
+  const scale = Math.min(1, maxPx / Math.max(bitmap.width, bitmap.height))
+  const canvas = document.createElement("canvas")
+  canvas.width = Math.max(1, Math.round(bitmap.width * scale))
+  canvas.height = Math.max(1, Math.round(bitmap.height * scale))
+  const ctx = canvas.getContext("2d")
+  if (!ctx) return null
+  ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height)
+  return new Promise((resolve) =>
+    canvas.toBlob(resolve, keepAlpha ? "image/png" : "image/jpeg", quality),
+  )
+}
+
+/**
+ * Shrink an image until it will pass through the proxy, trying progressively
+ * smaller/harder encodings and stopping at the first that fits.
+ *
+ * PNG stays PNG: overlay logos and cut-outs rely on transparency, and
+ * re-encoding those as JPEG would fill every transparent pixel with black.
+ * That means a PNG can only be made smaller by shrinking it, never by
+ * lowering quality — so it may not reach the target, and the caller's size
+ * check is what catches that.
+ */
+async function downscaleImageFile(file: File): Promise<File> {
+  if (file.size <= UPLOAD_TARGET_BYTES) return file
+  try {
+    const bitmap = await createImageBitmap(file)
+    const keepAlpha = file.type === "image/png"
+    let best: Blob | null = null
+    try {
+      for (const attempt of UPLOAD_ATTEMPTS) {
+        const blob = await encodeAt(bitmap, attempt.maxPx, attempt.quality, keepAlpha)
+        if (!blob) continue
+        if (!best || blob.size < best.size) best = blob
+        if (blob.size <= UPLOAD_TARGET_BYTES) break
+      }
+    } finally {
+      bitmap.close()
+    }
+    // Never take a re-encode that made things worse — a small PNG can come
+    // back bigger than it went in.
+    if (!best || best.size >= file.size) return file
+    return new File([best], file.name, { type: best.type })
+  } catch {
+    return file // undecodable here; let the server have the original
+  }
+}
+
+/** Decode a base64 PNG into something canvas can draw. Resolves even on a
+ * decode failure (with a blank 1×1) so a malformed mask degrades to "no
+ * shape applied" rather than leaving the replacement undrawn entirely. */
+function loadImageFromBase64Png(base64: string): Promise<HTMLImageElement> {
+  return new Promise((resolve) => {
+    const img = new Image()
+    img.onload = () => resolve(img)
+    img.onerror = () => resolve(new Image(1, 1))
+    img.src = `data:image/png;base64,${base64}`
+  })
 }
 
 /** Which editor page (clientId) a namespaced hotspot id/hotspot belongs to. */
@@ -302,6 +405,17 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
   // clientId), captured when the organizer opens so its thumbnails show the
   // real document — edits included — rather than the pristine original.
   const [pageThumbnails, setPageThumbnails] = useState<Record<string, string>>({})
+  // Items the user ADDED on top of pages (as opposed to hotspots, which are
+  // regions the PDF already contained). Free position, size and angle.
+  const [overlays, setOverlays] = useState<PdfOverlay[]>([])
+  const [selectedOverlayId, setSelectedOverlayId] = useState<string | null>(null)
+  // Which added text item is in typing mode. Separate from selection: a
+  // selected item is being moved/resized, an editing one is being written in,
+  // and the pointer can't serve both at once.
+  const [editingOverlayId, setEditingOverlayId] = useState<string | null>(null)
+  // The document's own faces, kept so added text can be set in the
+  // catalogue's real typeface rather than always a generic one.
+  const [sessionFonts, setSessionFonts] = useState<Record<string, PdfSessionFont>>({})
   // Viewport y the right rail pins its top edge to — measured from the
   // sticky header rather than hardcoded, so a header that grows taller (a
   // long template name wrapping on a narrow screen) pushes the rail down
@@ -349,6 +463,17 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
   // land focus on the dialog's Cancel button instead.
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const pendingImageHotspotId = useRef<string | null>(null)
+  // Files for image overlays, keyed by overlay id. A ref rather than state:
+  // a File isn't meaningfully renderable (the object URL on the overlay is
+  // what's displayed), and this is only read once, at export.
+  const overlayFilesRef = useRef<Record<string, File>>({})
+  // Shape stencil per image hotspot, keyed by its namespaced id. "" means
+  // "asked, and it's a plain rectangle" — distinct from undefined ("not
+  // asked yet"), so a rectangular slot is never re-queried on every edit.
+  const overlayMaskCacheRef = useRef<Record<string, string>>({})
+  // Set while the file picker is open for a NEW overlay rather than for
+  // replacing an existing image hotspot — the two share one <input>.
+  const pendingOverlayUpload = useRef(false)
   const sessionIdRef = useRef<string | null>(null)
   const sessionStartedRef = useRef(false)
   const pagesContainerRef = useRef<HTMLDivElement>(null)
@@ -486,6 +611,7 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
 
   /** Draw a replacement image directly onto the page's canvas — no network call. */
   const drawImageEditOnCanvas = useCallback(async (hotspot: PdfHotspot, file: File) => {
+    if (hotspot.type !== "image") return
     const canvas = canvasRefs.current[ownerClientId(hotspot.id)]
     const pageInfo = session?.pages.find((p) => p.page === hotspot.page)
     const ctx = canvas?.getContext("2d")
@@ -495,7 +621,51 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
     try {
       const pxPerPoint = canvas.width / pageInfo.width
       const [x0, y0, x1, y1] = hotspot.bbox
-      ctx.drawImage(bitmap, x0 * pxPerPoint, y0 * pxPerPoint, (x1 - x0) * pxPerPoint, (y1 - y0) * pxPerPoint)
+      const dx = x0 * pxPerPoint
+      const dy = y0 * pxPerPoint
+      const dw = (x1 - x0) * pxPerPoint
+      const dh = (y1 - y0) * pxPerPoint
+
+      // Does this slot clip its picture to a shape? The page's own drawing
+      // instructions decide that, and only the server can see them — so ask,
+      // once per slot, and remember the answer.
+      let maskB64 = overlayMaskCacheRef.current[hotspot.id]
+      if (maskB64 === undefined) {
+        try {
+          maskB64 = session ? await fetchPdfMasterHotspotMask(session.session_id, hotspot.originalId) : ""
+        } catch {
+          maskB64 = ""
+        }
+        overlayMaskCacheRef.current[hotspot.id] = maskB64
+      }
+
+      if (!maskB64) {
+        ctx.drawImage(bitmap, dx, dy, dw, dh)
+        return
+      }
+
+      // The slot is cut to a shape (a circle, rounded corners, a silhouette).
+      // Compose the replacement through that shape off-screen, so what's
+      // drawn here matches the exported page — which keeps the shape,
+      // because the clip lives in the page and survives the swap. A plain
+      // rectangle on screen would be a preview that lies about the result.
+      const mask = await loadImageFromBase64Png(maskB64)
+      const stencil = document.createElement("canvas")
+      stencil.width = Math.max(1, Math.round(dw))
+      stencil.height = Math.max(1, Math.round(dh))
+      const sctx = stencil.getContext("2d")
+      if (!sctx) {
+        ctx.drawImage(bitmap, dx, dy, dw, dh)
+        return
+      }
+      sctx.drawImage(bitmap, 0, 0, stencil.width, stencil.height)
+      // Keeps the replacement only where the mask is opaque — everything
+      // outside the shape is cut away, exactly as the PDF's own soft mask does.
+      sctx.globalCompositeOperation = "destination-in"
+      sctx.drawImage(mask, 0, 0, stencil.width, stencil.height)
+      // No need to clear underneath first: the old picture occupied exactly
+      // this same masked area, so the new one covers every pixel it did.
+      ctx.drawImage(stencil, dx, dy)
     } finally {
       bitmap.close()
     }
@@ -583,6 +753,7 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
         // measures/previews in a generic face instead of the real one.
         try {
           const fonts = await fetchPdfMasterSessionFonts(result.session_id)
+          setSessionFonts(fonts)
           setAvailableFontIds(await loadPdfSessionFonts(result.session_id, fonts))
         } catch (err) {
           console.warn("Could not load the document's own fonts — preview will use a fallback face", err)
@@ -748,6 +919,123 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
     return () => observer.disconnect()
   }, [])
 
+  // ── Added items (overlays) ──────────────────────────────────────────────────
+
+  /** Where a newly added item lands: centred horizontally, a little down from
+   * the top of whichever page is nearest the middle of the viewport — i.e.
+   * the page you're actually looking at, so a new item never appears
+   * offscreen. */
+  function newOverlayPlacement(): { pageClientId: string; x: number; y: number } | null {
+    if (editorPages.length === 0) return null
+    const viewportMiddle = window.innerHeight / 2
+    let best = editorPages[0]
+    let bestDistance = Number.POSITIVE_INFINITY
+    for (const page of editorPages) {
+      const canvas = canvasRefs.current[page.clientId]
+      if (!canvas) continue
+      const rect = canvas.getBoundingClientRect()
+      const distance = Math.abs(rect.top + rect.height / 2 - viewportMiddle)
+      if (distance < bestDistance) {
+        bestDistance = distance
+        best = page
+      }
+    }
+    return { pageClientId: best.clientId, x: best.width * 0.25, y: best.height * 0.2 }
+  }
+
+  function addTextOverlay() {
+    const placement = newOverlayPlacement()
+    if (!placement) return
+    const overlay: PdfOverlay = {
+      id: crypto.randomUUID(),
+      type: "text",
+      pageClientId: placement.pageClientId,
+      x: placement.x,
+      y: placement.y,
+      width: 220,
+      height: 60,
+      rotation: 0,
+      text: t("pdfTemplates.overlayNewText"),
+      fontId: "",
+      fontSize: 18,
+      color: "#000000",
+      bold: false,
+      italic: false,
+      align: "left",
+    }
+    setOverlays((prev) => [...prev, overlay])
+    setSelectedOverlayId(overlay.id)
+    // Straight into typing mode with the placeholder selected, so the first
+    // thing you type replaces it. Adding a text box and then having to hunt
+    // for how to write in it is the wrong first experience.
+    setEditingOverlayId(overlay.id)
+  }
+
+  /** Shrink an upload to something sane, and refuse anything still too big —
+   * with a message, rather than letting the export die later as a bare
+   * network failure the user can't interpret. Returns null if rejected. */
+  async function prepareUpload(file: File): Promise<File | null> {
+    const prepared = await downscaleImageFile(file)
+    if (prepared.size > MAX_UPLOAD_BYTES) {
+      toast.error(t("pdfTemplates.masterImageTooLarge", { mb: Math.round(prepared.size / 1024 / 1024) }))
+      return null
+    }
+    return prepared
+  }
+
+  async function addImageOverlay(file: File) {
+    const placement = newOverlayPlacement()
+    if (!placement) return
+    // Sized from the image's real proportions so it doesn't land visibly
+    // stretched and need fixing before it can even be looked at.
+    let ratio = 1
+    try {
+      const bitmap = await createImageBitmap(file)
+      ratio = bitmap.height / bitmap.width
+      bitmap.close()
+    } catch {
+      // Undecodable here — the browser's <img> may still manage it; a square
+      // default is a harmless starting point.
+    }
+    const width = 200
+    const id = crypto.randomUUID()
+    overlayFilesRef.current[id] = file
+    const overlay: PdfOverlay = {
+      id,
+      type: "image",
+      pageClientId: placement.pageClientId,
+      x: placement.x,
+      y: placement.y,
+      width,
+      height: Math.max(20, width * ratio),
+      rotation: 0,
+      previewUrl: URL.createObjectURL(file),
+    }
+    setOverlays((prev) => [...prev, overlay])
+    setSelectedOverlayId(id)
+  }
+
+  function updateOverlay(id: string, patch: Partial<PdfOverlay>) {
+    // Cast: the patch always comes from a control bound to THIS overlay, so
+    // its fields belong to that overlay's own variant — but TypeScript can't
+    // see that through a Partial of the union.
+    setOverlays((prev) => prev.map((o) => (o.id === id ? ({ ...o, ...patch } as PdfOverlay) : o)))
+  }
+
+  function removeOverlay(id: string) {
+    setOverlays((prev) => {
+      const target = prev.find((o) => o.id === id)
+      // Object URLs are held by the browser until explicitly released, so a
+      // session of adding and removing images would otherwise leak every
+      // one of them for the lifetime of the tab.
+      if (target?.type === "image") URL.revokeObjectURL(target.previewUrl)
+      return prev.filter((o) => o.id !== id)
+    })
+    delete overlayFilesRef.current[id]
+    setSelectedOverlayId((prev) => (prev === id ? null : prev))
+    setEditingOverlayId((prev) => (prev === id ? null : prev))
+  }
+
   // ── Page management (via the organizer dialog) ──────────────────────────────
 
   /** Open the organizer for one job, snapshotting every page's CURRENT
@@ -823,6 +1111,25 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
       if (!src) return prev
       return [...prev, { page: newClientId, cssWidth: src.cssWidth, cssHeight: src.cssHeight }]
     })
+
+    // Added items belong to the page too, so a copied page carries its own
+    // independent copies of them — editing one afterwards must not change
+    // the other. Image overlays share the same File (it never changes), but
+    // get their own object URL so revoking one can't blank the other.
+    setOverlays((prev) => {
+      const cloned = prev
+        .filter((o) => o.pageClientId === sourceClientId)
+        .map((o) => {
+          const id = crypto.randomUUID()
+          if (o.type === "image") {
+            const file = overlayFilesRef.current[o.id]
+            if (file) overlayFilesRef.current[id] = file
+            return { ...o, id, pageClientId: newClientId, previewUrl: file ? URL.createObjectURL(file) : o.previewUrl }
+          }
+          return { ...o, id, pageClientId: newClientId }
+        })
+      return cloned.length > 0 ? [...prev, ...cloned] : prev
+    })
     return newClientId
   }
 
@@ -863,6 +1170,20 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
       delete pendingPageBitmapRef.current[clientId]
     }
     setPageStates((prev) => prev.filter((p) => !ids.has(p.page)))
+    // Added items go with the page they were placed on, object URLs released
+    // so a deleted page's images don't stay resident for the tab's lifetime.
+    setOverlays((prev) => {
+      const doomed = prev.filter((o) => ids.has(o.pageClientId))
+      if (doomed.length === 0) return prev
+      for (const o of doomed) {
+        if (o.type === "image") URL.revokeObjectURL(o.previewUrl)
+        delete overlayFilesRef.current[o.id]
+      }
+      return prev.filter((o) => !ids.has(o.pageClientId))
+    })
+    if (selectedOverlayId && ids.has(overlays.find((o) => o.id === selectedOverlayId)?.pageClientId ?? "")) {
+      setSelectedOverlayId(null)
+    }
     if (editingHotspotId && owned(editingHotspotId)) setEditingHotspotId(null)
   }
 
@@ -1044,21 +1365,35 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
   async function onImageFileSelected(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
     const hotspotId = pendingImageHotspotId.current
+    const forOverlay = pendingOverlayUpload.current
     e.target.value = ""
     pendingImageHotspotId.current = null
+    pendingOverlayUpload.current = false
+
+    // Same <input> serves both "replace this image slot" and "add a new
+    // image anywhere" — which one is decided by whichever flag was set
+    // before it was opened.
+    if (forOverlay) {
+      if (!file) return
+      const prepared = await prepareUpload(file)
+      if (prepared) await addImageOverlay(prepared)
+      return
+    }
     if (!file || !hotspotId || !session) return
     const hotspot = hotspots[hotspotId]
     if (!hotspot) return
 
     setBusyHotspotId(hotspotId)
     try {
+      const prepared = await prepareUpload(file)
+      if (!prepared) return
       // No server round-trip — just draw it and remember it for Download.
-      await drawImageEditOnCanvas(hotspot, file)
+      await drawImageEditOnCanvas(hotspot, prepared)
       pendingEditsRef.current[hotspotId] = {
         hotspotId,
         originalHotspotId: hotspot.originalId,
         type: "image",
-        file,
+        file: prepared,
       }
       toast.success(t("pdfTemplates.masterImageReplaced"))
     } catch (err) {
@@ -1099,16 +1434,40 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
         // coordinates it was made in and the turn is the last thing to happen.
         rotation: p.rotation,
         edits: Object.values(pendingEditsRef.current).filter((e) => ownerClientId(e.hotspotId) === p.clientId),
+        overlays: overlays.filter((o) => o.pageClientId === p.clientId),
       }))
-      const blob = await applyPdfMasterEditsAndExport(session.session_id, pagePlan)
+      const result = await applyPdfMasterEditsAndExport(session.session_id, pagePlan, overlayFilesRef.current)
+
+      // Force the type. A Blob built without one gets an empty MIME type,
+      // and a browser handed a typeless blob can refuse to save it or save
+      // it under the wrong extension.
+      const blob = result instanceof Blob
+        ? new Blob([result], { type: "application/pdf" })
+        : new Blob([result as BlobPart], { type: "application/pdf" })
+
+      if (blob.size === 0) throw new Error(t("pdfTemplates.masterEmptyExport"))
+
+      // A template name can carry anything a person typed — slashes, colons,
+      // quotes — none of which are legal in a filename, and a browser given
+      // an illegal one can silently drop the download instead of saving it.
+      const safeName = (template.name || "document").replace(/[^\w.\-֐-׿ ]+/g, "_").trim() || "document"
+
       const url = URL.createObjectURL(blob)
       const a = document.createElement("a")
       a.href = url
-      a.download = `${template.name}.pdf`
+      a.download = `${safeName}.pdf`
+      a.rel = "noopener"
       document.body.appendChild(a)
       a.click()
       a.remove()
-      URL.revokeObjectURL(url)
+      // Deliberately NOT revoked on the next line. Revoking straight after
+      // click() destroys the blob before the browser has finished reading
+      // it, and the download then fails silently — no error, no file, just
+      // nothing. The bigger the document the more reliably that race is
+      // lost, which is why this only started showing up as exports grew
+      // past a few megabytes. The delay costs a little memory until it
+      // fires; a download that doesn't happen costs the whole feature.
+      window.setTimeout(() => URL.revokeObjectURL(url), 60_000)
       toast.success(t("pdfTemplates.pdfDownloaded"))
     } catch (err) {
       console.error(err)
@@ -1146,6 +1505,8 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
   // starts out as a real page (clientId set); the dialog may add entries
   // with a null clientId, which applyOrganizer then materialises into real
   // copies.
+  const selectedOverlay = overlays.find((o) => o.id === selectedOverlayId) ?? null
+
   const organizerPages: OrganizerPage[] = editorPages.map((p) => ({
     key: p.clientId,
     clientId: p.clientId,
@@ -1429,6 +1790,38 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
                       </div>
                     )
                   })}
+
+                  {/* Items the user added, drawn above every hotspot (see
+                      PdfOverlayItem's z-index) so a new item is always
+                      reachable rather than trapped behind a region of the
+                      original document. */}
+                  {overlays
+                    .filter((o) => o.pageClientId === ep.clientId)
+                    .map((o) => (
+                      <PdfOverlayItem
+                        key={o.id}
+                        overlay={o}
+                        scale={scale}
+                        isSelected={selectedOverlayId === o.id}
+                        isEditing={editingOverlayId === o.id}
+                        onSelect={() => {
+                          setSelectedOverlayId(o.id)
+                          // Selecting a DIFFERENT item closes whatever was
+                          // being typed in, so two boxes are never in edit
+                          // mode at once.
+                          setEditingOverlayId((prev) => (prev === o.id ? prev : null))
+                        }}
+                        onStartEdit={() => setEditingOverlayId(o.id)}
+                        onEndEdit={() => setEditingOverlayId((prev) => (prev === o.id ? null : prev))}
+                        onChange={(patch) => updateOverlay(o.id, patch)}
+                        onRemove={() => removeOverlay(o.id)}
+                        fontFamily={
+                          o.type === "text" && o.fontId && availableFontIds.has(o.fontId)
+                            ? pdfFontFamily(session?.session_id ?? "", o.fontId)
+                            : FALLBACK_FONT_STACK
+                        }
+                      />
+                    ))}
                 </div>
               </div>
             )
@@ -1446,6 +1839,25 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
             setContentMode((prev) => (prev === "text" ? "images" : "text"))
           }}
           onOpenOrganizer={openOrganizer}
+          onAddText={addTextOverlay}
+          onAddImage={() => {
+            pendingOverlayUpload.current = true
+            fileInputRef.current?.click()
+          }}
+        />
+      )}
+
+      {/* Properties for the selected added item. Nothing is shown when
+          nothing is selected, so the bar never sits there taking up room
+          against a document you're only reading. */}
+      {selectedOverlay && !isLoading && !loadError && (
+        <PdfOverlayToolbar
+          top={railTop}
+          overlay={selectedOverlay}
+          fonts={sessionFonts}
+          availableFontIds={availableFontIds}
+          onChange={(patch) => updateOverlay(selectedOverlay.id, patch)}
+          onRemove={() => removeOverlay(selectedOverlay.id)}
         />
       )}
 

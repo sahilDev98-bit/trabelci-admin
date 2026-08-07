@@ -9,6 +9,7 @@ import type {
   PdfSessionJobStart,
   PdfSessionJobStatus,
   PdfSessionFont,
+  PdfOverlay,
 } from "./types"
 
 // ── Fetch helpers ─────────────────────────────────────────────────────────────
@@ -106,6 +107,24 @@ export async function fetchPdfMasterSessionFonts(
   return res.fonts ?? {}
 }
 
+/**
+ * The true visible shape of one image slot (base64 PNG, alpha = stencil), or
+ * "" when it's a plain rectangle. Fetched on demand, for the one slot being
+ * replaced, since the server finds the shape by rendering a probe.
+ *
+ * `hotspotId` is the PLAIN analysis id (not the client-namespaced one) —
+ * that's what the server's session metadata knows about.
+ */
+export async function fetchPdfMasterHotspotMask(
+  sessionId: string,
+  hotspotId: string,
+): Promise<string> {
+  const res = await apiFetch<{ mask?: string }>(
+    `${API_ENDPOINTS.PDF_MASTER_SESSION}/${sessionId}/hotspot-mask/${encodeURIComponent(hotspotId)}`,
+  )
+  return res.mask ?? ""
+}
+
 // hotspotId is the client-namespaced id (unique per editor-page instance,
 // see PdfHotspotBase) — used here purely to give each edit's uploaded file
 // (if any) a unique form field name. originalHotspotId is the plain id from
@@ -131,6 +150,9 @@ export type PdfMasterPendingEdit =
 export interface PdfMasterPagePlanEntry {
   originalPage: number
   edits: PdfMasterPendingEdit[]
+  /** Items the user ADDED on top of this page (free position/size/angle), as
+   * opposed to edits, which replace something the PDF already contained. */
+  overlays?: PdfOverlay[]
   /** Quarter turns to apply to this page in the output: 0 | 90 | 180 | 270.
    * Applied after this page's edits — rotation is a page attribute in PDF,
    * not a redraw, so edits keep the coordinates they were made in. */
@@ -147,6 +169,9 @@ export interface PdfMasterPagePlanEntry {
 export async function applyPdfMasterEditsAndExport(
   sessionId: string,
   pagePlan: PdfMasterPagePlanEntry[],
+  /** Files for image overlays, keyed by overlay id — sent alongside the plan
+   * the same way replacement images are. */
+  overlayFiles: Record<string, File> = {},
 ): Promise<Blob> {
   const form = new FormData()
   form.append(
@@ -155,6 +180,25 @@ export async function applyPdfMasterEditsAndExport(
       pagePlan.map((page) => ({
         original_page: page.originalPage,
         rotation: page.rotation ?? 0,
+        // Geometry is already in PDF points, unrotated page space — the same
+        // space hotspot bboxes use — so the server needs no conversion.
+        overlays: (page.overlays ?? []).map((o) => ({
+          id: o.id,
+          type: o.type,
+          rect: [o.x, o.y, o.x + o.width, o.y + o.height],
+          rotation: o.rotation,
+          ...(o.type === "text"
+            ? {
+                text: o.text,
+                font_id: o.fontId,
+                font_size: o.fontSize,
+                color: o.color,
+                bold: o.bold,
+                italic: o.italic,
+                align: o.align,
+              }
+            : {}),
+        })),
         edits: page.edits.map((e) => ({
           edit_id: e.hotspotId,
           hotspot_id: e.originalHotspotId,
@@ -168,6 +212,10 @@ export async function applyPdfMasterEditsAndExport(
   for (const page of pagePlan) {
     for (const e of page.edits) {
       if (e.type === "image" && !("remove" in e)) form.append(`image_${e.hotspotId}`, e.file)
+    }
+    for (const o of page.overlays ?? []) {
+      const file = overlayFiles[o.id]
+      if (o.type === "image" && file) form.append(`overlay_${o.id}`, file)
     }
   }
   return apiFetch<Blob>(`${API_ENDPOINTS.PDF_MASTER_SESSION}/${sessionId}/apply-edits`, {
