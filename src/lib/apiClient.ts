@@ -9,6 +9,13 @@ const API_ERROR_I18N_MAP: Record<string, string> = {
   "A user with this email address has already been registered": "common.emailAlreadyRegistered",
 }
 
+/** Maps stable backend error codes to i18n keys. Preferred over
+ * API_ERROR_I18N_MAP: `details` is only sent outside production, but `code`
+ * is always present. */
+const API_ERROR_CODE_I18N_MAP: Record<string, string> = {
+  USER_ALREADY_EXISTS: "common.emailAlreadyRegistered",
+}
+
 export class ApiError extends Error {
   public readonly status: number
   public readonly payload: unknown
@@ -20,12 +27,20 @@ export class ApiError extends Error {
     this.payload = payload
   }
 
-  /** Returns an i18n key if the error details match a known message, otherwise null */
+  /** Returns an i18n key if the error code or details match a known error, otherwise null */
   get i18nKey(): string | null {
-    const details = (this.payload as Record<string, unknown> | null)?.details
+    const payload = this.payload as Record<string, unknown> | null
+
+    const code = payload?.code
+    if (typeof code === "string" && API_ERROR_CODE_I18N_MAP[code]) {
+      return API_ERROR_CODE_I18N_MAP[code]
+    }
+
+    const details = payload?.details
     if (typeof details === "string") {
       return API_ERROR_I18N_MAP[details] ?? null
     }
+
     return null
   }
 }
