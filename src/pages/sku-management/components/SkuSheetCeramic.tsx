@@ -121,16 +121,12 @@ interface CeramicColumn {
 const COLUMNS: CeramicColumn[] = [
   { field: "rowNumber",          type: "index",        minWidth: 44  },
   { field: "sku",                type: "text",         minWidth: 140 },
-  // Cleanup-only — the raw, unedited name SAP already has for this item.
-  // Shown for reference (muted italic) so the user can see what they're
-  // cleaning up against; filtered out for the New Creation grid in
+  // Cleanup-only — starts as the raw name SAP has for this item, but is
+  // fully editable: changing it here and saving writes straight through to
+  // product.name (skuMetadataService.js's propagateToProduct), same as
+  // supplier/country/size below. Filtered out for the New Creation grid in
   // buildColumns since a not-yet-created row has no SAP name at all.
-  { field: "original_sap_name",  type: "text",         minWidth: 180, readOnly: true, italic: true },
-  // Editable display name — starts as a copy of original_sap_name (above)
-  // so the admin can tweak it instead of retyping it, then saves through to
-  // product.name. Kept as its own column, separate from the frozen
-  // original_sap_name, so it's always clear which one is editable.
-  { field: "name",               type: "text",         minWidth: 220 },
+  { field: "original_sap_name",  type: "text",         minWidth: 220 },
   { field: "supplier",           type: "supplier-autocomplete", minWidth: 130 },
   { field: "series",             type: "supplier-autocomplete", minWidth: 120 },
   { field: "color",              type: "supplier-autocomplete", minWidth: 110 },

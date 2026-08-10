@@ -775,7 +775,6 @@ const he = {
 
     fields: {
       sku: "SKU / קוד פריט",
-      name: "שם",
       supplier: "שם ספק",
       series: "סדרה",
       color: "צבע",
@@ -797,7 +796,7 @@ const he = {
       series_en: "סדרה (אנגלית)",
       color_en: "צבע (אנגלית)",
       supplier_sku: "מק\"ט ספק",
-      original_sap_name: "שם SAP מקורי",
+      original_sap_name: "שם",
       status: "סטטוס",
     },
 

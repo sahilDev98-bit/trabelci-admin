@@ -791,7 +791,6 @@ const en = {
 
     fields: {
       sku: "SKU / ItemCode",
-      name: "Name",
       supplier: "Supplier Name",
       series: "Series",
       color: "Color",
@@ -813,7 +812,7 @@ const en = {
       series_en: "Series (English)",
       color_en: "Color (English)",
       supplier_sku: "Supplier SKU",
-      original_sap_name: "Original SAP Name",
+      original_sap_name: "Name",
       status: "Status",
     },
 

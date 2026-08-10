@@ -15,12 +15,6 @@ export interface SkuMetadataRow {
   workflow_type: SkuWorkflowType;
   status: SkuStatus;
 
-  // Editable display name — starts as a copy of original_sap_name at
-  // import time, then the admin can tweak it. Separate from
-  // original_sap_name, which stays a frozen, read-only reference to what
-  // SAP originally called the item and is never itself editable.
-  name?: string;
-
   supplier?: string;
   supplier_code?: string;
   supplier_sku?: string;
