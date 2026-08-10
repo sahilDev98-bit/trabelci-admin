@@ -126,6 +126,11 @@ const COLUMNS: CeramicColumn[] = [
   // cleaning up against; filtered out for the New Creation grid in
   // buildColumns since a not-yet-created row has no SAP name at all.
   { field: "original_sap_name",  type: "text",         minWidth: 180, readOnly: true, italic: true },
+  // Editable display name — starts as a copy of original_sap_name (above)
+  // so the admin can tweak it instead of retyping it, then saves through to
+  // product.name. Kept as its own column, separate from the frozen
+  // original_sap_name, so it's always clear which one is editable.
+  { field: "name",               type: "text",         minWidth: 220 },
   { field: "supplier",           type: "supplier-autocomplete", minWidth: 130 },
   { field: "series",             type: "supplier-autocomplete", minWidth: 120 },
   { field: "color",              type: "supplier-autocomplete", minWidth: 110 },

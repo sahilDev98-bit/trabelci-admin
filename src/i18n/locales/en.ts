@@ -791,6 +791,7 @@ const en = {
 
     fields: {
       sku: "SKU / ItemCode",
+      name: "Name",
       supplier: "Supplier Name",
       series: "Series",
       color: "Color",

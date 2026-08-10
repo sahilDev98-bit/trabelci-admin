@@ -775,6 +775,7 @@ const he = {
 
     fields: {
       sku: "SKU / קוד פריט",
+      name: "שם",
       supplier: "שם ספק",
       series: "סדרה",
       color: "צבע",
