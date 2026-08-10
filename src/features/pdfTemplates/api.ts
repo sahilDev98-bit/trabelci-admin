@@ -125,6 +125,24 @@ export async function fetchPdfMasterHotspotMask(
   return res.mask ?? ""
 }
 
+/**
+ * What sits behind one text slot once its text is removed: a base64 PNG plus
+ * the rect it covers, in PDF points. Lets the browser restore the document's
+ * true background before drawing replacement text, instead of painting a
+ * sampled flat colour that shows as a grey rectangle over a photograph.
+ *
+ * `hotspotId` is the PLAIN analysis id, as the server's metadata knows it.
+ */
+export async function fetchPdfMasterCleanPatch(
+  sessionId: string,
+  hotspotId: string,
+): Promise<{ patch: string; rect: number[] }> {
+  const res = await apiFetch<{ patch?: string; rect?: number[] }>(
+    `${API_ENDPOINTS.PDF_MASTER_SESSION}/${sessionId}/clean-patch/${encodeURIComponent(hotspotId)}`,
+  )
+  return { patch: res.patch ?? "", rect: res.rect ?? [] }
+}
+
 // hotspotId is the client-namespaced id (unique per editor-page instance,
 // see PdfHotspotBase) — used here purely to give each edit's uploaded file
 // (if any) a unique form field name. originalHotspotId is the plain id from

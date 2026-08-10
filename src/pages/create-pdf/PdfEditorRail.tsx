@@ -67,7 +67,9 @@ const BUTTON_BASE =
 // near-black below, matching the app's own primary emphasis in light mode
 // (rgb(23,23,23)) rather than introducing an unrelated accent hue.
 const BUTTON_IDLE = "bg-transparent text-[rgba(0,0,0,0.55)] hover:bg-[rgba(0,0,0,0.06)] hover:text-[rgba(0,0,0,0.75)]"
-const BUTTON_ACTIVE = "bg-[rgb(23,23,23)] text-white"
+// Commented out together with the only thing that used it — the text on/off
+// switch further down. Restore both at once.
+// const BUTTON_ACTIVE = "bg-[rgb(23,23,23)] text-white"
 // Delete is the one destructive tool, so it hovers red rather than grey —
 // the button that removes pages shouldn't feel identical to the one that
 // copies them.
@@ -83,8 +85,9 @@ const BUTTON_DANGER = "bg-transparent text-[rgba(0,0,0,0.55)] hover:bg-[rgba(185
  */
 export function PdfEditorRail({
   top,
-  contentMode,
-  onToggleContentMode,
+  // contentMode / onToggleContentMode are still part of the contract and
+  // still passed in — they're only left undestructured while the text
+  // on/off switch is commented out below, so nothing reports them unused.
   onOpenOrganizer,
   onAddText,
   onAddImage,
@@ -128,10 +131,13 @@ export function PdfEditorRail({
           <div className="flex animate-in flex-col gap-1.5 fade-in-0 slide-in-from-top-1 duration-150">
             <div className="mx-auto h-px w-5" style={{ background: RAIL_DIVIDER }} />
 
-            {/* Text is a STATE (stays on until switched off); everything
-                below is an ACTION that opens the organizer. Kept visually
-                distinct by the divider so a latching switch and a set of
-                buttons don't read as the same kind of control. */}
+            {/* HIDDEN 2026-08-10 at the client's request — not removed.
+                The text on/off switch let clicks fall through to images
+                underneath instead of grabbing the text over them. The
+                customizer still honours contentMode (it stays "text"), and
+                both props are still passed in, so restoring this is a
+                matter of uncommenting the block below.
+
             <Tooltip>
               <TooltipTrigger asChild>
                 <button
@@ -147,6 +153,7 @@ export function PdfEditorRail({
                 {contentMode === "text" ? t("pdfTemplates.railTextEditingOn") : t("pdfTemplates.railTextEditingOff")}
               </TooltipContent>
             </Tooltip>
+            */}
 
             {/* Adding new content sits with the text switch, above the page
                 tools: both are about what's ON a page, whereas the group

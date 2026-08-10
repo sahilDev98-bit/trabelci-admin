@@ -35,6 +35,7 @@ import {
   fetchPdfMasterSessionFile,
   fetchPdfMasterSessionFonts,
   fetchPdfMasterHotspotMask,
+  fetchPdfMasterCleanPatch,
   applyPdfMasterEditsAndExport,
   closePdfMasterSession,
 } from "@/features/pdfTemplates/api"
@@ -471,6 +472,10 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
   // "asked, and it's a plain rectangle" — distinct from undefined ("not
   // asked yet"), so a rectangular slot is never re-queried on every edit.
   const overlayMaskCacheRef = useRef<Record<string, string>>({})
+  // The document's real background behind each text slot, keyed by
+  // namespaced hotspot id. null means "asked, and none available" — distinct
+  // from undefined ("not asked yet"), so it isn't re-requested every edit.
+  const cleanPatchCacheRef = useRef<Record<string, { patch: string; rect: number[] } | null>>({})
   // Set while the file picker is open for a NEW overlay rather than for
   // replacing an existing image hotspot — the two share one <input>.
   const pendingOverlayUpload = useRef(false)
@@ -573,7 +578,7 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
    * the downloaded file are all guaranteed to agree. Re-wrapping here would
    * reintroduce the possibility of them drifting apart.
    */
-  const drawTextEditOnCanvas = useCallback((hotspot: PdfHotspot, fit: FitResult, backgroundColor: string) => {
+  const drawTextEditOnCanvas = useCallback(async (hotspot: PdfHotspot, fit: FitResult, backgroundColor: string) => {
     if (hotspot.type !== "text") return
     const canvas = canvasRefs.current[ownerClientId(hotspot.id)]
     const pageInfo = session?.pages.find((p) => p.page === hotspot.page)
@@ -584,9 +589,33 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
     const [x0, y0, x1, y1] = hotspot.bbox
     const pad = 1.5 * pxPerPoint
 
-    // Cover the old line (same padding the server uses around the bbox)
-    ctx.fillStyle = backgroundColor
-    ctx.fillRect(x0 * pxPerPoint - pad, y0 * pxPerPoint - pad, (x1 - x0) * pxPerPoint + pad * 2, (y1 - y0) * pxPerPoint + pad * 2)
+    // Erase the old text by restoring the document's REAL background, not by
+    // painting a colour over it. A sampled flat colour is fine on plain
+    // paper but lands as an obvious grey rectangle over a photograph, and
+    // the export never had that problem — it redacts, so whatever was
+    // underneath simply shows through. This fetches exactly that redacted
+    // patch, once per slot, so the preview matches.
+    let patch = cleanPatchCacheRef.current[hotspot.id]
+    if (patch === undefined) {
+      try {
+        patch = session ? await fetchPdfMasterCleanPatch(session.session_id, hotspot.originalId) : null
+      } catch {
+        patch = null
+      }
+      cleanPatchCacheRef.current[hotspot.id] = patch
+    }
+
+    if (patch?.patch && patch.rect.length === 4) {
+      const img = await loadImageFromBase64Png(patch.patch)
+      const [rx0, ry0, rx1, ry1] = patch.rect
+      ctx.drawImage(img, rx0 * pxPerPoint, ry0 * pxPerPoint, (rx1 - rx0) * pxPerPoint, (ry1 - ry0) * pxPerPoint)
+    } else {
+      // Fall back to the old sampled fill only when the real patch can't be
+      // had — better an approximate cover than old and new text on top of
+      // each other.
+      ctx.fillStyle = backgroundColor
+      ctx.fillRect(x0 * pxPerPoint - pad, y0 * pxPerPoint - pad, (x1 - x0) * pxPerPoint + pad * 2, (y1 - y0) * pxPerPoint + pad * 2)
+    }
 
     if (fit.lines.length === 0) return
 
@@ -1318,7 +1347,7 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
     const fit = fitForHotspot(hotspot, newText)
 
     // No server round-trip — just draw it and remember it for Download.
-    drawTextEditOnCanvas(hotspot, fit, editingBackground)
+    void drawTextEditOnCanvas(hotspot, fit, editingBackground)
     pendingEditsRef.current[hotspot.id] = {
       hotspotId: hotspot.id,
       originalHotspotId: hotspot.originalId,
@@ -1341,7 +1370,7 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
     const bg = canvas && pageInfo ? sampleBackgroundColor(canvas, hotspot.bbox, pageInfo.width) : "#ffffff"
 
     const fit = fitForHotspot(hotspot, "")
-    drawTextEditOnCanvas(hotspot, fit, bg)
+    void drawTextEditOnCanvas(hotspot, fit, bg)
     pendingEditsRef.current[hotspot.id] = {
       hotspotId: hotspot.id,
       originalHotspotId: hotspot.originalId,
