@@ -23,7 +23,19 @@ export function RequireAuth({ children }: RequireAuthProps) {
   }
 
   if (!profile || status !== AUTH_STATUS.AUTHENTICATED) {
-    return <Navigate to="/login" replace search={{ redirect: location.pathname }} />
+    // Guard against a self-referential redirect (redirect=/login). Seen in practice
+    // right after sign-out: this guard can re-render once more during the route
+    // transition, after the URL has already changed to /login, which would otherwise
+    // produce `/login?redirect=%2Flogin` and re-trigger on every subsequent render —
+    // hitting React's nested-update limit ("Maximum update depth exceeded").
+    const isAlreadyOnLogin = location.pathname === "/login"
+    return (
+      <Navigate
+        to="/login"
+        replace
+        search={{ redirect: isAlreadyOnLogin ? undefined : location.pathname }}
+      />
+    )
   }
 
   return <>{children}</>
