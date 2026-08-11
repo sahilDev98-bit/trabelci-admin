@@ -88,6 +88,13 @@ export interface PdfSessionFont {
   ext: string
   /** The face's own name, for display ("Heebo Bold"). */
   name: string
+  /** The characters this face can actually DRAW. A subsetted font keeps a
+   * cmap entry for a character whose outline it discarded, so the character
+   * maps to a glyph and that glyph is empty — it renders as nothing at all.
+   * Verified on a real catalogue: one embedded face could only draw the six
+   * letters of "Carnaby", and another had no capital Y, which is why typing
+   * "Yash" produced "ash". Empty string means "unknown, trust the font". */
+  usable: string
   /** base64-encoded font file. */
   data: string
 }

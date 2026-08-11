@@ -21,6 +21,7 @@ import { PdfOverlayItem } from "./PdfOverlayItem"
 import { PdfOverlayToolbar } from "./PdfOverlayToolbar"
 import {
   FALLBACK_FONT_STACK,
+  fontCanDraw,
   hotspotCanvasFont,
   loadPdfSessionFonts,
   pdfFontFamily,
@@ -567,6 +568,17 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
    */
   const pendingEditsRef = useRef<Record<string, PdfMasterPendingEdit>>({})
 
+  /** Can this hotspot's own embedded face actually DRAW this text? A subset
+   * keeps cmap entries for characters whose outlines it discarded, so the
+   * font loads, reports the glyph, and prints nothing — which is exactly how
+   * "Yash" came out as "ash". When it can't, everything (measuring, preview,
+   * page canvas and the export) must switch to the bundled face together, or
+   * they disagree about widths. */
+  const hotspotNeedsFallbackFont = useCallback((hotspot: PdfTextHotspot, text: string): boolean => {
+    if (!hotspot.fontId || !availableFontIds.has(hotspot.fontId)) return true
+    return !fontCanDraw(sessionFonts[hotspot.fontId]?.usable ?? "", text)
+  }, [availableFontIds, sessionFonts])
+
   /**
    * Draw a text edit directly onto the page's canvas — no network call.
    * Mirrors the server's own approach (cover the old line, draw the new one
@@ -619,7 +631,10 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
 
     if (fit.lines.length === 0) return
 
-    ctx.font = hotspotCanvasFont(hotspot, session?.session_id ?? null, availableFontIds, fit.fontSize * pxPerPoint)
+    ctx.font = hotspotCanvasFont(
+      hotspot, session?.session_id ?? null, availableFontIds, fit.fontSize * pxPerPoint,
+      hotspotNeedsFallbackFont(hotspot, hotspot.text),
+    )
     ctx.fillStyle = colorIntToCss(hotspot.color)
     ctx.direction = hotspot.rtl ? "rtl" : "ltr"
     ctx.textAlign = hotspot.rtl ? "right" : "left"
@@ -636,7 +651,7 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
     fit.lines.forEach((line, i) => {
       ctx.fillText(line, x, (originY + i * fit.lineHeight) * pxPerPoint)
     })
-  }, [session, availableFontIds])
+  }, [session, availableFontIds, hotspotNeedsFallbackFont])
 
   /** Draw a replacement image directly onto the page's canvas — no network call. */
   const drawImageEditOnCanvas = useCallback(async (hotspot: PdfHotspot, file: File) => {
@@ -1288,11 +1303,14 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
       // Session STATE, not sessionIdRef: this runs during render (to lay out
       // whatever is currently typed), and a ref read there can go stale
       // without re-rendering.
-      session?.session_id ?? null,
+      // Withhold the session id when the real face can't draw this text —
+      // that's what makes every measurement fall back in step with the
+      // drawing, instead of measuring one font and painting another.
+      hotspotNeedsFallbackFont(hotspot, text) ? null : (session?.session_id ?? null),
       availableFontIds,
       autoFit,
     )
-  }, [session, availableFontIds, autoFit])
+  }, [session, availableFontIds, autoFit, hotspotNeedsFallbackFont])
 
   /** Marks whether a hotspot is currently "empty" (removed text/image) —
    * drives hiding its overlay border/tint/buttons so it reads as genuinely
@@ -1526,9 +1544,9 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
   // The face genuinely used for this box. When the document's own font isn't
   // available the preview is an approximation, and saying so is better than
   // quietly showing something that won't match the export.
-  const editingUsesRealFont = Boolean(
-    editingHotspot?.fontId && availableFontIds.has(editingHotspot.fontId),
-  )
+  const editingUsesRealFont = editingHotspot
+    ? !hotspotNeedsFallbackFont(editingHotspot, editingValue)
+    : true
 
   // The current document, as the organizer needs to see it. Every entry
   // starts out as a real page (clientId set); the dialog may add entries

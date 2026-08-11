@@ -87,14 +87,36 @@ export function unloadPdfSessionFonts(sessionId: string): void {
  * only meaningful on the generic fallback stack, where one family really
  * does have to stand in for all four styles.
  */
+/**
+ * Can this face actually draw every character of `text`?
+ *
+ * Not the same question as "is the font loaded". An embedded subset maps
+ * characters it cannot draw — the cmap entry survives, the outline doesn't —
+ * so the browser silently renders them as nothing. `usable` lists the
+ * characters the document itself draws in this face, which is the only
+ * reliable answer available.
+ */
+export function fontCanDraw(usableChars: string, text: string): boolean {
+  if (!usableChars) return true // unknown — no reason to distrust it
+  const usable = new Set(usableChars)
+  for (const ch of text) {
+    if (ch.trim() === "") continue // whitespace never needs a glyph
+    if (!usable.has(ch)) return false
+  }
+  return true
+}
+
 export function hotspotCanvasFont(
   hotspot: { fontId: string; bold: boolean; italic: boolean; size: number },
   sessionId: string | null,
   availableFontIds: Set<string>,
   sizeOverride?: number,
+  /** Set when the document's own face can't draw the text — forces the
+   * generic stack rather than letting characters vanish. */
+  forceFallback = false,
 ): string {
   const size = sizeOverride ?? hotspot.size
-  if (sessionId && hotspot.fontId && availableFontIds.has(hotspot.fontId)) {
+  if (!forceFallback && sessionId && hotspot.fontId && availableFontIds.has(hotspot.fontId)) {
     return `${size}px ${pdfFontFamily(sessionId, hotspot.fontId)}`
   }
   const style = hotspot.italic ? "italic " : ""
