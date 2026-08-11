@@ -16,7 +16,7 @@ import {
 import { Textarea } from "@/components/ui/textarea"
 import { PdfEditorRail, type PdfContentMode, type PdfOrganizerMode } from "./PdfEditorRail"
 import { PdfPageOrganizer, type OrganizerPage } from "./PdfPageOrganizer"
-import { PdfTextPreview } from "./PdfTextPreview"
+import { PdfTextPreview, type PdfTextPreviewBackgroundPatch } from "./PdfTextPreview"
 import { PdfOverlayItem } from "./PdfOverlayItem"
 import { PdfOverlayToolbar } from "./PdfOverlayToolbar"
 import {
@@ -27,7 +27,7 @@ import {
   pdfFontFamily,
   unloadPdfSessionFonts,
 } from "./pdfFonts"
-import { fitText, type FitResult } from "./pdfTextFit"
+import { fitText } from "./pdfTextFit"
 import { ROUTES } from "@/lib/routes"
 import type { DownloadProgress } from "@/lib/apiClient"
 import {
@@ -49,6 +49,7 @@ import type {
   PdfSessionFont,
   PdfTemplate,
   PdfTextHotspot,
+  PdfTextRenderPlan,
 } from "@/features/pdfTemplates/types"
 
 // Vite statically detects this `new URL(..., import.meta.url)` pattern and
@@ -396,6 +397,11 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
   const [editingHotspotId, setEditingHotspotId] = useState<string | null>(null)
   const [editingValue, setEditingValue] = useState("")
   const [editingBackground, setEditingBackground] = useState("#ffffff")
+  // The document's REAL background behind the hotspot currently being
+  // edited, decoded and ready to draw — see loadCleanPatchForEditing. null
+  // while it's still loading (or genuinely unavailable), in which case the
+  // modal preview falls back to editingBackground's sampled flat colour.
+  const [editingCleanPatch, setEditingCleanPatch] = useState<PdfTextPreviewBackgroundPatch | null>(null)
   const [isExporting, setIsExporting] = useState(false)
   // What clicking on a page does in the MAIN view. Page arranging isn't part
   // of this any more — it happens entirely inside the organizer dialog, so
@@ -480,6 +486,13 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
   // Set while the file picker is open for a NEW overlay rather than for
   // replacing an existing image hotspot — the two share one <input>.
   const pendingOverlayUpload = useRef(false)
+  // Mirrors editingHotspotId (kept in sync by an effect below) so an
+  // in-flight clean-patch fetch can tell, once it resolves, whether the
+  // modal is still open on the SAME hotspot it was fetched for — without
+  // this, quickly closing one edit and opening another could apply the
+  // wrong hotspot's background patch to whatever is open by the time the
+  // network response lands.
+  const editingHotspotIdRef = useRef<string | null>(null)
   const sessionIdRef = useRef<string | null>(null)
   const sessionStartedRef = useRef(false)
   const pagesContainerRef = useRef<HTMLDivElement>(null)
@@ -584,13 +597,18 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
    * Mirrors the server's own approach (cover the old line, draw the new one
    * on top) so it looks right immediately.
    *
-   * Takes the already-computed FitResult rather than re-deriving the layout:
-   * the exact same lines/size are what get sent to the server and drawn into
-   * the exported PDF, so the page you're looking at, the modal preview and
-   * the downloaded file are all guaranteed to agree. Re-wrapping here would
-   * reintroduce the possibility of them drifting apart.
+   * Takes the already-computed PdfTextRenderPlan rather than re-deriving the
+   * layout: the exact same lines/size/font-fallback/direction/alignment are
+   * what get sent to the server and drawn into the exported PDF, so the page
+   * you're looking at, the modal preview and the downloaded file are all
+   * guaranteed to agree. Re-deriving any of that here — in particular,
+   * re-checking whether the fallback font is needed — would reopen exactly
+   * the bug this plan exists to close: that check has to run against the
+   * text actually being drawn, and by the time this function runs, the only
+   * "current text" available locally is whatever's left on the stale
+   * `hotspot` object, not the new value the user just typed.
    */
-  const drawTextEditOnCanvas = useCallback(async (hotspot: PdfHotspot, fit: FitResult, backgroundColor: string) => {
+  const drawTextEditOnCanvas = useCallback(async (hotspot: PdfHotspot, plan: PdfTextRenderPlan, backgroundColor: string) => {
     if (hotspot.type !== "text") return
     const canvas = canvasRefs.current[ownerClientId(hotspot.id)]
     const pageInfo = session?.pages.find((p) => p.page === hotspot.page)
@@ -629,15 +647,15 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
       ctx.fillRect(x0 * pxPerPoint - pad, y0 * pxPerPoint - pad, (x1 - x0) * pxPerPoint + pad * 2, (y1 - y0) * pxPerPoint + pad * 2)
     }
 
-    if (fit.lines.length === 0) return
+    if (plan.lines.length === 0) return
 
     ctx.font = hotspotCanvasFont(
-      hotspot, session?.session_id ?? null, availableFontIds, fit.fontSize * pxPerPoint,
-      hotspotNeedsFallbackFont(hotspot, hotspot.text),
+      hotspot, session?.session_id ?? null, availableFontIds, plan.fontSize * pxPerPoint,
+      plan.useFallbackFont,
     )
     ctx.fillStyle = colorIntToCss(hotspot.color)
-    ctx.direction = hotspot.rtl ? "rtl" : "ltr"
-    ctx.textAlign = hotspot.rtl ? "right" : "left"
+    ctx.direction = plan.direction
+    ctx.textAlign = plan.align
     ctx.textBaseline = "alphabetic"
 
     // The real first line's baseline (server-measured) — NOT y1 (the
@@ -647,11 +665,17 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
     // bottom of the box. A paragraph that wraps into more lines than it
     // originally had will simply overflow past y1, same as the export.
     const originY = hotspot.originY
-    const x = (hotspot.rtl ? x1 : x0) * pxPerPoint
-    fit.lines.forEach((line, i) => {
-      ctx.fillText(line, x, (originY + i * fit.lineHeight) * pxPerPoint)
+    // The x anchor follows ALIGNMENT, not direction directly — "right"
+    // hugs the box's right edge, "left" its left edge, "center" its
+    // middle, and ctx.textAlign does the actual per-glyph placement from
+    // there. Direction and alignment are related (RTL defaults to right)
+    // but not the same thing: see PdfTextRenderPlan.align.
+    const boxCenter = ((x0 + x1) / 2) * pxPerPoint
+    const x = plan.align === "right" ? x1 * pxPerPoint : plan.align === "center" ? boxCenter : x0 * pxPerPoint
+    plan.lines.forEach((line, i) => {
+      ctx.fillText(line, x, (originY + i * plan.lineHeight) * pxPerPoint)
     })
-  }, [session, availableFontIds, hotspotNeedsFallbackFont])
+  }, [session, availableFontIds])
 
   /** Draw a replacement image directly onto the page's canvas — no network call. */
   const drawImageEditOnCanvas = useCallback(async (hotspot: PdfHotspot, file: File) => {
@@ -962,6 +986,10 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
     observer.observe(el)
     return () => observer.disconnect()
   }, [])
+
+  useEffect(() => {
+    editingHotspotIdRef.current = editingHotspotId
+  }, [editingHotspotId])
 
   // ── Added items (overlays) ──────────────────────────────────────────────────
 
@@ -1277,18 +1305,63 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
     setEditingHotspotId(hotspot.id)
     setEditingValue(hotspot.text)
     setEditingBackground(bg)
+    // Reset rather than reuse stale state from whatever was open before —
+    // the real patch loads asynchronously below, and the sampled `bg` above
+    // is what the preview shows in the meantime.
+    setEditingCleanPatch(null)
+    void loadCleanPatchForEditing(hotspot)
+  }
+
+  /**
+   * Fetches (or reuses the cache from) the document's REAL background
+   * behind `hotspot`, decodes it, and — only if the edit modal is still
+   * open on this SAME hotspot once that's done — makes it the live
+   * preview's background, in place of the sampled flat colour.
+   *
+   * Reuses cleanPatchCacheRef, the exact same cache drawTextEditOnCanvas
+   * reads at Save time, so opening the modal and then saving never fetches
+   * the same patch twice.
+   */
+  async function loadCleanPatchForEditing(hotspot: PdfTextHotspot) {
+    if (!session) return
+    let patch = cleanPatchCacheRef.current[hotspot.id]
+    if (patch === undefined) {
+      try {
+        patch = await fetchPdfMasterCleanPatch(session.session_id, hotspot.originalId)
+      } catch {
+        patch = null
+      }
+      cleanPatchCacheRef.current[hotspot.id] = patch
+    }
+    // The modal may have been closed, or reopened on a DIFFERENT hotspot,
+    // while the request above was in flight — applying this result then
+    // would paint the wrong hotspot's background into whatever is open now.
+    if (editingHotspotIdRef.current !== hotspot.id) return
+    if (!patch?.patch || patch.rect.length !== 4) {
+      setEditingCleanPatch(null)
+      return
+    }
+    const img = await loadImageFromBase64Png(patch.patch)
+    if (editingHotspotIdRef.current !== hotspot.id) return // same race, after the decode too
+    setEditingCleanPatch({ img, rect: patch.rect as [number, number, number, number] })
   }
 
   /** Close the edit modal WITHOUT saving — Cancel button, Escape, or a click
    * outside the dialog (all routed through the Dialog's onOpenChange). */
   function cancelEditText() {
     setEditingHotspotId(null)
+    setEditingCleanPatch(null)
   }
 
   /** Lay out `text` inside `hotspot` using the document's own typeface —
-   * the single place layout is decided, so the page canvas, the modal
-   * preview and the exported PDF can never disagree about it. */
-  const fitForHotspot = useCallback((hotspot: PdfTextHotspot, text: string): FitResult => {
+   * the ONE place per edit this is decided (see PdfTextRenderPlan), so the
+   * page canvas, the modal preview and the pending-edit record all read the
+   * same answer instead of each asking the question themselves. The
+   * fallback check runs here against `text` — the text actually being laid
+   * out — never against `hotspot.text`, which may already be stale by the
+   * time a caller reaches for it. */
+  const fitForHotspot = useCallback((hotspot: PdfTextHotspot, text: string): PdfTextRenderPlan => {
+    const useFallbackFont = hotspotNeedsFallbackFont(hotspot, text)
     return fitText(
       text,
       {
@@ -1296,6 +1369,7 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
         bold: hotspot.bold,
         italic: hotspot.italic,
         size: hotspot.size,
+        align: hotspot.align,
         boxWidthPts: hotspot.bbox[2] - hotspot.bbox[0],
         boxHeightPts: hotspot.bbox[3] - hotspot.bbox[1],
         lineHeightPts: effectiveLineHeight(hotspot),
@@ -1303,12 +1377,10 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
       // Session STATE, not sessionIdRef: this runs during render (to lay out
       // whatever is currently typed), and a ref read there can go stale
       // without re-rendering.
-      // Withhold the session id when the real face can't draw this text —
-      // that's what makes every measurement fall back in step with the
-      // drawing, instead of measuring one font and painting another.
-      hotspotNeedsFallbackFont(hotspot, text) ? null : (session?.session_id ?? null),
+      session?.session_id ?? null,
       availableFontIds,
       autoFit,
+      useFallbackFont,
     )
   }, [session, availableFontIds, autoFit, hotspotNeedsFallbackFont])
 
@@ -1330,9 +1402,9 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
    * the original hotspot's bbox. Purely cosmetic: the cover/redaction area
    * used to hide the OLD content always stays the full original bbox
    * regardless of this (see hotspotVisualHeightPts's declaration). */
-  function updateHotspotVisualHeight(hotspot: PdfHotspot, fit: FitResult) {
+  function updateHotspotVisualHeight(hotspot: PdfHotspot, plan: PdfTextRenderPlan) {
     if (hotspot.type !== "text") return
-    if (fit.lines.length === 0) {
+    if (plan.lines.length === 0) {
       setHotspotVisualHeightPts((prev) => {
         if (!(hotspot.id in prev)) return prev
         const next = { ...prev }
@@ -1341,7 +1413,7 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
       })
       return
     }
-    setHotspotVisualHeightPts((prev) => ({ ...prev, [hotspot.id]: fit.heightPts }))
+    setHotspotVisualHeightPts((prev) => ({ ...prev, [hotspot.id]: plan.heightPts }))
   }
 
   /** Save — the modal's Save button (or Ctrl/Cmd+Enter) is now the ONLY path
@@ -1356,27 +1428,44 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
 
     const newText = editingValue
     setEditingHotspotId(null)
+    setEditingCleanPatch(null)
     if (newText === hotspot.text) return
 
-    // The layout is computed ONCE here and reused for everything: drawn on
+    // The plan is computed ONCE here and reused for everything: drawn on
     // the page canvas, stored for the box's visual height, and sent to the
     // server as the exact lines/size to draw. That's what makes the export
     // reproduce what was previewed instead of being re-wrapped independently.
-    const fit = fitForHotspot(hotspot, newText)
+    const plan = fitForHotspot(hotspot, newText)
 
     // No server round-trip — just draw it and remember it for Download.
-    void drawTextEditOnCanvas(hotspot, fit, editingBackground)
+    void drawTextEditOnCanvas(hotspot, plan, editingBackground)
     pendingEditsRef.current[hotspot.id] = {
       hotspotId: hotspot.id,
       originalHotspotId: hotspot.originalId,
       type: "text",
       value: newText,
-      lines: fit.lines,
-      fontSize: fit.fontSize,
+      lines: plan.lines,
+      fontSize: plan.fontSize,
+      // Frontend-only, not sent to the server yet (see
+      // applyPdfMasterEditsAndExport's explicit field list) — kept so the
+      // decision this plan already made isn't lost if something needs it
+      // again before the backend is taught to accept it directly.
+      lineHeight: plan.lineHeight,
+      direction: plan.direction,
+      align: plan.align,
+      useFallbackFont: plan.useFallbackFont,
     }
-    setHotspots((prev) => ({ ...prev, [hotspot.id]: { ...hotspot, text: newText } }))
+    setHotspots((prev) => ({
+      ...prev,
+      // rtl updates to match the NEW text's own direction (see
+      // pdfTextFit.ts's detectTextDirection) — replacing English with
+      // Hebrew (or the reverse) must not leave the hotspot's stored
+      // direction describing text that's no longer there, so a later
+      // re-open starts from the right direction too.
+      [hotspot.id]: { ...hotspot, text: newText, rtl: plan.direction === "rtl" },
+    }))
     markHotspotRemoved(hotspot.id, newText.trim() === "")
-    updateHotspotVisualHeight(hotspot, fit)
+    updateHotspotVisualHeight(hotspot, plan)
   }
 
   /** Clear a text hotspot straight from its "✕" button — same result as
@@ -1387,17 +1476,17 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
     const pageInfo = session?.pages.find((p) => p.page === hotspot.page)
     const bg = canvas && pageInfo ? sampleBackgroundColor(canvas, hotspot.bbox, pageInfo.width) : "#ffffff"
 
-    const fit = fitForHotspot(hotspot, "")
-    void drawTextEditOnCanvas(hotspot, fit, bg)
+    const plan = fitForHotspot(hotspot, "")
+    void drawTextEditOnCanvas(hotspot, plan, bg)
     pendingEditsRef.current[hotspot.id] = {
       hotspotId: hotspot.id,
       originalHotspotId: hotspot.originalId,
       type: "text",
       value: "",
     }
-    setHotspots((prev) => ({ ...prev, [hotspot.id]: { ...hotspot, text: "" } }))
+    setHotspots((prev) => ({ ...prev, [hotspot.id]: { ...hotspot, text: "", rtl: plan.direction === "rtl" } }))
     markHotspotRemoved(hotspot.id, true)
-    updateHotspotVisualHeight(hotspot, fit)
+    updateHotspotVisualHeight(hotspot, plan)
     toast.success(t("pdfTemplates.masterTextRemoved"))
   }
 
@@ -1533,20 +1622,22 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
   // to give TypeScript that same guarantee for the .rtl/.text access below.
   const editingHotspotRaw = editingHotspotId ? hotspots[editingHotspotId] : null
   const editingHotspot = editingHotspotRaw?.type === "text" ? editingHotspotRaw : null
-  // Live layout of whatever is currently typed, in the document's own face.
-  // This replaced a character cap (new.length <= old.length), which was the
-  // wrong unit entirely: a box cares about WIDTH, and "WWWWW" is roughly
-  // three times the width of "iiiii" at the same character count — so the
-  // cap simultaneously blocked edits that would have fit and allowed ones
-  // that couldn't. Measuring the real thing is both more permissive and more
-  // accurate.
-  const editingFit = editingHotspot ? fitForHotspot(editingHotspot, editingValue) : null
+  // The single render decision for whatever is CURRENTLY typed — layout,
+  // font-fallback, direction and alignment together (see
+  // PdfTextRenderPlan). This replaced a character cap (new.length <=
+  // old.length), which was the wrong unit entirely: a box cares about
+  // WIDTH, and "WWWWW" is roughly three times the width of "iiiii" at the
+  // same character count — so the cap simultaneously blocked edits that
+  // would have fit and allowed ones that couldn't. Measuring the real thing
+  // is both more permissive and more accurate. Every other place that needs
+  // any of these answers (the textarea's dir/align, the live preview, the
+  // hotspot outline's overflow state) reads THIS object rather than asking
+  // its own version of the same question.
+  const editingPlan = editingHotspot ? fitForHotspot(editingHotspot, editingValue) : null
   // The face genuinely used for this box. When the document's own font isn't
   // available the preview is an approximation, and saying so is better than
   // quietly showing something that won't match the export.
-  const editingUsesRealFont = editingHotspot
-    ? !hotspotNeedsFallbackFont(editingHotspot, editingValue)
-    : true
+  const editingUsesRealFont = !editingPlan?.useFallbackFont
 
   // The current document, as the organizer needs to see it. Every entry
   // starts out as a real page (clientId set); the dialog may add entries
@@ -1733,7 +1824,7 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
                         // rather than measuring again — one verdict, so the
                         // box outline and the modal can never disagree about
                         // whether the current text fits.
-                        isOverflowing = editingFit?.overflows ?? false
+                        isOverflowing = editingPlan?.overflows ?? false
                       } else {
                         const stored = hotspotVisualHeightPts[h.id]
                         if (stored != null) effectiveHeightPts = stored
@@ -1956,7 +2047,13 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
 
           <Textarea
             ref={textareaRef}
-            dir={editingHotspot?.rtl ? "rtl" : "ltr"}
+            // Direction/alignment follow whatever is CURRENTLY typed (see
+            // editingPlan, derived fresh from editingValue on every
+            // keystroke) — not the hotspot's original PDF direction, which
+            // describes text that may no longer be there. Typing Hebrew
+            // over an English original flips this immediately, and back
+            // again if it's typed back over.
+            dir={editingPlan?.direction ?? "ltr"}
             value={editingValue}
             onChange={(e) => setEditingValue(e.target.value)}
             onKeyDown={(e) => {
@@ -1971,7 +2068,7 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
               // unambiguous action.
             }}
             className="max-h-40 min-h-24 overflow-y-auto text-base"
-            style={{ textAlign: editingHotspot?.rtl ? "right" : "left" }}
+            style={{ textAlign: editingPlan?.align ?? "left" }}
           />
 
           {/* Live preview — the replacement drawn in the document's real
@@ -1980,7 +2077,7 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
               is an approximation of it. Seeing the result while typing is
               what the image-replacement flow already gets right and what a
               bare textarea + character counter never could. */}
-          {editingHotspot && editingFit && (
+          {editingHotspot && editingPlan && (
             <div className="space-y-2">
               <div className="flex items-center justify-between gap-3">
                 <span className="text-xs font-medium text-muted-foreground">
@@ -1999,10 +2096,11 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
 
               <PdfTextPreview
                 hotspot={editingHotspot}
-                fit={editingFit}
+                plan={editingPlan}
                 sessionId={session?.session_id ?? null}
                 availableFontIds={availableFontIds}
                 background={editingBackground}
+                backgroundPatch={editingCleanPatch}
               />
 
               {/* Real fit feedback, in the units that actually matter —
@@ -2010,16 +2108,16 @@ export function PdfMasterCustomizer({ template }: PdfMasterCustomizerProps) {
                   correlates poorly with whether anything fits. */}
               <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
                 <span className="text-muted-foreground">
-                  {t("pdfTemplates.masterEditTextLines", { count: editingFit.lines.length })}
+                  {t("pdfTemplates.masterEditTextLines", { count: editingPlan.lines.length })}
                 </span>
-                {editingFit.shrunk && !editingFit.overflows && (
+                {editingPlan.shrunk && !editingPlan.overflows && (
                   <span className="text-muted-foreground">
                     {t("pdfTemplates.masterEditTextShrunk", {
-                      percent: Math.round((editingFit.fontSize / editingHotspot.size) * 100),
+                      percent: Math.round((editingPlan.fontSize / editingHotspot.size) * 100),
                     })}
                   </span>
                 )}
-                {editingFit.overflows && (
+                {editingPlan.overflows && (
                   <span className="font-medium text-destructive">
                     {t("pdfTemplates.masterEditTextOverflows")}
                   </span>

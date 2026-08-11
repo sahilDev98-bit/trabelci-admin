@@ -1,17 +1,33 @@
 import { useEffect, useRef } from "react"
 
-import type { PdfTextHotspot } from "@/features/pdfTemplates/types"
+import type { PdfTextHotspot, PdfTextRenderPlan } from "@/features/pdfTemplates/types"
 import { hotspotCanvasFont } from "./pdfFonts"
-import type { FitResult } from "./pdfTextFit"
+
+/** A background patch already decoded and ready to draw — see
+ * PdfMasterCustomizer's loadCleanPatchForEditing. `rect` is the same PDF-point
+ * rect the server redacted, which is padded very slightly wider than the
+ * hotspot's own bbox (matching the export's own padding). */
+export interface PdfTextPreviewBackgroundPatch {
+  img: HTMLImageElement
+  rect: [number, number, number, number]
+}
 
 interface PdfTextPreviewProps {
   hotspot: PdfTextHotspot
-  fit: FitResult
+  /** The single render decision this preview draws — see
+   * PdfTextRenderPlan. Not recomputed here; this component's only job is to
+   * paint exactly what it's given. */
+  plan: PdfTextRenderPlan
   sessionId: string | null
   availableFontIds: Set<string>
-  /** Page background sampled from behind the real hotspot, so the preview
-   * sits on the colour the text will actually land on. */
+  /** Sampled flat-colour fallback, used ONLY when `backgroundPatch` is
+   * unavailable (the clean-patch request failed, or hasn't resolved yet). */
   background: string
+  /** The document's REAL background behind this hotspot, redacted server-side
+   * — see fetchPdfMasterCleanPatch. Preferred over `background` whenever
+   * present, since a sampled flat colour is only ever a rough guess and shows
+   * as an obvious grey rectangle over a photo or gradient. */
+  backgroundPatch?: PdfTextPreviewBackgroundPatch | null
 }
 
 /** How wide the preview canvas is drawn, in CSS pixels. The box is scaled to
@@ -23,15 +39,17 @@ const MAX_PREVIEW_SCALE = 3
 
 /**
  * Renders the replacement text exactly as it will appear in the exported
- * PDF: the document's own typeface, its real size (after auto-fit), its real
- * line spacing, wrapped at the real box width, on the real background.
+ * PDF: the document's own typeface (or the shared fallback, per the plan),
+ * its real size (after auto-fit), its real line spacing, wrapped at the
+ * real box width, on the real background, in the right direction and
+ * alignment — all of it read from `plan`, none of it recomputed here.
  *
  * This is the core of making text editing feel like the image flow, which
  * users already trust — you upload an image and immediately see the result.
  * Typing into a bare textarea with a character counter gave no such feedback,
  * so the only way to discover a bad result was to download the file.
  */
-export function PdfTextPreview({ hotspot, fit, sessionId, availableFontIds, background }: PdfTextPreviewProps) {
+export function PdfTextPreview({ hotspot, plan, sessionId, availableFontIds, background, backgroundPatch }: PdfTextPreviewProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
 
   useEffect(() => {
@@ -47,7 +65,7 @@ export function PdfTextPreview({ hotspot, fit, sessionId, availableFontIds, back
     // Tall enough for whatever the text actually needs, so overflow is
     // visible as text spilling past the box outline rather than being
     // silently clipped away — seeing the overflow is the whole point.
-    const contentHeightPts = Math.max(boxHeightPts, fit.heightPts)
+    const contentHeightPts = Math.max(boxHeightPts, plan.heightPts)
     const padPts = 6
     const cssWidth = boxWidthPts * scale
     const cssHeight = (contentHeightPts + padPts * 2) * scale
@@ -60,8 +78,20 @@ export function PdfTextPreview({ hotspot, fit, sessionId, availableFontIds, back
 
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
     ctx.clearRect(0, 0, cssWidth, cssHeight)
-    ctx.fillStyle = background
-    ctx.fillRect(0, 0, cssWidth, cssHeight)
+
+    if (backgroundPatch) {
+      // The patch's rect is in the same PDF-point space as hotspot.bbox, so
+      // translating it into this canvas's local coordinates is the same
+      // bbox-relative-plus-padPts math the flat-fill path below uses,
+      // applied to an image instead of a solid colour.
+      const [rx0, ry0, rx1, ry1] = backgroundPatch.rect
+      const localX = (rx0 - hotspot.bbox[0]) * scale
+      const localY = (padPts + (ry0 - hotspot.bbox[1])) * scale
+      ctx.drawImage(backgroundPatch.img, localX, localY, (rx1 - rx0) * scale, (ry1 - ry0) * scale)
+    } else {
+      ctx.fillStyle = background
+      ctx.fillRect(0, 0, cssWidth, cssHeight)
+    }
 
     // The original box outline, so it's obvious how much room there is and
     // whether the text is about to run past it.
@@ -71,25 +101,28 @@ export function PdfTextPreview({ hotspot, fit, sessionId, availableFontIds, back
     ctx.strokeRect(0.5, padPts * scale + 0.5, cssWidth - 1, boxHeightPts * scale)
     ctx.setLineDash([])
 
-    if (fit.lines.length === 0) return
+    if (plan.lines.length === 0) return
 
     const color = hotspot.color
     ctx.fillStyle = `rgb(${(color >> 16) & 255}, ${(color >> 8) & 255}, ${color & 255})`
-    ctx.font = hotspotCanvasFont(hotspot, sessionId, availableFontIds, fit.fontSize * scale)
-    ctx.direction = hotspot.rtl ? "rtl" : "ltr"
-    ctx.textAlign = hotspot.rtl ? "right" : "left"
+    ctx.font = hotspotCanvasFont(hotspot, sessionId, availableFontIds, plan.fontSize * scale, plan.useFallbackFont)
+    ctx.direction = plan.direction
+    ctx.textAlign = plan.align
     ctx.textBaseline = "alphabetic"
 
     // Anchor the first baseline the same way the export does: relative to the
     // top of the box, not its bottom, so a multi-line block grows downward
     // from where its first line really sits.
     const firstBaselinePts = hotspot.originY - hotspot.bbox[1]
-    const x = hotspot.rtl ? cssWidth : 0
-    fit.lines.forEach((line, i) => {
-      const yPts = padPts + firstBaselinePts + i * fit.lineHeight
+    // The x anchor follows alignment, not direction directly: "left" hugs
+    // the box's own left edge, "right" its right edge, "center" its middle
+    // — ctx.textAlign then does the actual per-glyph positioning from there.
+    const x = plan.align === "right" ? cssWidth : plan.align === "center" ? cssWidth / 2 : 0
+    plan.lines.forEach((line, i) => {
+      const yPts = padPts + firstBaselinePts + i * plan.lineHeight
       ctx.fillText(line, x, yPts * scale)
     })
-  }, [hotspot, fit, sessionId, availableFontIds, background])
+  }, [hotspot, plan, sessionId, availableFontIds, background, backgroundPatch])
 
   return (
     <div className="overflow-auto rounded-lg border bg-muted/30 p-3">

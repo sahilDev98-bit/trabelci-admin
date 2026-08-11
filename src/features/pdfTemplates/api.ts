@@ -10,6 +10,7 @@ import type {
   PdfSessionJobStatus,
   PdfSessionFont,
   PdfOverlay,
+  PdfTextAlign,
 } from "./types"
 
 // ── Fetch helpers ─────────────────────────────────────────────────────────────
@@ -155,7 +156,29 @@ export async function fetchPdfMasterCleanPatch(
 // independent algorithm on the server. Both are optional; the server falls
 // back to wrapping itself when they're absent.
 export type PdfMasterPendingEdit =
-  | { hotspotId: string; originalHotspotId: string; type: "text"; value: string; lines?: string[]; fontSize?: number }
+  | {
+      hotspotId: string
+      originalHotspotId: string
+      type: "text"
+      value: string
+      lines?: string[]
+      fontSize?: number
+      /**
+       * The rest of the shared PdfTextRenderPlan (see types.ts), kept here
+       * purely so the frontend doesn't throw away a decision it already
+       * made. Deliberately NOT part of applyPdfMasterEditsAndExport's
+       * network payload below — that function builds the request body from
+       * an explicit field list, not a spread, so adding fields here cannot
+       * change what's sent until that list is updated too. The backend
+       * will be taught to accept these directly in a later phase; until
+       * then, sending them would be pretending the current server
+       * understands something it doesn't.
+       */
+      lineHeight?: number
+      direction?: "ltr" | "rtl"
+      align?: PdfTextAlign
+      useFallbackFont?: boolean
+    }
   | { hotspotId: string; originalHotspotId: string; type: "image"; file: File }
   | { hotspotId: string; originalHotspotId: string; type: "image"; remove: true }
 

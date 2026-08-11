@@ -71,7 +71,19 @@ export interface PdfTextHotspot extends PdfHotspotBase {
    * single-line box but anchors a multi-line paragraph's replacement text
    * at the very bottom of the whole block. */
   originY: number
+  /** Direction of the ORIGINAL PDF text at analysis time. Editing derives
+   * direction fresh from whatever is currently typed (see
+   * pdfTextFit.ts's detectTextDirection) rather than trusting this while a
+   * hotspot is being edited — this field is what a fresh page load starts
+   * from, and what gets written back after a save (see commitEditText) so a
+   * later re-open still starts from the right direction. */
   rtl: boolean
+  /** The backend does not send this yet — always undefined today. When
+   * absent, the frontend falls back to the safe default (RTL → right,
+   * LTR → left) rather than claiming to know the PDF's true original
+   * alignment. See PdfTextRenderPlan.align for where the resolved value
+   * actually gets used. */
+  align?: PdfTextAlign
 }
 
 export interface PdfImageHotspot extends PdfHotspotBase {
@@ -132,7 +144,12 @@ export interface PdfImageOverlay extends PdfOverlayBase {
   previewUrl: string
 }
 
-export type PdfOverlayAlign = "left" | "center" | "right"
+/** Shared alignment type for anything that draws text: existing PDF text
+ * hotspots (PdfTextHotspot.align, PdfTextRenderPlan.align) and user-added
+ * text overlays alike. `PdfOverlayAlign` is kept as a name so existing
+ * overlay code (PdfOverlayToolbar.tsx) doesn't need to change imports. */
+export type PdfTextAlign = "left" | "center" | "right"
+export type PdfOverlayAlign = PdfTextAlign
 
 export interface PdfTextOverlay extends PdfOverlayBase {
   type: "text"
@@ -150,6 +167,48 @@ export interface PdfTextOverlay extends PdfOverlayBase {
 }
 
 export type PdfOverlay = PdfImageOverlay | PdfTextOverlay
+
+/**
+ * The single decision about how to render one text edit — wrapping, size,
+ * font choice, direction and alignment — computed ONCE (see pdfTextFit.ts's
+ * fitText) and then just read by every consumer (the live modal preview,
+ * the page canvas after Save, the pending-edit record). Before this existed
+ * the same questions ("does this need the fallback font?", "is this RTL?")
+ * got asked independently in three different places, sometimes against the
+ * OLD text instead of the text actually being drawn — which is exactly how
+ * typing "Yash" over "Carnaby" rendered as "ash": the fallback check ran
+ * against "Carnaby" (which the embedded font COULD draw) instead of "Yash"
+ * (which it couldn't).
+ */
+export interface PdfTextRenderPlan {
+  /** The exact text this plan was computed for. */
+  text: string
+  /** Wrapped lines, in logical (typed) order. */
+  lines: string[]
+  /** Final font size in points — below the hotspot's own size when auto-fit
+   * shrank it. */
+  fontSize: number
+  /** Final baseline-to-baseline spacing, scaled with fontSize. */
+  lineHeight: number
+  /** Total visible height the lines occupy, PDF points. */
+  heightPts: number
+  /** True when the text still doesn't fit even at the smallest allowed size. */
+  overflows: boolean
+  /** True when auto-fit had to reduce the size to make it fit. */
+  shrunk: boolean
+  /** True when the document's own embedded font cannot draw this text (a
+   * subset missing an outline for one of its characters — see
+   * pdfFonts.ts's fontCanDraw) and the generic fallback face must be used
+   * instead, for measuring AND drawing alike. */
+  useFallbackFont: boolean
+  /** Detected fresh from THIS text (see pdfTextFit.ts's detectTextDirection)
+   * — not the hotspot's original PDF direction, which can be wrong the
+   * moment the language of the replacement text changes. */
+  direction: "ltr" | "rtl"
+  /** Resolved alignment: the hotspot's own align if the backend ever sends
+   * one, otherwise the safe default (right for RTL, left for LTR). */
+  align: PdfTextAlign
+}
 
 export interface PdfSessionPage {
   page: number
