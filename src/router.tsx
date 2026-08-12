@@ -47,6 +47,7 @@ const CreatePdfPage = lazy(() => import("@/pages/create-pdf/CreatePdfPage").then
 const PdfTemplateEditorPage = lazy(() => import("@/pages/create-pdf/PdfTemplateEditorPage").then(m => ({ default: m.PdfTemplateEditorPage })))
 const PdfCustomizerPage = lazy(() => import("@/pages/create-pdf/PdfCustomizerPage").then(m => ({ default: m.PdfCustomizerPage })))
 const AiImagesPage = lazy(() => import("@/pages/create-pdf/AiImagesPage").then(m => ({ default: m.AiImagesPage })))
+const PdfEngineEditorPage = lazy(() => import("@/pages/create-pdf/engine-editor/PdfEngineEditorPage").then(m => ({ default: m.PdfEngineEditorPage })))
 const ExtractProductPdfPage = lazy(() => import("@/pages/extract-product-pdf/ExtractProductPdfPage").then(m => ({ default: m.ExtractProductPdfPage })))
 
 const SuspenseFallback = (
@@ -347,6 +348,15 @@ const pdfCustomizerRoute = createRoute({
   component: PdfCustomizerPage,
 })
 
+// Runs beside pdfCustomizerRoute rather than replacing it: the existing
+// editor stays the one users reach, and this one can be developed against
+// real templates without any risk to it.
+const pdfEngineEditorRoute = createRoute({
+  getParentRoute: () => appLayoutRoute,
+  path: "/create-pdf/customize-v2/$templateId",
+  component: PdfEngineEditorPage,
+})
+
 const aiImagesRoute = createRoute({
   getParentRoute: () => appLayoutRoute,
   path: "/ai-images",
@@ -391,6 +401,7 @@ const routeTree = rootRoute.addChildren([
     pdfTemplateNewRoute,
     pdfTemplateEditRoute,
     pdfCustomizerRoute,
+    pdfEngineEditorRoute,
     aiImagesRoute,
     extractProductPdfRoute,
   ]),

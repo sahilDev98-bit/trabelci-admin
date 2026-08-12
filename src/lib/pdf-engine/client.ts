@@ -1,0 +1,138 @@
+/**
+ * UI-thread client for the PDF engine worker.
+ *
+ * Presents ordinary awaitable methods, so calling code never deals with
+ * postMessage plumbing. One instance owns one worker; create it when the
+ * editor mounts and terminate() it when the editor unmounts, or the worker
+ * (and the PDF it holds in WASM memory) outlives the screen that needed it.
+ */
+import type {
+  EngineMethods, EngineMethodName, EngineRequest, EngineResponse,
+  EnginePage, EngineTextLine, EngineImage, RenderedPage,
+  EditTextOptions, TextOverlayRequest, ImageOverlayRequest, PagePlanRequest,
+} from "./protocol"
+
+type Pending = { resolve: (value: unknown) => void; reject: (reason: Error) => void }
+
+export class PdfEngineClient {
+  private worker: Worker
+  private pending = new Map<number, Pending>()
+  private nextId = 1
+  private terminated = false
+
+  constructor() {
+    this.worker = new Worker(new URL("./worker.ts", import.meta.url), { type: "module" })
+    this.worker.onmessage = (event: MessageEvent<EngineResponse>) => {
+      const msg = event.data
+      const entry = this.pending.get(msg.id)
+      if (!entry) return
+      this.pending.delete(msg.id)
+      if (msg.ok) entry.resolve(msg.result)
+      else entry.reject(new Error(msg.error))
+    }
+    // A worker-level failure (a bad import, an out-of-memory abort) never
+    // answers any in-flight request, so every caller would hang forever.
+    // Failing them all loudly is the only honest response.
+    this.worker.onerror = (event) => {
+      const error = new Error(`PDF engine worker failed: ${event.message}`)
+      for (const [, entry] of this.pending) entry.reject(error)
+      this.pending.clear()
+    }
+  }
+
+  private call<M extends EngineMethodName>(
+    method: M,
+    params: EngineMethods[M]["params"],
+    transfer: Transferable[] = [],
+  ): Promise<EngineMethods[M]["result"]> {
+    if (this.terminated) return Promise.reject(new Error("PDF engine client has been terminated"))
+    const id = this.nextId++
+    const request: EngineRequest<M> = { id, method, params }
+    return new Promise<EngineMethods[M]["result"]>((resolve, reject) => {
+      this.pending.set(id, { resolve: resolve as (v: unknown) => void, reject })
+      this.worker.postMessage(request, transfer)
+    })
+  }
+
+  /** Opens a PDF. The ArrayBuffer is TRANSFERRED — the caller's copy is
+   * detached afterwards, which is what avoids duplicating a 9MB catalogue
+   * in memory just to hand it over. */
+  open(bytes: ArrayBuffer): Promise<{ docId: string; pages: EnginePage[] }> {
+    return this.call("open", { bytes }, [bytes])
+  }
+
+  close(docId: string): Promise<{ closed: boolean }> {
+    return this.call("close", { docId })
+  }
+
+  listPages(docId: string): Promise<{ pages: EnginePage[] }> {
+    return this.call("listPages", { docId })
+  }
+
+  renderPage(docId: string, pageIndex: number, scale = 1): Promise<RenderedPage> {
+    return this.call("renderPage", { docId, pageIndex, scale })
+  }
+
+  listTextLines(docId: string, pageIndex: number): Promise<{ lines: EngineTextLine[] }> {
+    return this.call("listTextLines", { docId, pageIndex })
+  }
+
+  editTextLine(
+    docId: string, pageIndex: number, lineIndex: number, newText: string, options?: EditTextOptions,
+  ): Promise<EngineMethods["editTextLine"]["result"]> {
+    return this.call("editTextLine", { docId, pageIndex, lineIndex, newText, options })
+  }
+
+  listImages(docId: string, pageIndex: number): Promise<{ images: EngineImage[] }> {
+    return this.call("listImages", { docId, pageIndex })
+  }
+
+  replaceImage(
+    docId: string, pageIndex: number, imageIndex: number, bytes: ArrayBuffer, kind: "png" | "jpeg",
+  ): Promise<{ ok: boolean }> {
+    return this.call("replaceImage", { docId, pageIndex, imageIndex, bytes, kind }, [bytes])
+  }
+
+  removeImage(docId: string, pageIndex: number, imageIndex: number): Promise<{ ok: boolean }> {
+    return this.call("removeImage", { docId, pageIndex, imageIndex })
+  }
+
+  addTextOverlay(docId: string, pageIndex: number, overlay: TextOverlayRequest): Promise<{ ok: boolean }> {
+    return this.call("addTextOverlay", { docId, pageIndex, overlay })
+  }
+
+  addImageOverlay(
+    docId: string, pageIndex: number, overlay: ImageOverlayRequest, bytes: ArrayBuffer, kind: "png" | "jpeg",
+  ): Promise<{ ok: boolean }> {
+    return this.call("addImageOverlay", { docId, pageIndex, overlay, bytes, kind }, [bytes])
+  }
+
+  /** Duplicate / reorder / delete / rotate, all expressed as the list of
+   * pages the document should contain. */
+  applyPagePlan(docId: string, plan: PagePlanRequest[]): Promise<{ docId: string; pages: EnginePage[] }> {
+    return this.call("applyPagePlan", { docId, plan })
+  }
+
+  save(docId: string): Promise<{ bytes: ArrayBuffer }> {
+    return this.call("save", { docId })
+  }
+
+  terminate(): void {
+    this.terminated = true
+    for (const [, entry] of this.pending) entry.reject(new Error("PDF engine client terminated"))
+    this.pending.clear()
+    this.worker.terminate()
+  }
+}
+
+/** Paints a rendered page into a canvas. Kept here so callers don't have
+ * to know the engine returns raw RGBA rather than an image. */
+export function drawRenderedPage(canvas: HTMLCanvasElement, page: RenderedPage): void {
+  canvas.width = page.width
+  canvas.height = page.height
+  const ctx = canvas.getContext("2d")
+  if (!ctx) return
+  const imageData = ctx.createImageData(page.width, page.height)
+  imageData.data.set(new Uint8ClampedArray(page.rgba))
+  ctx.putImageData(imageData, 0, 0)
+}

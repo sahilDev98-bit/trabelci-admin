@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>PDF Engine Smoke Test</title>
+  </head>
+  <body>
+    <!--
+      Dev-only verification page for the PDF engine. Deliberately NOT the
+      app: loading the real admin SPA runs its auth guard, which redirects
+      and destroys the page context mid-test. This page has no router, no
+      auth and no React, so the engine is the only thing under test.
+
+      Vite serves this in development. It is not listed as a build input,
+      so it is not part of any production bundle.
+    -->
+    <h1>PDF Engine Smoke Test</h1>
+    <p id="status">running…</p>
+    <pre id="output"></pre>
+    <script type="module">
+      const statusEl = document.getElementById("status")
+      const outputEl = document.getElementById("output")
+      try {
+        const params = new URLSearchParams(location.search)
+        const pdfUrl = params.get("pdf") ?? undefined
+        const mod = await import("/src/lib/pdf-engine/smoketest.ts")
+        const result = await mod.runPdfEngineSmokeTest(pdfUrl)
+        window.__SMOKE_RESULT__ = result
+        statusEl.textContent = result.ok ? "PASSED" : "FAILED"
+        outputEl.textContent = JSON.stringify(result, null, 2)
+      } catch (err) {
+        window.__SMOKE_RESULT__ = { ok: false, steps: [], errors: [String(err)], timings: {}, details: {} }
+        statusEl.textContent = "FAILED"
+        outputEl.textContent = String(err && err.stack ? err.stack : err)
+      } finally {
+        window.__SMOKE_DONE__ = true
+      }
+    </script>
+  </body>
+</html>

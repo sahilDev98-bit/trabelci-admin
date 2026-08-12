@@ -80,6 +80,26 @@ export async function fetchPdfMasterSessionJobStatus(jobId: string): Promise<Pdf
   })
 }
 
+/**
+ * The template's ORIGINAL PDF bytes, for the PDFium browser-side editor.
+ *
+ * Deliberately not a direct fetch of template.source_pdf_url: R2 serves
+ * those objects without CORS headers, so the browser blocks a cross-origin
+ * read before it even starts. Going through the API — which does have CORS
+ * configured — is what makes browser-side editing work, and it also puts
+ * the file behind a login rather than leaving it readable by anyone with
+ * the link.
+ */
+export async function fetchPdfMasterTemplateSource(
+  templateId: string,
+  onDownloadProgress?: (progress: DownloadProgress) => void,
+): Promise<ArrayBuffer> {
+  return apiFetch<ArrayBuffer>(`${API_ENDPOINTS.PDF_MASTER_TEMPLATES}/${templateId}/source`, {
+    responseType: "arraybuffer",
+    onDownloadProgress,
+  })
+}
+
 /** Full working-copy PDF bytes — used once, for the initial render of every
  * page. onDownloadProgress (optional) reports real bytes-received-vs-total
  * as this streams in, for callers driving a progress indicator off it. */

@@ -29,6 +29,10 @@ export const ROUTES = {
   CREATE_PDF_TEMPLATE_NEW: "/create-pdf/templates/new",
   CREATE_PDF_TEMPLATE_EDIT: "/create-pdf/templates/$templateId",
   CREATE_PDF_CUSTOMIZE: "/create-pdf/customize/$templateId",
+  /** PDFium-engine editor, running alongside CREATE_PDF_CUSTOMIZE while it
+   * is brought up to feature parity. Not linked from the UI yet — reached
+   * by URL during development. */
+  CREATE_PDF_CUSTOMIZE_V2: "/create-pdf/customize-v2/$templateId",
   AI_IMAGES: "/ai-images",
   EXTRACT_PRODUCT_PDF: "/extract-product-pdf",
 } as const

@@ -1027,6 +1027,12 @@ const he = {
     pageRemoved: "העמוד הוסר",
     masterTextOverflow: "הטקסט הזה כבר לא נכנס לשטח המקורי שלו ועלול לחפוף לתוכן סמוך",
     masterEditTextTitle: "עריכת טקסט",
+    // PDFium-engine editor (runs alongside the existing one while it is
+    // brought to parity — see ROUTES.CREATE_PDF_CUSTOMIZE_V2).
+    engineDownloading: "טוען PDF",
+    engineOpening: "מכין את העורך",
+    engineEditableSlots: "{{count}} שדות ניתנים לעריכה",
+    engineEditorOnlyMaster: "עורך זה תומך רק בתבניות PDF שהועלו.",
     masterEditTextOriginal: "מקורי",
     masterEditTextTooLong: "ארוך מדי — קצר כדי לשמור",
     masterImageTooLarge: "התמונה במשקל {{mb}} MB — גדולה מדי לשליחה. אנא השתמשו בתמונה קטנה יותר.",

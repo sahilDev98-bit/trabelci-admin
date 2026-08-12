@@ -1,0 +1,272 @@
+/// <reference lib="webworker" />
+/**
+ * The PDF engine worker.
+ *
+ * Everything PDFium does happens here, off the UI thread. That is not a
+ * nicety: editing every text line of a 14-page catalogue takes over a
+ * second of solid CPU, and on the main thread that is a second of frozen
+ * scrolling, frozen buttons and a stalled spinner. In a worker the UI stays
+ * responsive and can show real progress.
+ *
+ * The worker owns all PDFium state (open documents, their scratch
+ * allocators, their embedded-font caches). The UI thread never holds a
+ * pointer — it holds a docId string — so there is no way for it to use a
+ * handle after the document behind it has been closed.
+ */
+import { Scratch, type WrappedPdfiumModule } from "./core"
+import { getPdfium, getFallbackFont, type FallbackFontKey } from "./loader"
+import {
+  openDocument, listTextObjects, rebuildGroupWithWrappedText, renderPageToRGBA,
+  saveDocument, DocumentFonts,
+} from "./text"
+import { groupIntoLines, effectiveFontSize, isRtlText } from "./grouping"
+import { listImageObjects, replaceImageBytes, removeImageObject } from "./image"
+import { listPages, buildDocumentFromPlan } from "./pages"
+import { addTextOverlay, addImageOverlay } from "./overlay"
+import { loadFontMetrics, type FontMetrics } from "./layout"
+import type {
+  EngineMethods, EngineRequest, EngineResponse, EnginePage, EngineTextLine, EngineImage,
+} from "./protocol"
+
+interface OpenDoc {
+  handle: number
+  scratch: Scratch
+  fonts: DocumentFonts
+}
+
+const docs = new Map<string, OpenDoc>()
+let nextDocId = 1
+
+/** Font bytes + parsed metrics, loaded once per worker and shared by every
+ * document — the bytes are only re-embedded per document, which
+ * DocumentFonts already de-duplicates. */
+const fontCache = new Map<FallbackFontKey, { bytes: Uint8Array; metrics: FontMetrics }>()
+
+async function font(key: FallbackFontKey) {
+  let entry = fontCache.get(key)
+  if (!entry) {
+    const bytes = await getFallbackFont(key)
+    entry = { bytes, metrics: loadFontMetrics(bytes) }
+    fontCache.set(key, entry)
+  }
+  return entry
+}
+
+function requireDoc(docId: string): OpenDoc {
+  const doc = docs.get(docId)
+  if (!doc) throw new Error(`Unknown or already-closed document: ${docId}`)
+  return doc
+}
+
+function toEnginePages(pdfium: WrappedPdfiumModule, handle: number): EnginePage[] {
+  return listPages(pdfium, handle).map((p) => ({
+    index: p.index, widthPts: p.widthPts, heightPts: p.heightPts, rotation: p.rotation,
+  }))
+}
+
+/** Runs `fn` with the page loaded, and always closes it — a page left open
+ * pins memory for the life of the document. */
+function withPage<T>(pdfium: WrappedPdfiumModule, handle: number, pageIndex: number, fn: (page: number) => T): T {
+  const page = pdfium.FPDF_LoadPage(handle, pageIndex)
+  if (!page) throw new Error(`Failed to load page ${pageIndex}`)
+  try {
+    return fn(page)
+  } finally {
+    pdfium.FPDF_ClosePage(page)
+  }
+}
+
+const handlers: {
+  [M in keyof EngineMethods]: (
+    params: EngineMethods[M]["params"],
+    ctx: { pdfium: WrappedPdfiumModule; transfer: Transferable[] },
+  ) => Promise<EngineMethods[M]["result"]> | EngineMethods[M]["result"]
+} = {
+  open: ({ bytes }, { pdfium }) => {
+    const scratch = new Scratch(pdfium)
+    const handle = openDocument(pdfium, new Uint8Array(bytes), scratch)
+    const docId = `doc${nextDocId++}`
+    docs.set(docId, { handle, scratch, fonts: new DocumentFonts(pdfium, handle) })
+    return { docId, pages: toEnginePages(pdfium, handle) }
+  },
+
+  close: ({ docId }, { pdfium }) => {
+    const doc = docs.get(docId)
+    if (!doc) return { closed: false }
+    pdfium.FPDF_CloseDocument(doc.handle)
+    doc.scratch.free()
+    docs.delete(docId)
+    return { closed: true }
+  },
+
+  listPages: ({ docId }, { pdfium }) => ({ pages: toEnginePages(pdfium, requireDoc(docId).handle) }),
+
+  renderPage: ({ docId, pageIndex, scale }, { pdfium, transfer }) => {
+    const doc = requireDoc(docId)
+    return withPage(pdfium, doc.handle, pageIndex, (page) => {
+      const { width, height, rgba } = renderPageToRGBA(pdfium, page, scale, doc.scratch)
+      // Copy into a standalone buffer so it can be TRANSFERRED to the UI
+      // thread (zero-copy) rather than structured-cloned.
+      const out = new Uint8Array(rgba.length)
+      out.set(rgba)
+      transfer.push(out.buffer)
+      return { width, height, rgba: out.buffer }
+    })
+  },
+
+  listTextLines: ({ docId, pageIndex }, { pdfium }) => {
+    const doc = requireDoc(docId)
+    return withPage(pdfium, doc.handle, pageIndex, (page) => {
+      const objs = listTextObjects(pdfium, page, doc.scratch).filter((o) => o.text.trim() !== "")
+      const lines: EngineTextLine[] = groupIntoLines(objs).map((line, lineIndex) => {
+        const left = Math.min(...line.objects.map((o) => o.bounds?.left ?? o.matrix.e))
+        const right = Math.max(...line.objects.map((o) => o.bounds?.right ?? o.matrix.e))
+        const bottom = Math.min(...line.objects.map((o) => o.bounds?.bottom ?? o.matrix.f))
+        const top = Math.max(...line.objects.map((o) => o.bounds?.top ?? o.matrix.f))
+        return {
+          lineIndex,
+          text: line.text,
+          pieceCount: line.objects.length,
+          fontSize: effectiveFontSize(line.anchor),
+          bbox: { left, bottom, right, top },
+          matrix: line.anchor.matrix,
+          fontName: line.anchor.fontBaseName,
+          direction: isRtlText(line.text) ? "rtl" : "ltr",
+        }
+      })
+      return { lines }
+    })
+  },
+
+  editTextLine: async ({ docId, pageIndex, lineIndex, newText, options }, { pdfium }) => {
+    const doc = requireDoc(docId)
+    const { bytes, metrics } = await font(options?.font ?? (isRtlText(newText) ? "hebrew" : "regular"))
+    return withPage(pdfium, doc.handle, pageIndex, (page) => {
+      const objs = listTextObjects(pdfium, page, doc.scratch).filter((o) => o.text.trim() !== "")
+      const line = groupIntoLines(objs)[lineIndex]
+      if (!line) throw new Error(`No text line at index ${lineIndex} on page ${pageIndex}`)
+      const r = rebuildGroupWithWrappedText(
+        pdfium, doc.handle, page, line.objects, newText, bytes, metrics, doc.scratch,
+        {
+          maxWidth: options?.maxWidth,
+          maxHeight: options?.maxHeight,
+          lineHeightRatio: options?.lineHeightRatio,
+          minFontScale: options?.minFontScale,
+          align: options?.align,
+          fonts: doc.fonts,
+        },
+      )
+      if (!r.ok) throw new Error(r.error ?? "text edit failed")
+      return {
+        ok: true,
+        lines: r.layout?.lines ?? [],
+        fontSize: r.layout?.fontSize ?? 0,
+        shrunk: r.layout?.shrunk ?? false,
+        overflows: r.layout?.overflows ?? false,
+      }
+    })
+  },
+
+  listImages: ({ docId, pageIndex }, { pdfium }) => {
+    const doc = requireDoc(docId)
+    return withPage(pdfium, doc.handle, pageIndex, (page) => {
+      const images: EngineImage[] = listImageObjects(pdfium, page, doc.scratch).map((im, imageIndex) => ({
+        imageIndex,
+        bbox: im.bounds,
+        pixelWidth: im.pixelWidth,
+        pixelHeight: im.pixelHeight,
+        hasClipPath: im.hasClipPath,
+        filters: im.filters,
+      }))
+      return { images }
+    })
+  },
+
+  replaceImage: ({ docId, pageIndex, imageIndex, bytes, kind }, { pdfium }) => {
+    const doc = requireDoc(docId)
+    return withPage(pdfium, doc.handle, pageIndex, (page) => {
+      const target = listImageObjects(pdfium, page, doc.scratch)[imageIndex]
+      if (!target) throw new Error(`No image at index ${imageIndex} on page ${pageIndex}`)
+      const r = replaceImageBytes(pdfium, page, target.handle, new Uint8Array(bytes), kind, doc.scratch)
+      if (!r.ok) throw new Error(r.error ?? "image replace failed")
+      pdfium.FPDFPage_GenerateContent(page)
+      return { ok: true }
+    })
+  },
+
+  removeImage: ({ docId, pageIndex, imageIndex }, { pdfium }) => {
+    const doc = requireDoc(docId)
+    return withPage(pdfium, doc.handle, pageIndex, (page) => {
+      const target = listImageObjects(pdfium, page, doc.scratch)[imageIndex]
+      if (!target) throw new Error(`No image at index ${imageIndex} on page ${pageIndex}`)
+      const r = removeImageObject(pdfium, page, target.handle)
+      if (!r.ok) throw new Error(r.error ?? "image remove failed")
+      return { ok: true }
+    })
+  },
+
+  addTextOverlay: async ({ docId, pageIndex, overlay }, { pdfium }) => {
+    const doc = requireDoc(docId)
+    const { bytes, metrics } = await font(overlay.font ?? (isRtlText(overlay.text) ? "hebrew" : "regular"))
+    return withPage(pdfium, doc.handle, pageIndex, (page) => {
+      const r = addTextOverlay(pdfium, doc.handle, page, overlay, bytes, metrics, doc.scratch, doc.fonts)
+      if (!r.ok) throw new Error(r.error ?? "text overlay failed")
+      pdfium.FPDFPage_GenerateContent(page)
+      return { ok: true }
+    })
+  },
+
+  addImageOverlay: ({ docId, pageIndex, overlay, bytes, kind }, { pdfium }) => {
+    const doc = requireDoc(docId)
+    return withPage(pdfium, doc.handle, pageIndex, (page) => {
+      const r = addImageOverlay(pdfium, doc.handle, page, overlay, new Uint8Array(bytes), kind, doc.scratch)
+      if (!r.ok) throw new Error(r.error ?? "image overlay failed")
+      pdfium.FPDFPage_GenerateContent(page)
+      return { ok: true }
+    })
+  },
+
+  applyPagePlan: ({ docId, plan }, { pdfium }) => {
+    const doc = requireDoc(docId)
+    const built = buildDocumentFromPlan(pdfium, doc.handle, plan, doc.scratch)
+    if (!built.ok || !built.document) throw new Error(built.error ?? "page plan failed")
+
+    // The plan produces a NEW document. Swap it in under the same id and
+    // dispose of the old one, so callers keep one stable handle for the
+    // whole session instead of having to re-bind after every page change.
+    pdfium.FPDF_CloseDocument(doc.handle)
+    doc.handle = built.document
+    doc.fonts = new DocumentFonts(pdfium, built.document)
+    return { docId, pages: toEnginePages(pdfium, built.document) }
+  },
+
+  save: ({ docId }, { pdfium, transfer }) => {
+    const doc = requireDoc(docId)
+    const saved = saveDocument(pdfium, doc.handle, doc.scratch)
+    const out = new Uint8Array(saved.length)
+    out.set(saved)
+    transfer.push(out.buffer)
+    return { bytes: out.buffer }
+  },
+}
+
+self.onmessage = async (event: MessageEvent<EngineRequest>) => {
+  const { id, method, params } = event.data
+  const transfer: Transferable[] = []
+  try {
+    const pdfium = await getPdfium()
+    const handler = handlers[method] as (
+      p: unknown, c: { pdfium: WrappedPdfiumModule; transfer: Transferable[] },
+    ) => Promise<unknown> | unknown
+    if (!handler) throw new Error(`Unknown engine method: ${method}`)
+    const result = await handler(params, { pdfium, transfer })
+    const response: EngineResponse = { id, ok: true, result }
+    ;(self as DedicatedWorkerGlobalScope).postMessage(response, transfer)
+  } catch (err) {
+    const response: EngineResponse = {
+      id, ok: false,
+      error: err instanceof Error ? `${err.message}` : String(err),
+    }
+    ;(self as DedicatedWorkerGlobalScope).postMessage(response)
+  }
+}
