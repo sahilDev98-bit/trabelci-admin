@@ -97,6 +97,38 @@ export class PdfEngineClient {
     return this.call("removeImage", { docId, pageIndex, imageIndex })
   }
 
+  /** Move/resize an image. Any image: a clipped photo's frame is carried
+   * along by the same transform, so it keeps its shape wherever it lands. */
+  setImageRect(
+    docId: string, pageIndex: number, imageIndex: number,
+    rect: { x: number; y: number; width: number; height: number },
+  ): Promise<{ ok: boolean }> {
+    return this.call("setImageRect", { docId, pageIndex, imageIndex, rect })
+  }
+
+  removeTextLine(docId: string, pageIndex: number, lineIndex: number): Promise<{ ok: boolean }> {
+    return this.call("removeTextLine", { docId, pageIndex, lineIndex })
+  }
+
+  /** Shift a text line. dy is PDF-space, so positive moves it UP. */
+  moveTextLineToPage(
+    docId: string, sourcePageIndex: number, lineIndex: number,
+    targetPageIndex: number, x: number, yBaseline: number,
+  ): Promise<{ ok: boolean }> {
+    return this.call("moveTextLineToPage", { docId, sourcePageIndex, lineIndex, targetPageIndex, x, yBaseline })
+  }
+
+  moveImageToPage(
+    docId: string, sourcePageIndex: number, imageIndex: number,
+    targetPageIndex: number, rect: { x: number; y: number; width: number; height: number },
+  ): Promise<{ ok: boolean }> {
+    return this.call("moveImageToPage", { docId, sourcePageIndex, imageIndex, targetPageIndex, rect })
+  }
+
+  moveTextLine(docId: string, pageIndex: number, lineIndex: number, dx: number, dy: number): Promise<{ ok: boolean }> {
+    return this.call("moveTextLine", { docId, pageIndex, lineIndex, dx, dy })
+  }
+
   addTextOverlay(docId: string, pageIndex: number, overlay: TextOverlayRequest): Promise<{ ok: boolean }> {
     return this.call("addTextOverlay", { docId, pageIndex, overlay })
   }

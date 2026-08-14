@@ -27,6 +27,8 @@ export interface TextObjectInfo {
   isEmbedded: boolean
   fontFlags: number
   fontDataLength: number
+  /** Fill colour, 0-255 each. */
+  fill: { r: number; g: number; b: number; a: number }
 }
 
 export function openDocument(pdfium: WrappedPdfiumModule, bytes: Uint8Array, scratch: Scratch): number {
@@ -85,7 +87,12 @@ export function listTextObjects(pdfium: WrappedPdfiumModule, page: number, scrat
 
     const fontDataLength = getFontDataLength(pdfium, fontHandle, scratch)
 
-    out.push({ index: i, handle: obj, text, fontSize, matrix, bounds, fontHandle, fontBaseName, isEmbedded, fontFlags, fontDataLength })
+    const fr = scratch.malloc(4), fg = scratch.malloc(4), fb = scratch.malloc(4), fa = scratch.malloc(4)
+    const fill = pdfium.FPDFPageObj_GetFillColor(obj, fr, fg, fb, fa)
+      ? { r: scratch.readInt(fr), g: scratch.readInt(fg), b: scratch.readInt(fb), a: scratch.readInt(fa) }
+      : { r: 0, g: 0, b: 0, a: 255 }
+
+    out.push({ index: i, handle: obj, text, fontSize, matrix, bounds, fontHandle, fontBaseName, isEmbedded, fontFlags, fontDataLength, fill })
   }
 
   pdfium.FPDFText_ClosePage(textPage)
@@ -281,6 +288,10 @@ export interface WrapRebuildOptions {
   /** Width to wrap inside. Defaults to the original group's own width,
    * which preserves the page's column/design intent. */
   maxWidth?: number
+  /** Draw at this size instead of the original's. Resizing text means
+   * changing its type size — a text object has no width or height of its
+   * own to stretch, unlike an image. */
+  fontSize?: number
   /** Baseline-to-baseline spacing as a multiple of font size. */
   lineHeightRatio?: number
   /** Height budget for auto-shrink. Omit to keep the original size and
@@ -344,7 +355,7 @@ export function rebuildGroupWithWrappedText(
   const left = Math.min(...group.map((o) => o.bounds?.left ?? o.matrix.e))
   const right = Math.max(...group.map((o) => o.bounds?.right ?? o.matrix.e))
   const boxWidth = opts.maxWidth ?? Math.max(1, right - left)
-  const requestedSize = effectiveFontSize(anchor)
+  const requestedSize = opts.fontSize && opts.fontSize > 0 ? opts.fontSize : effectiveFontSize(anchor)
 
   const layout = layoutText(metrics, newText, requestedSize, {
     maxWidth: boxWidth,
@@ -414,6 +425,133 @@ export function rebuildGroupWithWrappedText(
   return { ok: generated, lines: placed, layout }
 }
 
+/**
+ * Delete a whole grouped line from the page.
+ *
+ * Removes EVERY object in the group: a line assembled from several pieces
+ * (see grouping.ts) would otherwise be left half-deleted, with the visible
+ * remainder impossible to select because the group it belonged to no
+ * longer matches.
+ */
+export function removeTextGroup(
+  pdfium: WrappedPdfiumModule,
+  page: number,
+  group: TextObjectInfo[],
+): { ok: boolean; error?: string } {
+  for (const piece of group) {
+    if (!pdfium.FPDFPage_RemoveObject(page, piece.handle)) {
+      return { ok: false, error: `FPDFPage_RemoveObject failed for "${piece.text}"` }
+    }
+    pdfium.FPDFPageObj_Destroy(piece.handle)
+  }
+  return { ok: pdfium.FPDFPage_GenerateContent(page) }
+}
+
+/**
+ * Shift a whole grouped line by a delta, in PDF points.
+ *
+ * Translates EVERY object in the group rather than just the anchor: a line
+ * assembled from several pieces (see grouping.ts) would otherwise come
+ * apart, with the first fragment moving and the rest staying put.
+ *
+ * Positive dy moves the line UP the page, following PDF's own axis, so a
+ * caller converting from screen coordinates must flip it.
+ */
+export function translateTextGroup(
+  pdfium: WrappedPdfiumModule,
+  page: number,
+  group: TextObjectInfo[],
+  dx: number,
+  dy: number,
+  scratch: Scratch,
+): { ok: boolean; error?: string } {
+  for (const piece of group) {
+    const m = piece.matrix
+    const ptr = scratch.malloc(24)
+    const p = pdfium.pdfium
+    p.setValue(ptr + 0, m.a, "float")
+    p.setValue(ptr + 4, m.b, "float")
+    p.setValue(ptr + 8, m.c, "float")
+    p.setValue(ptr + 12, m.d, "float")
+    p.setValue(ptr + 16, m.e + dx, "float")
+    p.setValue(ptr + 20, m.f + dy, "float")
+    if (!pdfium.FPDFPageObj_SetMatrix(piece.handle, ptr)) {
+      return { ok: false, error: `SetMatrix failed while moving "${piece.text}"` }
+    }
+  }
+  return { ok: pdfium.FPDFPage_GenerateContent(page) }
+}
+
+/**
+ * Move a whole grouped line onto a DIFFERENT page of the same document.
+ *
+ * Deliberately a detach-and-re-attach, not a delete-and-rebuild. PDFium
+ * hands ownership of the object back on FPDFPage_RemoveObject, and
+ * re-registers its resources against whichever page it is inserted into
+ * when that page's content is regenerated. So the object arrives carrying
+ * its ORIGINAL embedded font — including a subset face that only contains
+ * the glyphs this document happens to draw. Rebuilding the line from a
+ * fallback font instead would silently change the typeface of any moved
+ * catalogue heading, which is exactly the giveaway of a bad PDF editor.
+ * (Verified end-to-end through a save/reopen round trip: an object can look
+ * right in memory and still write a page whose resource dictionary lacks
+ * the font, which renders blank.)
+ *
+ * `x`/`yBaseline` place the group's ANCHOR piece; every other piece keeps
+ * its offset relative to that anchor, so a line assembled from several
+ * fragments arrives intact instead of coming apart.
+ *
+ * The anchor is passed in rather than derived here: grouping.ts anchors an
+ * RTL line on its RIGHTMOST piece (that being where the line actually
+ * starts), and it is the same anchor whose matrix the UI was given to
+ * compute these coordinates from. Re-deriving it as "leftmost" would put
+ * every Hebrew line down a line-width away from where it was dropped.
+ */
+export function moveTextGroupToPage(
+  pdfium: WrappedPdfiumModule,
+  sourcePage: number,
+  targetPage: number,
+  group: TextObjectInfo[],
+  anchor: TextObjectInfo,
+  x: number,
+  yBaseline: number,
+  scratch: Scratch,
+): { ok: boolean; error?: string } {
+  if (group.length === 0) return { ok: false, error: "empty text group" }
+
+  const dx = x - anchor.matrix.e
+  const dy = yBaseline - anchor.matrix.f
+
+  for (const piece of group) {
+    if (!pdfium.FPDFPage_RemoveObject(sourcePage, piece.handle)) {
+      return { ok: false, error: `FPDFPage_RemoveObject failed for "${piece.text}"` }
+    }
+    const m = piece.matrix
+    const ptr = scratch.malloc(24)
+    const p = pdfium.pdfium
+    p.setValue(ptr + 0, m.a, "float")
+    p.setValue(ptr + 4, m.b, "float")
+    p.setValue(ptr + 8, m.c, "float")
+    p.setValue(ptr + 12, m.d, "float")
+    p.setValue(ptr + 16, m.e + dx, "float")
+    p.setValue(ptr + 20, m.f + dy, "float")
+    if (!pdfium.FPDFPageObj_SetMatrix(piece.handle, ptr)) {
+      return { ok: false, error: `SetMatrix failed while moving "${piece.text}"` }
+    }
+    pdfium.FPDFPage_InsertObject(targetPage, piece.handle)
+  }
+
+  // BOTH pages changed and both must be regenerated — skipping the source
+  // leaves the old page still drawing text it no longer owns.
+  if (!pdfium.FPDFPage_GenerateContent(sourcePage)) {
+    return { ok: false, error: "GenerateContent failed on the source page" }
+  }
+  if (!pdfium.FPDFPage_GenerateContent(targetPage)) {
+    return { ok: false, error: "GenerateContent failed on the target page" }
+  }
+  return { ok: true }
+}
+
 /** Render one page to raw RGBA pixels, entirely through PDFium (no pdf.js
  * anywhere in this POC) — this IS the "preview".
  *
@@ -460,11 +598,14 @@ export function saveDocument(pdfium: WrappedPdfiumModule, document: number, scra
   const chunks: Uint8Array[] = []
   // FPDF_FILEWRITE is {version:int, WriteBlock:funcptr}. WriteBlock has the
   // C signature: int WriteBlock(FPDF_FILEWRITE* pThis, const void* data, unsigned long size).
-  // HEAPU8 exists at runtime (Emscripten always exposes it) but isn't part
-  // of the ambient EmscriptenModule types this package ships against.
-  const heap = (pdfium.pdfium as unknown as { HEAPU8: Uint8Array }).HEAPU8
+  // HEAPU8 is read FRESH on every callback, never hoisted into a local.
+  // Emscripten REPLACES the heap views whenever WASM memory grows, and a
+  // large save grows it mid-write — a reference captured beforehand is
+  // detached by the time the next chunk arrives, failing the save with
+  // "Cannot perform Construct on a detached ArrayBuffer".
+  const heapOf = (m: unknown) => (m as { HEAPU8: Uint8Array }).HEAPU8
   const writeBlock = pdfium.pdfium.addFunction((_pThis: number, data: number, size: number) => {
-    chunks.push(new Uint8Array(heap.subarray(data, data + size)))
+    chunks.push(new Uint8Array(heapOf(pdfium.pdfium).subarray(data, data + size)))
     return 1
   }, "iiii")
 

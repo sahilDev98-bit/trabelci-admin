@@ -4,13 +4,17 @@ import {
   PdfEngineClient,
   type EnginePage,
   type EngineTextLine,
+  type EngineImage,
   type EditTextOptions,
+  type TextOverlayRequest,
+  type ImageOverlayRequest,
+  type PagePlanRequest,
 } from "@/lib/pdf-engine"
 import { fetchPdfMasterTemplateSource } from "@/features/pdfTemplates/api"
 
 /**
  * Owns one PDF editing session: the worker, the open document, and the
- * per-page text lines the UI draws boxes for.
+ * per-page text/image lists the UI draws boxes for.
  *
  * The engine runs in a Web Worker, so every operation here is async. That
  * is the point — editing a full catalogue is over a second of CPU, and on
@@ -30,6 +34,11 @@ export interface PageTextState {
   loaded: boolean
 }
 
+export interface PageImageState {
+  images: EngineImage[]
+  loaded: boolean
+}
+
 export interface UsePdfEngineDocumentResult {
   phase: LoadPhase
   error: string | null
@@ -39,14 +48,63 @@ export interface UsePdfEngineDocumentResult {
   docId: string | null
   /** Text lines per page index, loaded lazily as pages come into view. */
   pageText: Record<number, PageTextState>
+  /** Image slots per page index, loaded lazily alongside the text. */
+  pageImages: Record<number, PageImageState>
   loadPageText: (pageIndex: number) => Promise<void>
+  loadPageImages: (pageIndex: number) => Promise<void>
   renderPage: (pageIndex: number, scale: number) => Promise<{ width: number; height: number; rgba: ArrayBuffer } | null>
   editText: (pageIndex: number, lineIndex: number, newText: string, options?: EditTextOptions) => Promise<void>
+  removeText: (pageIndex: number, lineIndex: number) => Promise<void>
+  /** Shift a line. dy is PDF-space, so positive moves it up the page. */
+  moveText: (pageIndex: number, lineIndex: number, dx: number, dy: number) => Promise<void>
+  moveTextToPage: (
+    sourcePageIndex: number, lineIndex: number,
+    targetPageIndex: number, x: number, yBaseline: number,
+  ) => Promise<void>
+  moveImageToPage: (
+    sourcePageIndex: number, imageIndex: number,
+    targetPageIndex: number, rect: { x: number; y: number; width: number; height: number },
+  ) => Promise<void>
+  replaceImage: (pageIndex: number, imageIndex: number, file: File) => Promise<void>
+  removeImage: (pageIndex: number, imageIndex: number) => Promise<void>
+  setImageRect: (
+    pageIndex: number, imageIndex: number,
+    rect: { x: number; y: number; width: number; height: number },
+  ) => Promise<void>
+  addTextOverlay: (pageIndex: number, overlay: TextOverlayRequest) => Promise<void>
+  addImageOverlay: (pageIndex: number, overlay: ImageOverlayRequest, file: File) => Promise<void>
+  applyPagePlan: (plan: PagePlanRequest[]) => Promise<void>
   save: () => Promise<Blob>
   /** True while any mutating operation is in flight. */
   busy: boolean
   /** Bumped whenever the document changes, so canvases know to repaint. */
   revision: number
+}
+
+/** PDFium accepts PNG and JPEG directly; anything else has to be converted
+ * before it can be embedded. Done via canvas rather than rejected, so a
+ * user picking a WebP or GIF logo still gets what they expect. */
+async function toEmbeddableImage(file: File): Promise<{ bytes: ArrayBuffer; kind: "png" | "jpeg" }> {
+  const type = file.type.toLowerCase()
+  if (type === "image/png") return { bytes: await file.arrayBuffer(), kind: "png" }
+  if (type === "image/jpeg" || type === "image/jpg") return { bytes: await file.arrayBuffer(), kind: "jpeg" }
+
+  const bitmap = await createImageBitmap(file)
+  try {
+    const canvas = document.createElement("canvas")
+    canvas.width = bitmap.width
+    canvas.height = bitmap.height
+    const ctx = canvas.getContext("2d")
+    if (!ctx) throw new Error("Could not read that image")
+    ctx.drawImage(bitmap, 0, 0)
+    // PNG rather than JPEG: the source may have transparency (a cut-out
+    // logo), and re-encoding that to JPEG would fill it with black.
+    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/png"))
+    if (!blob) throw new Error("Could not convert that image")
+    return { bytes: await blob.arrayBuffer(), kind: "png" }
+  } finally {
+    bitmap.close()
+  }
 }
 
 /**
@@ -65,6 +123,7 @@ export function usePdfEngineDocument(templateId: string | null | undefined): Use
   const [pages, setPages] = useState<EnginePage[]>([])
   const [docId, setDocId] = useState<string | null>(null)
   const [pageText, setPageText] = useState<Record<number, PageTextState>>({})
+  const [pageImages, setPageImages] = useState<Record<number, PageImageState>>({})
   const [busy, setBusy] = useState(false)
   const [revision, setRevision] = useState(0)
 
@@ -110,6 +169,7 @@ export function usePdfEngineDocument(templateId: string | null | undefined): Use
         setDocId(opened.docId)
         setPages(opened.pages)
         setPageText({})
+        setPageImages({})
         setPhase("ready")
         setRevision((r) => r + 1)
       } catch (err) {
@@ -132,24 +192,129 @@ export function usePdfEngineDocument(templateId: string | null | undefined): Use
     setPageText((prev) => ({ ...prev, [pageIndex]: { lines, loaded: true } }))
   }, [getEngine])
 
+  const loadPageImages = useCallback(async (pageIndex: number) => {
+    const id = docIdRef.current
+    if (!id) return
+    const { images } = await getEngine().listImages(id, pageIndex)
+    setPageImages((prev) => ({ ...prev, [pageIndex]: { images, loaded: true } }))
+  }, [getEngine])
+
   const renderPage = useCallback(async (pageIndex: number, scale: number) => {
     const id = docIdRef.current
     if (!id) return null
     return getEngine().renderPage(id, pageIndex, scale)
   }, [getEngine])
 
+  /** Runs a mutation, then refreshes the affected pages' slot lists.
+   * Centralised because every mutation invalidates them the same way:
+   * adding or removing objects renumbers everything after it, so acting on
+   * a stale index afterwards would edit the wrong thing.
+   *
+   * Takes a LIST of pages because a cross-page move dirties two of them —
+   * refreshing only the target would leave the source still showing a box
+   * for content that has left it. */
+  const mutate = useCallback(async (
+    pageIndexes: number | number[], run: (id: string) => Promise<void>,
+  ) => {
+    const id = docIdRef.current
+    if (!id) return
+    const pages = [...new Set(Array.isArray(pageIndexes) ? pageIndexes : [pageIndexes])]
+    setBusy(true)
+    try {
+      await run(id)
+      const refreshed = await Promise.all(pages.map(async (pageIndex) => {
+        const [{ lines }, { images }] = await Promise.all([
+          getEngine().listTextLines(id, pageIndex),
+          getEngine().listImages(id, pageIndex),
+        ])
+        return { pageIndex, lines, images }
+      }))
+      setPageText((prev) => {
+        const next = { ...prev }
+        for (const r of refreshed) next[r.pageIndex] = { lines: r.lines, loaded: true }
+        return next
+      })
+      setPageImages((prev) => {
+        const next = { ...prev }
+        for (const r of refreshed) next[r.pageIndex] = { images: r.images, loaded: true }
+        return next
+      })
+      setRevision((r) => r + 1)
+    } finally {
+      setBusy(false)
+    }
+  }, [getEngine])
+
   const editText = useCallback(async (
     pageIndex: number, lineIndex: number, newText: string, options?: EditTextOptions,
   ) => {
+    await mutate(pageIndex, (id) => getEngine().editTextLine(id, pageIndex, lineIndex, newText, options).then(() => undefined))
+  }, [getEngine, mutate])
+
+  const removeText = useCallback(async (pageIndex: number, lineIndex: number) => {
+    await mutate(pageIndex, (id) => getEngine().removeTextLine(id, pageIndex, lineIndex).then(() => undefined))
+  }, [getEngine, mutate])
+
+  const moveText = useCallback(async (pageIndex: number, lineIndex: number, dx: number, dy: number) => {
+    await mutate(pageIndex, (id) => getEngine().moveTextLine(id, pageIndex, lineIndex, dx, dy).then(() => undefined))
+  }, [getEngine, mutate])
+
+  /** Move a line to ANOTHER page. x/yBaseline are in the target page's PDF
+   * points, with y measured from its bottom edge as PDF stores it. */
+  const moveTextToPage = useCallback(async (
+    sourcePageIndex: number, lineIndex: number,
+    targetPageIndex: number, x: number, yBaseline: number,
+  ) => {
+    await mutate([sourcePageIndex, targetPageIndex], (id) =>
+      getEngine().moveTextLineToPage(id, sourcePageIndex, lineIndex, targetPageIndex, x, yBaseline).then(() => undefined))
+  }, [getEngine, mutate])
+
+  const moveImageToPage = useCallback(async (
+    sourcePageIndex: number, imageIndex: number,
+    targetPageIndex: number, rect: { x: number; y: number; width: number; height: number },
+  ) => {
+    await mutate([sourcePageIndex, targetPageIndex], (id) =>
+      getEngine().moveImageToPage(id, sourcePageIndex, imageIndex, targetPageIndex, rect).then(() => undefined))
+  }, [getEngine, mutate])
+
+  const replaceImage = useCallback(async (pageIndex: number, imageIndex: number, file: File) => {
+    const { bytes, kind } = await toEmbeddableImage(file)
+    await mutate(pageIndex, (id) => getEngine().replaceImage(id, pageIndex, imageIndex, bytes, kind).then(() => undefined))
+  }, [getEngine, mutate])
+
+  const removeImage = useCallback(async (pageIndex: number, imageIndex: number) => {
+    await mutate(pageIndex, (id) => getEngine().removeImage(id, pageIndex, imageIndex).then(() => undefined))
+  }, [getEngine, mutate])
+
+  const setImageRect = useCallback(async (
+    pageIndex: number, imageIndex: number,
+    rect: { x: number; y: number; width: number; height: number },
+  ) => {
+    await mutate(pageIndex, (id) => getEngine().setImageRect(id, pageIndex, imageIndex, rect).then(() => undefined))
+  }, [getEngine, mutate])
+
+  const addTextOverlay = useCallback(async (pageIndex: number, overlay: TextOverlayRequest) => {
+    await mutate(pageIndex, (id) => getEngine().addTextOverlay(id, pageIndex, overlay).then(() => undefined))
+  }, [getEngine, mutate])
+
+  const addImageOverlay = useCallback(async (pageIndex: number, overlay: ImageOverlayRequest, file: File) => {
+    const { bytes, kind } = await toEmbeddableImage(file)
+    await mutate(pageIndex, (id) => getEngine().addImageOverlay(id, pageIndex, overlay, bytes, kind).then(() => undefined))
+  }, [getEngine, mutate])
+
+  const applyPagePlan = useCallback(async (plan: PagePlanRequest[]) => {
     const id = docIdRef.current
     if (!id) return
     setBusy(true)
     try {
-      await getEngine().editTextLine(id, pageIndex, lineIndex, newText, options)
-      // Editing splits or merges objects, so the line list for this page is
-      // now stale — refresh it before anything can act on old indices.
-      const { lines } = await getEngine().listTextLines(id, pageIndex)
-      setPageText((prev) => ({ ...prev, [pageIndex]: { lines, loaded: true } }))
+      const result = await getEngine().applyPagePlan(id, plan)
+      setPages(result.pages)
+      // A page plan renumbers, duplicates and drops pages wholesale, so
+      // every cached per-page list now refers to pages that may not exist.
+      // Cleared rather than remapped: rebuilding from the engine is cheap
+      // and cannot be subtly wrong.
+      setPageText({})
+      setPageImages({})
       setRevision((r) => r + 1)
     } finally {
       setBusy(false)
@@ -169,7 +334,9 @@ export function usePdfEngineDocument(templateId: string | null | undefined): Use
   }, [getEngine])
 
   return {
-    phase, error, downloadPercent, pages, docId, pageText,
-    loadPageText, renderPage, editText, save, busy, revision,
+    phase, error, downloadPercent, pages, docId, pageText, pageImages,
+    loadPageText, loadPageImages, renderPage, editText, moveText, moveTextToPage, moveImageToPage, removeText,
+    replaceImage, removeImage, setImageRect, addTextOverlay, addImageOverlay, applyPagePlan,
+    save, busy, revision,
   }
 }

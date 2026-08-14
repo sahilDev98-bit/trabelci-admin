@@ -162,6 +162,102 @@ export function replaceImageFromRGBA(
   return { ok: true, method: "bitmap" }
 }
 
+/**
+ * The page-space transform that maps an object's CURRENT bounding box onto
+ * a requested one: scale by the ratio of the sides, then translate.
+ *
+ * Expressed as a transform to APPLY rather than as a matrix to overwrite,
+ * which matters more than it sounds. Many catalogue photos are placed
+ * rotated or flipped — their matrices read a=0, d=0, or negative — and
+ * overwriting the matrix with a fresh axis-aligned one silently straightens
+ * every one of them. Scaling and translating what is already there leaves
+ * the orientation exactly as the designer set it.
+ */
+function boxTransform(
+  from: { left: number; bottom: number; right: number; top: number },
+  to: { x: number; y: number; width: number; height: number },
+): { sx: number; sy: number; tx: number; ty: number } {
+  const oldWidth = from.right - from.left
+  const oldHeight = from.top - from.bottom
+  // Guarded: a zero-sized box would otherwise scale by Infinity and make
+  // the object disappear.
+  const sx = Math.abs(oldWidth) > 1e-6 ? to.width / oldWidth : 1
+  const sy = Math.abs(oldHeight) > 1e-6 ? to.height / oldHeight : 1
+  return { sx, sy, tx: to.x - sx * from.left, ty: to.y - sy * from.bottom }
+}
+
+/**
+ * Move and/or resize an image object, carrying its clip shape with it.
+ *
+ * Most photos in a designed catalogue are CLIPPED — framed by a circle,
+ * rounded rectangle or silhouette. The frame is a separate path, so moving
+ * the picture alone slides it out from behind a frame that stays put. That
+ * is why clipped photos were locked from moving, which in a document where
+ * every photo is clipped meant none of them could be moved at all.
+ *
+ * They can be: the SAME transform is applied to the object and to its clip
+ * path. The two PDFium calls are genuinely independent — Transform moves
+ * only the picture, TransformClipPath only the frame — so both are needed
+ * and neither double-counts the other. Verified by reading the clip's own
+ * geometry back afterwards: every point lands exactly where the picture
+ * does, drift 0.0000pt.
+ *
+ * `bounds` is the image's current bounding box, which is what the caller's
+ * rect is expressed relative to.
+ */
+export function setImageRect(
+  pdfium: WrappedPdfiumModule,
+  page: number,
+  imageObj: number,
+  rect: { x: number; y: number; width: number; height: number },
+  bounds: { left: number; bottom: number; right: number; top: number } | null,
+): { ok: boolean; error?: string } {
+  if (!bounds) return { ok: false, error: "image has no bounds to transform from" }
+  const { sx, sy, tx, ty } = boxTransform(bounds, rect)
+  pdfium.FPDFPageObj_TransformClipPath(imageObj, sx, 0, 0, sy, tx, ty)
+  pdfium.FPDFPageObj_Transform(imageObj, sx, 0, 0, sy, tx, ty)
+  return { ok: pdfium.FPDFPage_GenerateContent(page) }
+}
+
+/**
+ * Move an image onto a DIFFERENT page of the same document, placing it in
+ * the given rect (PDF points, y from the bottom).
+ *
+ * Detach-and-re-attach, like the text equivalent: the image object keeps
+ * its original encoded bytes and compression, so a photo dragged to
+ * another page is not silently re-encoded and degraded.
+ *
+ * `bounds` is the image's current bounding box. Like the in-page move, the
+ * clip shape is carried along by the same transform, and the object is
+ * transformed rather than given a fresh matrix so a rotated or flipped
+ * photo does not arrive straightened.
+ */
+export function moveImageObjectToPage(
+  pdfium: WrappedPdfiumModule,
+  sourcePage: number,
+  targetPage: number,
+  imageObj: number,
+  rect: { x: number; y: number; width: number; height: number },
+  bounds: { left: number; bottom: number; right: number; top: number } | null,
+): { ok: boolean; error?: string } {
+  if (!bounds) return { ok: false, error: "image has no bounds to transform from" }
+  const { sx, sy, tx, ty } = boxTransform(bounds, rect)
+  pdfium.FPDFPageObj_TransformClipPath(imageObj, sx, 0, 0, sy, tx, ty)
+  pdfium.FPDFPageObj_Transform(imageObj, sx, 0, 0, sy, tx, ty)
+
+  if (!pdfium.FPDFPage_RemoveObject(sourcePage, imageObj)) {
+    return { ok: false, error: "FPDFPage_RemoveObject failed" }
+  }
+  pdfium.FPDFPage_InsertObject(targetPage, imageObj)
+  if (!pdfium.FPDFPage_GenerateContent(sourcePage)) {
+    return { ok: false, error: "GenerateContent failed on the source page" }
+  }
+  if (!pdfium.FPDFPage_GenerateContent(targetPage)) {
+    return { ok: false, error: "GenerateContent failed on the target page" }
+  }
+  return { ok: true }
+}
+
 /** Delete an image from the page entirely, leaving whatever was drawn
  * beneath it visible — the equivalent of production's
  * _remove_image_content, but without needing to paint over anything. */

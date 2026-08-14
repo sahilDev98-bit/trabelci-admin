@@ -22,6 +22,8 @@ export interface EngineTextLine {
   matrix: PdfMatrix
   fontName: string
   direction: "ltr" | "rtl"
+  /** Fill colour, so a line moved to another page keeps its appearance. */
+  color: { r: number; g: number; b: number; a: number }
 }
 
 export interface EngineImage {
@@ -29,6 +31,10 @@ export interface EngineImage {
   bbox: PdfRect | null
   pixelWidth: number
   pixelHeight: number
+  /** True when the page frames this image with a shape (circle, rounded
+   * corners, silhouette). Reported for information only — the frame is
+   * carried along when the image moves, so it no longer restricts
+   * anything. */
   hasClipPath: boolean
   filters: string[]
 }
@@ -49,6 +55,9 @@ export interface RenderedPage {
 
 export interface EditTextOptions {
   maxWidth?: number
+  /** Explicit type size, for resizing text (which changes its size rather
+   * than stretching a box). Omitted, the line keeps its original size. */
+  fontSize?: number
   maxHeight?: number
   lineHeightRatio?: number
   minFontScale?: number
@@ -101,6 +110,39 @@ export interface EngineMethods {
     result: { ok: boolean }
   }
   removeImage: { params: { docId: string; pageIndex: number; imageIndex: number }; result: { ok: boolean } }
+  /** Move/resize an image. Valid for ANY image: a clipped photo's frame is
+   * carried along by the same transform, so it keeps its shape. */
+  setImageRect: {
+    params: {
+      docId: string; pageIndex: number; imageIndex: number
+      rect: { x: number; y: number; width: number; height: number }
+    }
+    result: { ok: boolean }
+  }
+  removeTextLine: { params: { docId: string; pageIndex: number; lineIndex: number }; result: { ok: boolean } }
+  /** Shift a grouped text line. dy is in PDF space, so positive is UP. */
+  /** Move a text line onto a DIFFERENT page, placing its left edge and
+   * baseline at (x, yBaseline) in the target page's PDF points. */
+  moveTextLineToPage: {
+    params: {
+      docId: string; sourcePageIndex: number; lineIndex: number
+      targetPageIndex: number; x: number; yBaseline: number
+    }
+    result: { ok: boolean }
+  }
+  /** Move an image onto a DIFFERENT page, into the given rect (PDF points,
+   * y measured from the bottom). */
+  moveImageToPage: {
+    params: {
+      docId: string; sourcePageIndex: number; imageIndex: number
+      targetPageIndex: number; rect: { x: number; y: number; width: number; height: number }
+    }
+    result: { ok: boolean }
+  }
+  moveTextLine: {
+    params: { docId: string; pageIndex: number; lineIndex: number; dx: number; dy: number }
+    result: { ok: boolean }
+  }
   addTextOverlay: { params: { docId: string; pageIndex: number; overlay: TextOverlayRequest }; result: { ok: boolean } }
   addImageOverlay: {
     params: { docId: string; pageIndex: number; overlay: ImageOverlayRequest; bytes: ArrayBuffer; kind: "png" | "jpeg" }

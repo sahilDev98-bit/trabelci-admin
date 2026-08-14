@@ -17,10 +17,10 @@ import { Scratch, type WrappedPdfiumModule } from "./core"
 import { getPdfium, getFallbackFont, type FallbackFontKey } from "./loader"
 import {
   openDocument, listTextObjects, rebuildGroupWithWrappedText, renderPageToRGBA,
-  saveDocument, DocumentFonts,
+  saveDocument, translateTextGroup, removeTextGroup, moveTextGroupToPage, DocumentFonts,
 } from "./text"
 import { groupIntoLines, effectiveFontSize, isRtlText } from "./grouping"
-import { listImageObjects, replaceImageBytes, removeImageObject } from "./image"
+import { listImageObjects, replaceImageBytes, removeImageObject, setImageRect, moveImageObjectToPage } from "./image"
 import { listPages, buildDocumentFromPlan } from "./pages"
 import { addTextOverlay, addImageOverlay } from "./overlay"
 import { loadFontMetrics, type FontMetrics } from "./layout"
@@ -73,6 +73,27 @@ function withPage<T>(pdfium: WrappedPdfiumModule, handle: number, pageIndex: num
     return fn(page)
   } finally {
     pdfium.FPDF_ClosePage(page)
+  }
+}
+
+/** Both pages held open at once — a cross-page move detaches from one and
+ * inserts into the other, so neither may be closed mid-transfer. */
+function withTwoPages<T>(
+  pdfium: WrappedPdfiumModule, handle: number, aIndex: number, bIndex: number,
+  fn: (a: number, b: number) => T,
+): T {
+  const a = pdfium.FPDF_LoadPage(handle, aIndex)
+  if (!a) throw new Error(`Failed to load page ${aIndex}`)
+  const b = pdfium.FPDF_LoadPage(handle, bIndex)
+  if (!b) {
+    pdfium.FPDF_ClosePage(a)
+    throw new Error(`Failed to load page ${bIndex}`)
+  }
+  try {
+    return fn(a, b)
+  } finally {
+    pdfium.FPDF_ClosePage(b)
+    pdfium.FPDF_ClosePage(a)
   }
 }
 
@@ -132,6 +153,7 @@ const handlers: {
           matrix: line.anchor.matrix,
           fontName: line.anchor.fontBaseName,
           direction: isRtlText(line.text) ? "rtl" : "ltr",
+          color: line.anchor.fill,
         }
       })
       return { lines }
@@ -149,6 +171,7 @@ const handlers: {
         pdfium, doc.handle, page, line.objects, newText, bytes, metrics, doc.scratch,
         {
           maxWidth: options?.maxWidth,
+          fontSize: options?.fontSize,
           maxHeight: options?.maxHeight,
           lineHeightRatio: options?.lineHeightRatio,
           minFontScale: options?.minFontScale,
@@ -201,6 +224,68 @@ const handlers: {
       if (!target) throw new Error(`No image at index ${imageIndex} on page ${pageIndex}`)
       const r = removeImageObject(pdfium, page, target.handle)
       if (!r.ok) throw new Error(r.error ?? "image remove failed")
+      return { ok: true }
+    })
+  },
+
+  setImageRect: ({ docId, pageIndex, imageIndex, rect }, { pdfium }) => {
+    const doc = requireDoc(docId)
+    return withPage(pdfium, doc.handle, pageIndex, (page) => {
+      const target = listImageObjects(pdfium, page, doc.scratch)[imageIndex]
+      if (!target) throw new Error(`No image at index ${imageIndex} on page ${pageIndex}`)
+      // The current matrix goes with it so a clipped photo's frame is
+      // carried along instead of being left behind.
+      const r = setImageRect(pdfium, page, target.handle, rect, target.bounds)
+      if (!r.ok) throw new Error(r.error ?? "could not move the image")
+      return { ok: true }
+    })
+  },
+
+  removeTextLine: ({ docId, pageIndex, lineIndex }, { pdfium }) => {
+    const doc = requireDoc(docId)
+    return withPage(pdfium, doc.handle, pageIndex, (page) => {
+      const objs = listTextObjects(pdfium, page, doc.scratch).filter((o) => o.text.trim() !== "")
+      const line = groupIntoLines(objs)[lineIndex]
+      if (!line) throw new Error(`No text line at index ${lineIndex} on page ${pageIndex}`)
+      const r = removeTextGroup(pdfium, page, line.objects)
+      if (!r.ok) throw new Error(r.error ?? "could not delete the text")
+      return { ok: true }
+    })
+  },
+
+  moveTextLineToPage: ({ docId, sourcePageIndex, lineIndex, targetPageIndex, x, yBaseline }, { pdfium }) => {
+    const doc = requireDoc(docId)
+    if (sourcePageIndex === targetPageIndex) throw new Error("source and target page are the same")
+    return withTwoPages(pdfium, doc.handle, sourcePageIndex, targetPageIndex, (src, dst) => {
+      const objs = listTextObjects(pdfium, src, doc.scratch).filter((o) => o.text.trim() !== "")
+      const line = groupIntoLines(objs)[lineIndex]
+      if (!line) throw new Error(`No text line at index ${lineIndex} on page ${sourcePageIndex}`)
+      const r = moveTextGroupToPage(pdfium, src, dst, line.objects, line.anchor, x, yBaseline, doc.scratch)
+      if (!r.ok) throw new Error(r.error ?? "could not move the text to that page")
+      return { ok: true }
+    })
+  },
+
+  moveImageToPage: ({ docId, sourcePageIndex, imageIndex, targetPageIndex, rect }, { pdfium }) => {
+    const doc = requireDoc(docId)
+    if (sourcePageIndex === targetPageIndex) throw new Error("source and target page are the same")
+    return withTwoPages(pdfium, doc.handle, sourcePageIndex, targetPageIndex, (src, dst) => {
+      const target = listImageObjects(pdfium, src, doc.scratch)[imageIndex]
+      if (!target) throw new Error(`No image at index ${imageIndex} on page ${sourcePageIndex}`)
+      const r = moveImageObjectToPage(pdfium, src, dst, target.handle, rect, target.bounds)
+      if (!r.ok) throw new Error(r.error ?? "could not move the image to that page")
+      return { ok: true }
+    })
+  },
+
+  moveTextLine: ({ docId, pageIndex, lineIndex, dx, dy }, { pdfium }) => {
+    const doc = requireDoc(docId)
+    return withPage(pdfium, doc.handle, pageIndex, (page) => {
+      const objs = listTextObjects(pdfium, page, doc.scratch).filter((o) => o.text.trim() !== "")
+      const line = groupIntoLines(objs)[lineIndex]
+      if (!line) throw new Error(`No text line at index ${lineIndex} on page ${pageIndex}`)
+      const r = translateTextGroup(pdfium, page, line.objects, dx, dy, doc.scratch)
+      if (!r.ok) throw new Error(r.error ?? "could not move the text")
       return { ok: true }
     })
   },

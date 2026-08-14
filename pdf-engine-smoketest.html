@@ -3,6 +3,14 @@
   <head>
     <meta charset="utf-8" />
     <title>PDF Engine Smoke Test</title>
+    <!--
+      The app's real stylesheet. Without it every Tailwind class on the
+      editor's components is inert — `relative`, `absolute` and `fixed` do
+      nothing — so slots laid out in normal flow instead of being positioned
+      over their page, and any test that measured where a box actually sits
+      was measuring a layout the user never sees.
+    -->
+    <link rel="stylesheet" href="/src/index.css" />
   </head>
   <body>
     <!--

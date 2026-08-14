@@ -41,6 +41,23 @@ interface PdfEditorRailProps {
    * something the PDF already contained. */
   onAddText: () => void
   onAddImage: () => void
+  /**
+   * Whether to offer the text-boxes on/off switch.
+   *
+   * Off by default because the ORIGINAL customizer had it hidden at the
+   * client's request (see the switch itself below for why). The PDFium
+   * editor opts in: there the switch is how you reach a photo sitting
+   * under a caption, since its text layer stacks above the image layer.
+   */
+  showContentModeToggle?: boolean
+  /**
+   * Whether to offer page rotation.
+   *
+   * On by default so the original customizer keeps the tool it has always
+   * had. The PDFium editor opts out — rotating pages is not something its
+   * users should be able to do.
+   */
+  showRotate?: boolean
 }
 
 // Only used for the very first paint, before the header has been measured
@@ -67,9 +84,8 @@ const BUTTON_BASE =
 // near-black below, matching the app's own primary emphasis in light mode
 // (rgb(23,23,23)) rather than introducing an unrelated accent hue.
 const BUTTON_IDLE = "bg-transparent text-[rgba(0,0,0,0.55)] hover:bg-[rgba(0,0,0,0.06)] hover:text-[rgba(0,0,0,0.75)]"
-// Commented out together with the only thing that used it — the text on/off
-// switch further down. Restore both at once.
-// const BUTTON_ACTIVE = "bg-[rgb(23,23,23)] text-white"
+// "On"/active state for the text on/off switch.
+const BUTTON_ACTIVE = "bg-[rgb(23,23,23)] text-white"
 // Delete is the one destructive tool, so it hovers red rather than grey —
 // the button that removes pages shouldn't feel identical to the one that
 // copies them.
@@ -85,12 +101,13 @@ const BUTTON_DANGER = "bg-transparent text-[rgba(0,0,0,0.55)] hover:bg-[rgba(185
  */
 export function PdfEditorRail({
   top,
-  // contentMode / onToggleContentMode are still part of the contract and
-  // still passed in — they're only left undestructured while the text
-  // on/off switch is commented out below, so nothing reports them unused.
+  contentMode,
+  onToggleContentMode,
   onOpenOrganizer,
   onAddText,
   onAddImage,
+  showContentModeToggle = false,
+  showRotate = true,
 }: PdfEditorRailProps) {
   const { t } = useTranslation()
   const [expanded, setExpanded] = useState(true)
@@ -98,7 +115,9 @@ export function PdfEditorRail({
   const pageTools: { mode: PdfOrganizerMode; icon: typeof TypeIcon; label: string; danger?: boolean }[] = [
     { mode: "copy", icon: CopyIcon, label: t("pdfTemplates.railCopyPage") },
     { mode: "move", icon: ArrowUpDownIcon, label: t("pdfTemplates.railMovePage") },
-    { mode: "rotate", icon: RotateCwIcon, label: t("pdfTemplates.railRotatePages") },
+    ...(showRotate
+      ? [{ mode: "rotate" as const, icon: RotateCwIcon, label: t("pdfTemplates.railRotatePages") }]
+      : []),
     { mode: "delete", icon: Trash2Icon, label: t("pdfTemplates.railDeletePages"), danger: true },
   ]
 
@@ -131,29 +150,34 @@ export function PdfEditorRail({
           <div className="flex animate-in flex-col gap-1.5 fade-in-0 slide-in-from-top-1 duration-150">
             <div className="mx-auto h-px w-5" style={{ background: RAIL_DIVIDER }} />
 
-            {/* HIDDEN 2026-08-10 at the client's request — not removed.
-                The text on/off switch let clicks fall through to images
-                underneath instead of grabbing the text over them. The
-                customizer still honours contentMode (it stays "text"), and
-                both props are still passed in, so restoring this is a
-                matter of uncommenting the block below.
+            {/* Hidden by default, and was hidden outright on 2026-08-10 at
+                the client's request: in the original customizer this switch
+                let clicks fall THROUGH to images underneath instead of
+                grabbing the text over them, which read as the editor
+                ignoring the click.
 
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button
-                  type="button"
-                  aria-pressed={contentMode === "text"}
-                  onClick={onToggleContentMode}
-                  className={`${BUTTON_BASE} ${contentMode === "text" ? BUTTON_ACTIVE : BUTTON_IDLE}`}
-                >
-                  <TypeIcon className="size-4.5" />
-                </button>
-              </TooltipTrigger>
-              <TooltipContent side="left">
-                {contentMode === "text" ? t("pdfTemplates.railTextEditingOn") : t("pdfTemplates.railTextEditingOff")}
-              </TooltipContent>
-            </Tooltip>
-            */}
+                The PDFium editor opts back in (showContentModeToggle),
+                where it does something different and wanted: its text layer
+                deliberately stacks above its image layer so a caption wins
+                the click, and turning the text boxes off is the only way to
+                reach the photo underneath. */}
+            {showContentModeToggle && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    aria-pressed={contentMode === "text"}
+                    onClick={onToggleContentMode}
+                    className={`${BUTTON_BASE} ${contentMode === "text" ? BUTTON_ACTIVE : BUTTON_IDLE}`}
+                  >
+                    <TypeIcon className="size-4.5" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="left">
+                  {contentMode === "text" ? t("pdfTemplates.railTextEditingOn") : t("pdfTemplates.railTextEditingOff")}
+                </TooltipContent>
+              </Tooltip>
+            )}
 
             {/* Adding new content sits with the text switch, above the page
                 tools: both are about what's ON a page, whereas the group
