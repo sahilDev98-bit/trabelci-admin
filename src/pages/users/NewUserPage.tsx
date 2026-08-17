@@ -141,7 +141,21 @@ export function NewUserPage() {
           ) : null}
           <div className="grid gap-1">
             <Label htmlFor="password">{t("common.password")}</Label>
-            <PasswordInput id="password" required {...form.register("password")} />
+            <PasswordInput
+              id="password"
+              required
+              {...form.register("password", {
+                validate: (value) =>
+                  (typeof value === "string" &&
+                    value.length >= 8 &&
+                    /[A-Z]/.test(value) &&
+                    /[^A-Za-z0-9]/.test(value)) ||
+                  t("common.passwordPolicyError"),
+              })}
+            />
+            {form.formState.errors.password?.message ? (
+              <ErrorMessage>{form.formState.errors.password.message}</ErrorMessage>
+            ) : null}
           </div>
           <div className="grid gap-1">
             <Label htmlFor="confirmPassword">{t("common.confirmPassword")}</Label>
@@ -157,8 +171,10 @@ export function NewUserPage() {
 
           {createMutation.isError ? (
             <ErrorMessage>
-              {createMutation.error instanceof ApiError && createMutation.error.i18nKey
-                ? t(createMutation.error.i18nKey)
+              {createMutation.error instanceof ApiError
+                ? createMutation.error.i18nKey
+                  ? t(createMutation.error.i18nKey)
+                  : createMutation.error.message || t("users.failedToCreateUser")
                 : t("users.failedToCreateUser")}
             </ErrorMessage>
           ) : null}

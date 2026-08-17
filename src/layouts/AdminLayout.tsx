@@ -338,7 +338,9 @@ export function AdminLayout() {
                 {!sidebarCollapsed ? (
                   <div className="flex flex-col leading-tight">
                     <span className="text-sm font-semibold">{t("common.appName")}</span>
-                    <span className="text-xs text-muted-foreground">{t("common.admin")}</span>
+                    <span className="text-xs text-muted-foreground">
+                      {t(isAdmin ? "roles.admin" : isMerchant ? "roles.merchant" : "roles.employee")}
+                    </span>
                   </div>
                 ) : null}
               </div>
