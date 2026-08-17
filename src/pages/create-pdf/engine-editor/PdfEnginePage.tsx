@@ -65,6 +65,10 @@ interface PdfEnginePageProps {
   onResizeText: (pageIndex: number, lineIndex: number, fontSize: number, maxWidth: number) => void
 }
 
+/** Widest bitmap PDFium is asked to produce for one page, in device pixels.
+ * See the paint effect for why this is capped independently of layout. */
+const MAX_RENDER_WIDTH_PX = 2400
+
 /** The first image file in a drag payload, or null if it carries none.
  * Checked before showing any drop affordance so dragging a text selection
  * or a link never lights the page up as if it were droppable. */
@@ -131,11 +135,18 @@ export function PdfEnginePage({
     const paint = async () => {
       setPainting(true)
       try {
-        // Render above CSS size so the page stays sharp on high-DPI
-        // screens, capped so a large monitor can't request an enormous
-        // bitmap for every page at once.
+        // Render above CSS size so the page stays sharp on high-DPI screens.
         const dpr = Math.min(window.devicePixelRatio || 1, 2)
-        const result = await renderPage(pageIndex, scale * dpr)
+        // ...but never beyond MAX_RENDER_WIDTH_PX. Pages are laid out as
+        // wide as the window allows, and on a large monitor "CSS width x
+        // device pixel ratio" grows fast: a 2500px-wide page at 2x is a
+        // 5000x7000 bitmap, ~140MB of RGBA for ONE page, several of which
+        // are held at once while scrolling. Capping the raster instead of
+        // the layout keeps the paper full width and bounds the memory; the
+        // cap only bites on displays wider than roughly 1200 CSS px of
+        // page, and costs sharpness there rather than correctness.
+        const cappedScale = Math.min(scale * dpr, MAX_RENDER_WIDTH_PX / page.widthPts)
+        const result = await renderPage(pageIndex, cappedScale)
         if (cancelled || !result || !canvasRef.current) return
         drawRenderedPage(canvasRef.current, result)
       } finally {
@@ -144,7 +155,7 @@ export function PdfEnginePage({
     }
     void paint()
     return () => { cancelled = true }
-  }, [visible, pageIndex, scale, displayWidth, revision, renderPage])
+  }, [visible, pageIndex, scale, displayWidth, page.widthPts, revision, renderPage])
 
   useEffect(() => {
     if (!visible || text?.loaded) return

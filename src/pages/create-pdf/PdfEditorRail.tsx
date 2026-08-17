@@ -124,6 +124,11 @@ export function PdfEditorRail({
   return (
     <TooltipProvider delayDuration={300}>
       <div
+        // Marked so the page column can measure how much of itself this
+        // actually covers. The rail is fixed to the VIEWPORT while the pages
+        // sit in a centred, max-width panel, so whether the two overlap at
+        // all depends entirely on the window — it cannot be assumed.
+        data-pdf-tool-rail
         className="fixed z-30 flex flex-col gap-1.5 rounded-full p-2 shadow-lg backdrop-blur-md"
         style={{ top: top ?? FALLBACK_TOP_PX, insetInlineEnd: 20, background: RAIL_BG, border: RAIL_BORDER }}
       >

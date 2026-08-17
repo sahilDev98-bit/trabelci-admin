@@ -43,9 +43,30 @@ import { CrossPageDragGhost } from "./CrossPageDragGhost"
  * subtly different version of it.
  */
 
-/** Page width on screen. Wide enough to read catalogue body text without
- * making a 14-page document unmanageably tall. */
-const PAGE_DISPLAY_WIDTH = 820
+/**
+ * Pages are drawn as wide as the space actually allows, measured at runtime
+ * rather than fixed. A constant width left a wide window with large empty
+ * margins on both sides of the paper — the document is the whole point of
+ * this screen, so it gets the room.
+ *
+ * This is the width used only until the first measurement lands, and as the
+ * floor if the panel is ever reported as absurdly narrow.
+ */
+const FALLBACK_PAGE_DISPLAY_WIDTH = 820
+const MIN_PAGE_DISPLAY_WIDTH = 320
+
+/**
+ * Breathing room between the paper and the tool rail, on top of whatever
+ * the rail actually covers.
+ *
+ * The reservation itself is MEASURED, not assumed — see the effect below.
+ * A fixed gutter was wrong in both directions: the rail is fixed to the
+ * VIEWPORT while the pages sit in a centred, max-width panel, so on a wide
+ * window the rail floats clear of the panel entirely and any reservation is
+ * just dead space, while on a narrow one it genuinely covers the trailing
+ * edge. Only the live geometry knows which.
+ */
+const RAIL_CLEARANCE_PX = 12
 
 /** Where a newly added overlay lands, in PDF points from the page's
  * top-left. Offset rather than centred so it never appears underneath the
@@ -83,6 +104,11 @@ export function PdfEngineEditorPage() {
   const [draft, setDraft] = useState("")
   const [downloading, setDownloading] = useState(false)
   const [railTop, setRailTop] = useState<number | null>(null)
+  /** Measured width of the column the pages sit in, less any part of it the
+   * tool rail actually covers. */
+  const [pageDisplayWidth, setPageDisplayWidth] = useState(FALLBACK_PAGE_DISPLAY_WIDTH)
+  /** How much of the column's trailing edge the rail covers right now. */
+  const [railGutter, setRailGutter] = useState(0)
 
   const [organizerMode, setOrganizerMode] = useState<PdfOrganizerMode | null>(null)
   const [thumbnails, setThumbnails] = useState<Record<string, string>>({})
@@ -96,6 +122,7 @@ export function PdfEngineEditorPage() {
   >(null)
 
   const headerRef = useRef<HTMLElement>(null)
+  const pagesColumnRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   /** Which slot a pending file-picker result belongs to. A ref, not state:
    * the picker resolves outside React's flow and re-rendering in between
@@ -132,6 +159,53 @@ export function PdfEngineEditorPage() {
       window.removeEventListener("scroll", measure, true)
     }
   }, [])
+
+  /**
+   * Keeps the paper as wide as the space allows.
+   *
+   * Measured from the pages column itself rather than computed from the
+   * window: this screen sits inside the admin shell's sidebar and padding,
+   * so the only honest source for "how much room is there" is the element
+   * the pages are actually laid out in. A ResizeObserver rather than a
+   * window resize listener, because the sidebar can collapse without the
+   * window changing size at all.
+   */
+  useEffect(() => {
+    const el = pagesColumnRef.current
+    if (!el) return
+
+    const measure = () => {
+      const column = el.getBoundingClientRect()
+      // How far the rail reaches INTO this column, if at all. Measured from
+      // the rail's own box rather than its styling constants, so moving or
+      // resizing it cannot silently leave the paper underneath it.
+      const rail = document.querySelector("[data-pdf-tool-rail]")
+      const railRect = rail?.getBoundingClientRect()
+      const overlap = railRect ? column.right - railRect.left : 0
+      const gutter = overlap > 0 ? Math.ceil(overlap) + RAIL_CLEARANCE_PX : 0
+
+      setRailGutter(gutter)
+      setPageDisplayWidth(
+        Math.max(MIN_PAGE_DISPLAY_WIDTH, Math.floor(el.clientWidth - gutter)),
+      )
+    }
+    measure()
+
+    // Both are needed. The observer catches the panel changing size without
+    // the window doing so (the sidebar collapsing); the resize listener
+    // catches the reverse — the panel is width-capped and centred, so a
+    // wider window moves the viewport-fixed rail without changing the
+    // column at all, which the observer would never see.
+    const observer = new ResizeObserver(measure)
+    observer.observe(el)
+    window.addEventListener("resize", measure)
+    return () => {
+      observer.disconnect()
+      window.removeEventListener("resize", measure)
+    }
+    // Re-runs once the document is ready, which is when both the column and
+    // the rail first exist to be measured.
+  }, [doc.phase])
 
   /** Delete/Backspace removes the selected slot, matching how every other
    * canvas editor behaves. Ignored while a dialog or input has focus, so
@@ -202,7 +276,7 @@ export function PdfEngineEditorPage() {
     if (!sourcePage || !targetPage) return
 
     // Every page is drawn at the same CSS width, so one scale serves both.
-    const scale = PAGE_DISPLAY_WIDTH / targetPage.widthPts
+    const scale = pageDisplayWidth / targetPage.widthPts
     const { xPts, yFromTopPts, widthPts, heightPts } = dropToPagePoints(drop, scale)
     const samePage = targetPageIndex === item.pageIndex
 
@@ -542,7 +616,15 @@ export function PdfEngineEditorPage() {
         )}
 
         {doc.phase === "ready" && (
-          <div className="flex flex-col items-center gap-6">
+          <div
+            ref={pagesColumnRef}
+            className="flex flex-col items-center gap-6"
+            // Applied as padding rather than subtracted from the page
+            // width alone: this column centres its pages, so a subtracted
+            // gutter gets split in half and only half lands on the side the
+            // rail is on.
+            style={{ paddingInlineEnd: railGutter }}
+          >
             {/* data-engine-page-index lives on the page SURFACE inside
                 PdfEnginePage, not on this wrapper: a drop is converted using
                 the target's rect, and this wrapper can be wider than the page
@@ -554,7 +636,7 @@ export function PdfEngineEditorPage() {
                 <PdfEnginePage
                   page={page}
                   pageIndex={index}
-                  displayWidth={PAGE_DISPLAY_WIDTH}
+                  displayWidth={pageDisplayWidth}
                   text={doc.pageText[index]}
                   images={doc.pageImages[index]}
                   contentMode={contentMode}
