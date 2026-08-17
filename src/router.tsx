@@ -348,9 +348,9 @@ const pdfCustomizerRoute = createRoute({
   component: PdfCustomizerPage,
 })
 
-// Runs beside pdfCustomizerRoute rather than replacing it: the existing
-// editor stays the one users reach, and this one can be developed against
-// real templates without any risk to it.
+// Alias from the period when the engine editor ran beside the old one.
+// pdfCustomizerRoute now reaches the same screen for uploaded PDFs; this
+// stays so links shared during development still resolve.
 const pdfEngineEditorRoute = createRoute({
   getParentRoute: () => appLayoutRoute,
   path: "/create-pdf/customize-v2/$templateId",

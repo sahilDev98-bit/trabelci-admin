@@ -7,7 +7,7 @@ import { toast } from "sonner"
 import { usePdfTemplateQuery } from "@/features/pdfTemplates/api"
 import { ROUTES } from "@/lib/routes"
 import { Button } from "@/components/ui/button"
-import { PdfMasterCustomizer } from "./PdfMasterCustomizer"
+import { PdfEngineEditorPage } from "./engine-editor/PdfEngineEditorPage"
 import type { PdfTemplate } from "@/features/pdfTemplates/types"
 
 // ── What gets injected into the iframe ────────────────────────────────────────
@@ -274,16 +274,20 @@ function requestContent(iframe: HTMLIFrameElement): Promise<string> {
 // ── Page (dispatcher) ────────────────────────────────────────────────────────
 //
 // Templates come in two kinds (see features/pdfTemplates/types.ts):
-//   • pdf_master — uploaded PDF, edited in place (PdfMasterCustomizer)
+//   • pdf_master — uploaded PDF, edited in place by the PDFium engine
+//     editor (PdfEngineEditorPage), entirely in the browser.
 //   • html       — hand-authored/legacy-converted HTML template (this file's
 //     original iframe-based customizer, kept below as HtmlPdfCustomizer)
 
 export function PdfCustomizerPage() {
   const { t } = useTranslation()
   const navigate = useNavigate()
-  const { templateId } = useParams({ from: "/_app/create-pdf/customize/$templateId" })
+  // `strict: false`: this component is mounted on both the main customize
+  // route and the legacy one, so it cannot name a single route to read its
+  // params from.
+  const { templateId } = useParams({ strict: false }) as { templateId?: string }
 
-  const { data: template, isLoading, isError } = usePdfTemplateQuery(templateId)
+  const { data: template, isLoading, isError } = usePdfTemplateQuery(templateId ?? "")
 
   if (isLoading) {
     return (
@@ -306,7 +310,7 @@ export function PdfCustomizerPage() {
   }
 
   if (template.template_type === "pdf_master") {
-    return <PdfMasterCustomizer key={template.id} template={template} />
+    return <PdfEngineEditorPage key={template.id} />
   }
 
   return <HtmlPdfCustomizer template={template} />

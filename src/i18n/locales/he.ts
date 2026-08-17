@@ -1028,8 +1028,7 @@ const he = {
     pageRemoved: "העמוד הוסר",
     masterTextOverflow: "הטקסט הזה כבר לא נכנס לשטח המקורי שלו ועלול לחפוף לתוכן סמוך",
     masterEditTextTitle: "עריכת טקסט",
-    // PDFium-engine editor (runs alongside the existing one while it is
-    // brought to parity — see ROUTES.CREATE_PDF_CUSTOMIZE_V2).
+    // PDFium-engine editor — now THE editor for uploaded PDFs.
     engineDownloading: "טוען PDF",
     engineOpening: "מכין את העורך",
     engineEditableSlots: "{{count}} שדות ניתנים לעריכה",

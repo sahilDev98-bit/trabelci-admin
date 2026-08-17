@@ -1044,8 +1044,7 @@ const en = {
     pageRemoved: "Page removed",
     masterTextOverflow: "This text no longer fits its original space and may overlap nearby content",
     masterEditTextTitle: "Edit text",
-    // PDFium-engine editor (runs alongside the existing one while it is
-    // brought to parity — see ROUTES.CREATE_PDF_CUSTOMIZE_V2).
+    // PDFium-engine editor — now THE editor for uploaded PDFs.
     engineDownloading: "Loading PDF",
     engineOpening: "Preparing editor",
     engineEditableSlots: "{{count}} editable slots",

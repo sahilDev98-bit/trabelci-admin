@@ -26,16 +26,21 @@ import { CrossPageDragGhost } from "./CrossPageDragGhost"
 /**
  * PDF Master editor, rebuilt on the PDFium engine.
  *
- * Runs at its own route alongside the existing editor rather than
- * replacing it, so the current one keeps working untouched while this is
- * brought up to parity. Nothing here calls the Python edit service: the
- * PDF is fetched from the API, edited in the browser, and saved by the
- * same engine that rendered it.
+ * This is now THE editor for uploaded PDFs — PdfCustomizerPage dispatches
+ * pdf_master templates here. It was developed at a parallel route first;
+ * the previous implementation (PdfMasterCustomizer) is still present and
+ * still reachable at ROUTES.CREATE_PDF_CUSTOMIZE_LEGACY as the rollback
+ * path, and retires with the Python edit service it depends on.
+ *
+ * Nothing here calls that service: the PDF is fetched from the API, edited
+ * in the browser, and saved by the same engine that rendered it — so what
+ * is on screen and what is written to the file are one engine's output by
+ * construction, rather than three engines that have to agree.
  *
  * The tool rail and page-organizer dialog are the EXISTING components,
- * reused as-is. They are presentational and callback-driven, so the new
- * editor inherits the interaction design (and its undo/cancel behaviour)
- * rather than growing a second, subtly different version of it.
+ * reused as-is. They are presentational and callback-driven, so this
+ * editor inherits the interaction design rather than growing a second,
+ * subtly different version of it.
  */
 
 /** Page width on screen. Wide enough to read catalogue body text without
@@ -474,7 +479,10 @@ export function PdfEngineEditorPage() {
   }
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
+    // data-pdf-editor names the implementation actually on screen. Uploaded
+    // PDFs can be opened by either editor during the switchover, and "which
+    // one am I looking at?" is otherwise only answerable by eye.
+    <div className="flex min-h-0 flex-1 flex-col" data-pdf-editor="engine">
       {/* Sticky: the window is what scrolls in this app, so without this
           the toolbar (and the tool rail pinned under it) disappeared as
           soon as the user scrolled past the first page. */}

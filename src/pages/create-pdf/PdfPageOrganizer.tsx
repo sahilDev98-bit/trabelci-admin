@@ -7,7 +7,7 @@ import type { PdfOrganizerMode } from "./PdfEditorRail"
 
 /**
  * One page as the organizer sees it. Deliberately a light descriptor rather
- * than the real EditorPage: creating a genuine duplicate means cloning a
+ * than the editor's own page model: creating a genuine duplicate means cloning a
  * canvas bitmap, its hotspots and its pending edits, all of which live in
  * refs inside the customizer. So the dialog only ever says "here is a new
  * slot showing page X" and the customizer materialises it on Done.

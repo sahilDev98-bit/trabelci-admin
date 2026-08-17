@@ -28,10 +28,12 @@ export const ROUTES = {
   CREATE_PDF: "/create-pdf",
   CREATE_PDF_TEMPLATE_NEW: "/create-pdf/templates/new",
   CREATE_PDF_TEMPLATE_EDIT: "/create-pdf/templates/$templateId",
+  /** Editing a template. Uploaded PDFs open in the PDFium engine editor;
+   * HTML templates in the iframe customizer. */
   CREATE_PDF_CUSTOMIZE: "/create-pdf/customize/$templateId",
-  /** PDFium-engine editor, running alongside CREATE_PDF_CUSTOMIZE while it
-   * is brought up to feature parity. Not linked from the UI yet — reached
-   * by URL during development. */
+  /** Alias kept from the development period, when the engine editor ran
+   * beside the old one. Same screen as CREATE_PDF_CUSTOMIZE now — it exists
+   * only so links shared while it was being built still resolve. */
   CREATE_PDF_CUSTOMIZE_V2: "/create-pdf/customize-v2/$templateId",
   AI_IMAGES: "/ai-images",
   EXTRACT_PRODUCT_PDF: "/extract-product-pdf",
