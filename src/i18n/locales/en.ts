@@ -1055,6 +1055,7 @@ const en = {
     engineToggleTextHint: "Hide the text boxes to click a photo underneath them",
     engineReplaceImage: "Replace image",
     engineImageHint: "Double-click to replace. Drag to move it anywhere in the document, corners to resize.",
+    engineVectorHint: "Logo or icon drawn as artwork. Double-click to replace it with an image, or press Delete to remove it.",
     engineTextHint: "Double-click to edit. Drag to move it anywhere in the document, corners to resize.",
     engineDragToPage: "Move to page {{page}}",
     engineDragSamePage: "Page {{page}}",

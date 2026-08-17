@@ -39,6 +39,17 @@ export interface EngineImage {
   filters: string[]
 }
 
+/**
+ * A piece of vector artwork — a logo, icon or drawn mark — grouped from the
+ * many paths that actually make it up. See vector.ts for why.
+ */
+export interface EngineVectorGroup {
+  vectorIndex: number
+  bbox: PdfRect
+  /** How many paths were merged into it, purely informational. */
+  pathCount: number
+}
+
 export interface EnginePage {
   index: number
   widthPts: number
@@ -105,6 +116,24 @@ export interface EngineMethods {
     result: { ok: boolean; lines: string[]; fontSize: number; shrunk: boolean; overflows: boolean }
   }
   listImages: { params: { docId: string; pageIndex: number }; result: { images: EngineImage[] } }
+  listVectorGroups: {
+    params: { docId: string; pageIndex: number }
+    result: { groups: EngineVectorGroup[] }
+  }
+  removeVectorGroup: {
+    params: { docId: string; pageIndex: number; vectorIndex: number }
+    result: { ok: boolean }
+  }
+  /** Swap a piece of artwork for an image, in the box the artwork occupied.
+   * One call rather than a delete followed by an add: if the add failed
+   * separately the artwork would already be gone. */
+  replaceVectorGroupWithImage: {
+    params: {
+      docId: string; pageIndex: number; vectorIndex: number
+      bytes: ArrayBuffer; kind: "png" | "jpeg"
+    }
+    result: { ok: boolean }
+  }
   replaceImage: {
     params: { docId: string; pageIndex: number; imageIndex: number; bytes: ArrayBuffer; kind: "png" | "jpeg" }
     result: { ok: boolean }

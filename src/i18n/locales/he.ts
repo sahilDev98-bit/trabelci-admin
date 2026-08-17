@@ -1039,6 +1039,7 @@ const he = {
     engineToggleTextHint: "הסתר את תיבות הטקסט כדי ללחוץ על תמונה שמתחתן",
     engineReplaceImage: "החלף תמונה",
     engineImageHint: "לחיצה כפולה להחלפה. גרירה להזזה לכל מקום במסמך, פינות לשינוי גודל.",
+    engineVectorHint: "לוגו או אייקון המצויר כגרפיקה וקטורית. לחיצה כפולה להחלפה בתמונה, או Delete להסרה.",
     engineTextHint: "לחיצה כפולה לעריכה. גרירה להזזה לכל מקום במסמך, פינות לשינוי גודל.",
     engineDragToPage: "העבר לעמוד {{page}}",
     engineDragSamePage: "עמוד {{page}}",

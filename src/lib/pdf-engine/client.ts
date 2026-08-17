@@ -106,6 +106,21 @@ export class PdfEngineClient {
     return this.call("setImageRect", { docId, pageIndex, imageIndex, rect })
   }
 
+  listVectorGroups(docId: string, pageIndex: number) {
+    return this.call("listVectorGroups", { docId, pageIndex })
+  }
+
+  removeVectorGroup(docId: string, pageIndex: number, vectorIndex: number): Promise<{ ok: boolean }> {
+    return this.call("removeVectorGroup", { docId, pageIndex, vectorIndex })
+  }
+
+  replaceVectorGroupWithImage(
+    docId: string, pageIndex: number, vectorIndex: number,
+    bytes: ArrayBuffer, kind: "png" | "jpeg",
+  ): Promise<{ ok: boolean }> {
+    return this.call("replaceVectorGroupWithImage", { docId, pageIndex, vectorIndex, bytes, kind }, [bytes])
+  }
+
   removeTextLine(docId: string, pageIndex: number, lineIndex: number): Promise<{ ok: boolean }> {
     return this.call("removeTextLine", { docId, pageIndex, lineIndex })
   }

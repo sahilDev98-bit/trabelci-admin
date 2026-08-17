@@ -118,7 +118,7 @@ export function PdfEngineEditorPage() {
    * than per page so selecting on one page clears every other, and so a
    * keyboard delete knows exactly what it is acting on. */
   const [selection, setSelection] = useState<
-    { pageIndex: number; kind: "text" | "image"; index: number } | null
+    { pageIndex: number; kind: "text" | "image" | "vector"; index: number } | null
   >(null)
 
   const headerRef = useRef<HTMLElement>(null)
@@ -129,6 +129,7 @@ export function PdfEngineEditorPage() {
    * would be pointless. */
   const pendingImageTarget = useRef<
     | { kind: "replace"; pageIndex: number; imageIndex: number }
+    | { kind: "replaceVector"; pageIndex: number; vectorIndex: number }
     | { kind: "overlay"; pageIndex: number }
     | null
   >(null)
@@ -223,7 +224,9 @@ export function PdfEngineEditorPage() {
       setSelection(null)
       const run = target.kind === "image"
         ? doc.removeImage(target.pageIndex, target.index)
-        : doc.removeText(target.pageIndex, target.index)
+        : target.kind === "vector"
+          ? doc.removeVector(target.pageIndex, target.index)
+          : doc.removeText(target.pageIndex, target.index)
       void run.catch((err: unknown) => toast.error(err instanceof Error ? err.message : String(err)))
     }
     window.addEventListener("keydown", onKeyDown)
@@ -338,6 +341,10 @@ export function PdfEngineEditorPage() {
     try {
       if (target.kind === "replace") {
         await doc.replaceImage(target.pageIndex, target.imageIndex, file)
+      } else if (target.kind === "replaceVector") {
+        // Lands in the box the artwork occupied, so a swapped logo sits
+        // where the old one was.
+        await doc.replaceVector(target.pageIndex, target.vectorIndex, file)
       } else {
         const page = doc.pages[target.pageIndex]
         if (!page) return
@@ -536,11 +543,12 @@ export function PdfEngineEditorPage() {
   // are too unless the text layer has been switched off.
   const editableCount = useMemo(() => {
     const images = Object.values(doc.pageImages).reduce((n, p) => n + (p?.images.length ?? 0), 0)
+    const vectors = Object.values(doc.pageVectors).reduce((n, p) => n + (p?.groups.length ?? 0), 0)
     const text = contentMode === "text"
       ? Object.values(doc.pageText).reduce((n, p) => n + (p?.lines.length ?? 0), 0)
       : 0
-    return images + text
-  }, [contentMode, doc.pageText, doc.pageImages])
+    return images + vectors + text
+  }, [contentMode, doc.pageText, doc.pageImages, doc.pageVectors])
 
   if (templateQuery.isLoading) {
     return <CenteredMessage><Loader2Icon className="size-5 animate-spin" /></CenteredMessage>
@@ -644,6 +652,10 @@ export function PdfEngineEditorPage() {
                   renderPage={doc.renderPage}
                   loadPageText={doc.loadPageText}
                   loadPageImages={doc.loadPageImages}
+                  loadPageVectors={doc.loadPageVectors}
+                  vectors={doc.pageVectors[index]}
+                  onReplaceVector={(pageIndex, vectorIndex) =>
+                    openFilePicker({ kind: "replaceVector", pageIndex, vectorIndex })}
                   onSelectLine={openLine}
                   onReplaceImage={(pageIndex, imageIndex) => openFilePicker({ kind: "replace", pageIndex, imageIndex })}
                   onDropOnImage={(pageIndex, imageIndex, file) => void handleDropOnImage(pageIndex, imageIndex, file)}

@@ -2,9 +2,10 @@ import { useEffect, useRef, useState } from "react"
 
 import { drawRenderedPage, type EnginePage, type EngineTextLine } from "@/lib/pdf-engine"
 import type { PdfContentMode } from "../PdfEditorRail"
-import type { PageTextState, PageImageState } from "./usePdfEngineDocument"
+import type { PageTextState, PageImageState, PageVectorState } from "./usePdfEngineDocument"
 import { PdfEngineImageSlot } from "./PdfEngineImageSlot"
 import { PdfEngineTextSlot } from "./PdfEngineTextSlot"
+import { PdfEngineVectorSlot } from "./PdfEngineVectorSlot"
 
 interface PdfEnginePageProps {
   page: EnginePage
@@ -14,6 +15,8 @@ interface PdfEnginePageProps {
   displayWidth: number
   text: PageTextState | undefined
   images: PageImageState | undefined
+  /** Logos and icons drawn as vector paths rather than placed as images. */
+  vectors: PageVectorState | undefined
   /**
    * Image slots are ALWAYS shown; this only controls whether the text
    * layer is drawn on top of them.
@@ -30,6 +33,8 @@ interface PdfEnginePageProps {
   renderPage: (pageIndex: number, scale: number) => Promise<{ width: number; height: number; rgba: ArrayBuffer } | null>
   loadPageText: (pageIndex: number) => Promise<void>
   loadPageImages: (pageIndex: number) => Promise<void>
+  loadPageVectors: (pageIndex: number) => Promise<void>
+  onReplaceVector: (pageIndex: number, vectorIndex: number) => void
   onSelectLine: (pageIndex: number, line: EngineTextLine) => void
   onReplaceImage: (pageIndex: number, imageIndex: number) => void
   /** A file dropped onto an existing photo — replaces it in place. */
@@ -48,8 +53,8 @@ interface PdfEnginePageProps {
    * this component so selecting on page 2 clears page 1 — with per-page
    * state, two pages could each show handles at once, and a keyboard
    * delete would have no way to tell which one was meant. */
-  selection: { pageIndex: number; kind: "text" | "image"; index: number } | null
-  onSelect: (selection: { pageIndex: number; kind: "text" | "image"; index: number } | null) => void
+  selection: { pageIndex: number; kind: "text" | "image" | "vector"; index: number } | null
+  onSelect: (selection: { pageIndex: number; kind: "text" | "image" | "vector"; index: number } | null) => void
   /** Starts a document-wide move of a slot on this page. */
   onMoveStart: (
     e: React.PointerEvent,
@@ -95,8 +100,9 @@ function dragCarriesFile(dt: DataTransfer | null): boolean {
  * could not guarantee, since three separate engines had to agree.
  */
 export function PdfEnginePage({
-  page, pageIndex, displayWidth, text, images, contentMode, revision,
-  renderPage, loadPageText, loadPageImages, onSelectLine, onReplaceImage,
+  page, pageIndex, displayWidth, text, images, vectors, contentMode, revision,
+  renderPage, loadPageText, loadPageImages, loadPageVectors,
+  onSelectLine, onReplaceImage, onReplaceVector,
   onDropOnImage, onDropOnPage, onTransformImage, onResizeText,
   selection, onSelect, onMoveStart, draggingSlot, dropTargetPage,
 }: PdfEnginePageProps) {
@@ -109,6 +115,7 @@ export function PdfEnginePage({
   /** True while a file hovers the page but not over any slot. */
   const [dropPage, setDropPage] = useState(false)
   const selectedImage = selection?.pageIndex === pageIndex && selection.kind === "image" ? selection.index : null
+  const selectedVector = selection?.pageIndex === pageIndex && selection.kind === "vector" ? selection.index : null
   const selectedText = selection?.pageIndex === pageIndex && selection.kind === "text" ? selection.index : null
 
   const displayHeight = page.heightPts > 0 ? (displayWidth * page.heightPts) / page.widthPts : 0
@@ -166,6 +173,11 @@ export function PdfEnginePage({
     if (!visible || images?.loaded) return
     void loadPageImages(pageIndex)
   }, [visible, images?.loaded, pageIndex, loadPageImages])
+
+  useEffect(() => {
+    if (!visible || vectors?.loaded) return
+    void loadPageVectors(pageIndex)
+  }, [visible, vectors?.loaded, pageIndex, loadPageVectors])
 
   /** PDF's y axis grows upward from the bottom; CSS grows downward from the
    * top, so a box's top edge is measured from the page height. */
@@ -292,6 +304,19 @@ export function PdfEnginePage({
           </div>
         )
       })}
+
+      {/* Above the image layer and below the text layer, which is the order
+          the PDF itself paints them: a logo sits on the background photo,
+          and a caption sits on top of both. */}
+      {vectors?.groups.map((group) => (
+        <PdfEngineVectorSlot
+          key={`v-${pageIndex}-${group.vectorIndex}`}
+          rect={boxStyle(group.bbox)}
+          selected={selectedVector === group.vectorIndex}
+          onSelect={() => onSelect({ pageIndex, kind: "vector", index: group.vectorIndex })}
+          onReplace={() => onReplaceVector(pageIndex, group.vectorIndex)}
+        />
+      ))}
 
       {contentMode === "text" && text?.lines.map((line) => (
         <PdfEngineTextSlot

@@ -5,6 +5,7 @@ import {
   type EnginePage,
   type EngineTextLine,
   type EngineImage,
+  type EngineVectorGroup,
   type EditTextOptions,
   type TextOverlayRequest,
   type ImageOverlayRequest,
@@ -34,6 +35,11 @@ export interface PageTextState {
   loaded: boolean
 }
 
+export interface PageVectorState {
+  groups: EngineVectorGroup[]
+  loaded: boolean
+}
+
 export interface PageImageState {
   images: EngineImage[]
   loaded: boolean
@@ -57,6 +63,10 @@ export interface UsePdfEngineDocumentResult {
   removeText: (pageIndex: number, lineIndex: number) => Promise<void>
   /** Shift a line. dy is PDF-space, so positive moves it up the page. */
   moveText: (pageIndex: number, lineIndex: number, dx: number, dy: number) => Promise<void>
+  pageVectors: Record<number, PageVectorState>
+  loadPageVectors: (pageIndex: number) => Promise<void>
+  removeVector: (pageIndex: number, vectorIndex: number) => Promise<void>
+  replaceVector: (pageIndex: number, vectorIndex: number, file: File) => Promise<void>
   moveTextToPage: (
     sourcePageIndex: number, lineIndex: number,
     targetPageIndex: number, x: number, yBaseline: number,
@@ -124,6 +134,7 @@ export function usePdfEngineDocument(templateId: string | null | undefined): Use
   const [docId, setDocId] = useState<string | null>(null)
   const [pageText, setPageText] = useState<Record<number, PageTextState>>({})
   const [pageImages, setPageImages] = useState<Record<number, PageImageState>>({})
+  const [pageVectors, setPageVectors] = useState<Record<number, PageVectorState>>({})
   const [busy, setBusy] = useState(false)
   const [revision, setRevision] = useState(0)
 
@@ -192,6 +203,13 @@ export function usePdfEngineDocument(templateId: string | null | undefined): Use
     setPageText((prev) => ({ ...prev, [pageIndex]: { lines, loaded: true } }))
   }, [getEngine])
 
+  const loadPageVectors = useCallback(async (pageIndex: number) => {
+    const id = docIdRef.current
+    if (!id) return
+    const { groups } = await getEngine().listVectorGroups(id, pageIndex)
+    setPageVectors((prev) => ({ ...prev, [pageIndex]: { groups, loaded: true } }))
+  }, [getEngine])
+
   const loadPageImages = useCallback(async (pageIndex: number) => {
     const id = docIdRef.current
     if (!id) return
@@ -223,11 +241,12 @@ export function usePdfEngineDocument(templateId: string | null | undefined): Use
     try {
       await run(id)
       const refreshed = await Promise.all(pages.map(async (pageIndex) => {
-        const [{ lines }, { images }] = await Promise.all([
+        const [{ lines }, { images }, { groups }] = await Promise.all([
           getEngine().listTextLines(id, pageIndex),
           getEngine().listImages(id, pageIndex),
+          getEngine().listVectorGroups(id, pageIndex),
         ])
-        return { pageIndex, lines, images }
+        return { pageIndex, lines, images, groups }
       }))
       setPageText((prev) => {
         const next = { ...prev }
@@ -237,6 +256,11 @@ export function usePdfEngineDocument(templateId: string | null | undefined): Use
       setPageImages((prev) => {
         const next = { ...prev }
         for (const r of refreshed) next[r.pageIndex] = { images: r.images, loaded: true }
+        return next
+      })
+      setPageVectors((prev) => {
+        const next = { ...prev }
+        for (const r of refreshed) next[r.pageIndex] = { groups: r.groups, loaded: true }
         return next
       })
       setRevision((r) => r + 1)
@@ -249,6 +273,17 @@ export function usePdfEngineDocument(templateId: string | null | undefined): Use
     pageIndex: number, lineIndex: number, newText: string, options?: EditTextOptions,
   ) => {
     await mutate(pageIndex, (id) => getEngine().editTextLine(id, pageIndex, lineIndex, newText, options).then(() => undefined))
+  }, [getEngine, mutate])
+
+  const removeVector = useCallback(async (pageIndex: number, vectorIndex: number) => {
+    await mutate(pageIndex, (id) => getEngine().removeVectorGroup(id, pageIndex, vectorIndex).then(() => undefined))
+  }, [getEngine, mutate])
+
+  /** Swap a logo or icon for an uploaded image, in the box it occupied. */
+  const replaceVector = useCallback(async (pageIndex: number, vectorIndex: number, file: File) => {
+    const { bytes, kind } = await toEmbeddableImage(file)
+    await mutate(pageIndex, (id) =>
+      getEngine().replaceVectorGroupWithImage(id, pageIndex, vectorIndex, bytes, kind).then(() => undefined))
   }, [getEngine, mutate])
 
   const removeText = useCallback(async (pageIndex: number, lineIndex: number) => {
@@ -335,7 +370,8 @@ export function usePdfEngineDocument(templateId: string | null | undefined): Use
 
   return {
     phase, error, downloadPercent, pages, docId, pageText, pageImages,
-    loadPageText, loadPageImages, renderPage, editText, moveText, moveTextToPage, moveImageToPage, removeText,
+    loadPageText, loadPageImages, loadPageVectors, pageVectors,
+    removeVector, replaceVector, renderPage, editText, moveText, moveTextToPage, moveImageToPage, removeText,
     replaceImage, removeImage, setImageRect, addTextOverlay, addImageOverlay, applyPagePlan,
     save, busy, revision,
   }

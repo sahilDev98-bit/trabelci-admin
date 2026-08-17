@@ -21,6 +21,7 @@ import {
 } from "./text"
 import { groupIntoLines, effectiveFontSize, isRtlText } from "./grouping"
 import { listImageObjects, replaceImageBytes, removeImageObject, setImageRect, moveImageObjectToPage } from "./image"
+import { listVectorGroups, removeVectorGroup } from "./vector"
 import { listPages, buildDocumentFromPlan } from "./pages"
 import { addTextOverlay, addImageOverlay } from "./overlay"
 import { loadFontMetrics, type FontMetrics } from "./layout"
@@ -237,6 +238,55 @@ const handlers: {
       // carried along instead of being left behind.
       const r = setImageRect(pdfium, page, target.handle, rect, target.bounds)
       if (!r.ok) throw new Error(r.error ?? "could not move the image")
+      return { ok: true }
+    })
+  },
+
+  listVectorGroups: ({ docId, pageIndex }, { pdfium }) => {
+    const doc = requireDoc(docId)
+    return withPage(pdfium, doc.handle, pageIndex, (page) => ({
+      groups: listVectorGroups(pdfium, page, doc.scratch).map((g) => ({
+        vectorIndex: g.index,
+        bbox: g.bbox,
+        pathCount: g.pathCount,
+      })),
+    }))
+  },
+
+  removeVectorGroup: ({ docId, pageIndex, vectorIndex }, { pdfium }) => {
+    const doc = requireDoc(docId)
+    return withPage(pdfium, doc.handle, pageIndex, (page) => {
+      const target = listVectorGroups(pdfium, page, doc.scratch)[vectorIndex]
+      if (!target) throw new Error(`No artwork at index ${vectorIndex} on page ${pageIndex}`)
+      const r = removeVectorGroup(pdfium, page, target.handles)
+      if (!r.ok) throw new Error(r.error ?? "could not delete the artwork")
+      return { ok: true }
+    })
+  },
+
+  replaceVectorGroupWithImage: ({ docId, pageIndex, vectorIndex, bytes, kind }, { pdfium }) => {
+    const doc = requireDoc(docId)
+    return withPage(pdfium, doc.handle, pageIndex, (page) => {
+      const target = listVectorGroups(pdfium, page, doc.scratch)[vectorIndex]
+      if (!target) throw new Error(`No artwork at index ${vectorIndex} on page ${pageIndex}`)
+      // The image goes in exactly the box the artwork occupied, so a swapped
+      // logo lands where the old one was rather than at a corner.
+      const { left, bottom, right, top } = target.bbox
+      const removed = removeVectorGroup(pdfium, page, target.handles)
+      if (!removed.ok) throw new Error(removed.error ?? "could not remove the artwork")
+      const r = addImageOverlay(
+        pdfium, doc.handle, page,
+        { x: left, y: bottom, width: right - left, height: top - bottom },
+        new Uint8Array(bytes), kind, doc.scratch,
+      )
+      if (!r.ok) throw new Error(r.error ?? "could not place the replacement image")
+      // Regenerated again: removeVectorGroup already wrote the page once,
+      // and the new image object is only committed to the content stream by
+      // a further pass. Without this the artwork vanishes and nothing takes
+      // its place.
+      if (!pdfium.FPDFPage_GenerateContent(page)) {
+        throw new Error("GenerateContent failed after placing the replacement image")
+      }
       return { ok: true }
     })
   },

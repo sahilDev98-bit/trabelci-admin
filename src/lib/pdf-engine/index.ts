@@ -14,7 +14,7 @@
  */
 export { PdfEngineClient, drawRenderedPage } from "./client"
 export type {
-  EnginePage, EngineTextLine, EngineImage, RenderedPage,
+  EnginePage, EngineTextLine, EngineImage, EngineVectorGroup, RenderedPage,
   EditTextOptions, TextOverlayRequest, ImageOverlayRequest, PagePlanRequest,
 } from "./protocol"
 export type { TextAlign } from "./layout"

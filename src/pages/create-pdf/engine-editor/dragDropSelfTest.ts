@@ -130,7 +130,7 @@ export async function runDragDropSelfTest(): Promise<DragDropTestResult> {
       textResizes: { fontSize: number; maxWidth: number }[]
     } = { onImage: null, onPage: null, transforms: [], textResizes: [] }
 
-    let selection: { pageIndex: number; kind: "text" | "image"; index: number } | null = null
+    let selection: { pageIndex: number; kind: "text" | "image" | "vector"; index: number } | null = null
     const renderPage = () => root.render(createElement(PdfEnginePage, {
       page,
       pageIndex: 0,
@@ -142,6 +142,9 @@ export async function runDragDropSelfTest(): Promise<DragDropTestResult> {
       renderPage: async () => null,
       loadPageText: async () => {},
       loadPageImages: async () => {},
+      loadPageVectors: async () => {},
+      vectors: { loaded: true, groups: [] },
+      onReplaceVector: () => {},
       onSelectLine: () => {},
       onReplaceImage: () => {},
       onDropOnImage: (pageIndex, imageIndex, file) => {
@@ -293,7 +296,7 @@ export async function runCrossPageDragSelfTest(): Promise<CrossPageTestResult> {
 
     function Harness() {
       const [selection, setSelection] = useState<
-        { pageIndex: number; kind: "text" | "image"; index: number } | null
+        { pageIndex: number; kind: "text" | "image" | "vector"; index: number } | null
       >(null)
       const { drag, start } = useCrossPageDrag((drop) => { drops.push(drop) })
       targetsSeen.push(drag?.targetPageIndex ?? null)
@@ -326,6 +329,9 @@ export async function runCrossPageDragSelfTest(): Promise<CrossPageTestResult> {
             renderPage: async () => null,
             loadPageText: async () => {},
             loadPageImages: async () => {},
+        loadPageVectors: async () => {},
+        vectors: { loaded: true, groups: [] },
+        onReplaceVector: () => {},
             onSelectLine: () => {},
             onReplaceImage: () => {},
                   onDropOnImage: () => {},
