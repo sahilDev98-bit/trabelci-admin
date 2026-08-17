@@ -3,6 +3,7 @@ import type { PayloadAction } from "@reduxjs/toolkit"
 import type { User } from "@supabase/supabase-js"
 
 import { supabaseClient } from "@/lib/supabaseClient"
+import { apiFetch } from "@/lib/apiClient"
 
 export const AUTH_STATUS = {
   IDLE: "idle",
@@ -110,6 +111,23 @@ export const loginWithEmailPassword = createAsyncThunk(
       if (import.meta.env.DEV) {
         console.error("Error during login", error)
       }
+
+      // BUG-004: tell a deleted account apart from a plain wrong password.
+      // Best-effort — if this check itself fails, fall back to the generic
+      // message rather than blocking login feedback on it.
+      try {
+        const result = await apiFetch<{ deleted: boolean }>("/auth/check-deleted-account", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email: payload.email }),
+        })
+        if (result.deleted) {
+          return rejectWithValue("This account has been deactivated. Please contact your administrator.")
+        }
+      } catch {
+        // fall through to the generic message below
+      }
+
       return rejectWithValue("Failed to sign in. Please check your credentials.")
     }
   },
