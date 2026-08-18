@@ -31,8 +31,11 @@ const result = await page.evaluate(async (pdfUrl) => {
   const { PdfEngineClient } = await import("/src/lib/pdf-engine/index.ts")
   const out = { errors: [] }
   const engine = new PdfEngineClient()
-  const src = await (await fetch(pdfUrl)).arrayBuffer()
-  const { docId } = await engine.open(src)
+  // Two copies: the engine TRANSFERS the buffer it is handed, so a second
+  // document needs its own.
+  const srcBytes = new Uint8Array(await (await fetch(pdfUrl)).arrayBuffer())
+  const src2 = srcBytes.slice().buffer
+  const { docId } = await engine.open(srcBytes.slice().buffer)
 
   const pages = (await engine.listPages(docId)).pages
   out.pageCount = pages.length
@@ -95,6 +98,51 @@ const result = await page.evaluate(async (pdfUrl) => {
     out.errors.push("a same-page 'move to page' was accepted")
   } catch {
     out.samePageRefused = true
+  }
+
+  // ---------- moving renumbers: the new index must be reported ----------
+  // Text lines are grouped and sorted BY POSITION, so moving one up or down
+  // the page genuinely changes its index. The editor keeps a box selected
+  // across a move, which is only safe if the engine says where it went —
+  // otherwise the selection would silently land on a different line.
+  {
+    const probe = await engine.open(src2)
+    const before = (await engine.listTextLines(probe.docId, 0)).lines
+    // The LOWEST line on the page, so shoving it upward is guaranteed to
+    // reorder it past the others rather than leaving it where it was.
+    let lowest = 0
+    for (let i = 1; i < before.length; i++) {
+      if (before[i].bbox.bottom < before[lowest].bbox.bottom) lowest = i
+    }
+    const movedText = before[lowest].text
+    out.indexProbe = { count: before.length, from: lowest, text: movedText }
+
+    // Far enough up the page to pass everything else on it.
+    const lift = pages[0].heightPts - before[lowest].bbox.top - 20
+    const { newIndex } = await engine.moveTextLine(probe.docId, 0, lowest, 0, lift)
+    out.reportedNewIndex = newIndex
+
+    const after = (await engine.listTextLines(probe.docId, 0)).lines
+    out.textAtReportedIndex = after[newIndex]?.text ?? null
+    // CONTAINS, not equals. Lines are grouped by proximity, so a line moved
+    // onto another's baseline legitimately merges with it and the group's
+    // text grows. The guarantee being checked is that the selection follows
+    // the moved words — not that they stayed alone on their line.
+    out.reportedIndexHoldsMovedText =
+      typeof out.textAtReportedIndex === "string"
+      && out.textAtReportedIndex.includes(movedText.trim())
+    if (!out.reportedIndexHoldsMovedText) {
+      out.errors.push(
+        `moveTextLine reported index ${newIndex}, which holds `
+        + `"${out.textAtReportedIndex}" — it does not contain "${movedText}"`,
+      )
+    }
+    // And the index really did change — otherwise this proves nothing.
+    out.indexActuallyChanged = newIndex !== lowest
+    if (!out.indexActuallyChanged) {
+      out.errors.push("the move did not renumber the line, so the report was not exercised")
+    }
+    await engine.close(probe.docId)
   }
 
   // ---------- the check that counts: save, reopen, inspect ----------
@@ -182,6 +230,8 @@ const checks = {
   "the image left its page": result.imagesOnSourceAfter === result.imagesOnSource - 1,
   "the image arrived with its pixels": result.imagesOnTargetAfter === result.imagesOnTargetBefore + 1,
   "same-page 'move to page' is refused": result.samePageRefused === true,
+  "moving a line really does renumber it": result.indexActuallyChanged === true,
+  "the reported new index points at the moved line": result.reportedIndexHoldsMovedText === true,
   "both pages still render content": result.inkPage0 > 0 && result.inkPage1 > 0,
 }
 

@@ -136,7 +136,6 @@ const checks = {
   // ---- cross-page ----
   "no cross-page errors": cross.errors.length === 0,
   "a ghost appears when a drag starts": cross.sameGhostAppears === true,
-  "the dragged box dims in place": cross.sourceDimmedWhileDragging === true,
   "holding at the edge auto-scrolls": cross.autoScrolledBy > 0,
   "target re-targets while auto-scrolling a still pointer": cross.retargetedDuringAutoScroll === true,
   "the page under the cursor is marked as target": cross.targetPageHighlighted === true,
@@ -145,6 +144,12 @@ const checks = {
   "the ghost keeps the grab offset": !!cross.crossDrop,
   "a drag ending on its own page still commits": !!cross.samePageDrop,
   "Escape abandons a drag": cross.escapeCancelled === true,
+  "a text drag shows the words, not a page crop": cross.textGhostShowsWords === true
+    && cross.textGhostHasNoCrop === true,
+  "an image drag shows the image's own pixels": cross.imageGhostHasCrop === true,
+  "the original is covered while in flight": cross.originCoveredWhileDragging === true,
+  "a click reads as ~0 travel, not a move": cross.clickTravelledPx !== null && cross.clickTravelledPx <= 2,
+  "a real drag reads as clear travel": cross.dragTravelledPx !== null && cross.dragTravelledPx > 5,
 
   // ---- geometry ----
   "no geometry errors": geometry.errors.length === 0,

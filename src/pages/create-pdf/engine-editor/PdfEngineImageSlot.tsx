@@ -14,6 +14,8 @@ interface PdfEngineImageSlotProps {
   dropTarget: boolean
   /** True while THIS image is the one being carried across the document. */
   dragging: boolean
+  /** The page rendered without this slot, laid over it while in flight. */
+  originPatchUrl: string | null
   onSelect: () => void
   onReplace: () => void
   /** Fired once on gesture release, in PDF points (y measured from the
@@ -43,7 +45,7 @@ const HANDLES: { key: ResizeHandle; className: string; cursor: string }[] = [
  */
 export function PdfEngineImageSlot({
   rect, pageWidthPx, pageHeightPx, scale, pageHeightPts,
-  selected, dropTarget, dragging, onSelect, onReplace, onTransform, onMoveStart,
+  selected, dropTarget, dragging, originPatchUrl, onSelect, onReplace, onTransform, onMoveStart,
 }: PdfEngineImageSlotProps) {
   const { t } = useTranslation()
 
@@ -76,7 +78,7 @@ export function PdfEngineImageSlot({
           : selected
             ? "ring-2 ring-sky-500"
             : "ring-1 ring-amber-500/40 hover:ring-2 hover:ring-amber-500/80"
-      } ${selected ? "cursor-move" : "cursor-pointer"} ${dragging ? "opacity-30" : ""}`}
+      } ${selected ? "cursor-move" : "cursor-pointer"}`}
       style={{ left: live.left, top: live.top, width: live.width, height: live.height }}
       onPointerDown={(e) => {
         // Stopped unconditionally: the page below clears the selection on
@@ -97,6 +99,20 @@ export function PdfEngineImageSlot({
           interface — drag to move, corner to resize, double-click to
           replace — and deleting is the Delete/Backspace key, the same as
           for a text box. */}
+      {/* While this slot is in flight, the place it came from shows the page
+          WITHOUT it — rendered by the engine, which is the only thing that
+          knows what is behind an object. A flat cover could only ever be an
+          opaque mark sitting on the artwork; this is the artwork. */}
+      {dragging && originPatchUrl && (
+        <img
+          data-engine-drag-origin
+          src={originPatchUrl}
+          alt=""
+          draggable={false}
+          className="pointer-events-none absolute inset-0 h-full w-full select-none object-fill"
+        />
+      )}
+
       {selected && HANDLES.map((handle) => (
         <span
           key={handle.key}

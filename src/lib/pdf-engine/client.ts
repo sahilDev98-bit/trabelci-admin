@@ -102,8 +102,18 @@ export class PdfEngineClient {
   setImageRect(
     docId: string, pageIndex: number, imageIndex: number,
     rect: { x: number; y: number; width: number; height: number },
-  ): Promise<{ ok: boolean }> {
+  ): Promise<{ ok: boolean; newIndex: number }> {
     return this.call("setImageRect", { docId, pageIndex, imageIndex, rect })
+  }
+
+  renderImagePreview(docId: string, pageIndex: number, imageIndex: number) {
+    return this.call("renderImagePreview", { docId, pageIndex, imageIndex })
+  }
+
+  renderCleanPatch(
+    docId: string, pageIndex: number, kind: "text" | "image", index: number, scale: number,
+  ) {
+    return this.call("renderCleanPatch", { docId, pageIndex, kind, index, scale })
   }
 
   listVectorGroups(docId: string, pageIndex: number) {
@@ -129,18 +139,20 @@ export class PdfEngineClient {
   moveTextLineToPage(
     docId: string, sourcePageIndex: number, lineIndex: number,
     targetPageIndex: number, x: number, yBaseline: number,
-  ): Promise<{ ok: boolean }> {
+  ): Promise<{ ok: boolean; newIndex: number }> {
     return this.call("moveTextLineToPage", { docId, sourcePageIndex, lineIndex, targetPageIndex, x, yBaseline })
   }
 
   moveImageToPage(
     docId: string, sourcePageIndex: number, imageIndex: number,
     targetPageIndex: number, rect: { x: number; y: number; width: number; height: number },
-  ): Promise<{ ok: boolean }> {
+  ): Promise<{ ok: boolean; newIndex: number }> {
     return this.call("moveImageToPage", { docId, sourcePageIndex, imageIndex, targetPageIndex, rect })
   }
 
-  moveTextLine(docId: string, pageIndex: number, lineIndex: number, dx: number, dy: number): Promise<{ ok: boolean }> {
+  moveTextLine(
+    docId: string, pageIndex: number, lineIndex: number, dx: number, dy: number,
+  ): Promise<{ ok: boolean; newIndex: number }> {
     return this.call("moveTextLine", { docId, pageIndex, lineIndex, dx, dy })
   }
 

@@ -53,8 +53,6 @@ export interface CrossPageTestResult {
   crossDrop: CrossPageDrop | null
   /** Drop reported by a drag that ended back on its starting page. */
   samePageDrop: CrossPageDrop | null
-  /** The dragged box dims while its ghost is in flight. */
-  sourceDimmedWhileDragging: boolean
   /** The page under the cursor is marked as the target. */
   targetPageHighlighted: boolean
   /** Holding near the bottom edge scrolled the document by itself. */
@@ -64,6 +62,22 @@ export interface CrossPageTestResult {
   retargetedDuringAutoScroll: boolean
   /** Escape abandons a drag without reporting a drop. */
   escapeCancelled: boolean
+  /** Distance reported for a plain CLICK on an already-selected box. The
+   * editor uses this to tell a click from a move; if it is not ~0 a click
+   * would commit a move and clear the selection. */
+  clickTravelledPx: number | null
+  /** Distance reported for a real drag, so the two are distinguishable. */
+  dragTravelledPx: number | null
+  /** Text drags show the WORDS, drawn — never a crop, which would bring the
+   * artwork behind them along. */
+  textGhostShowsWords: boolean
+  textGhostHasNoCrop: boolean
+  /** Image drags show the image's own pixels, sampled back out of the crop. */
+  imageGhostHasCrop: boolean
+  imageGhostColour: string | null
+  /** The original must be COVERED while in flight, or the drag reads as a
+   * copy rather than a move. */
+  originCoveredWhileDragging: boolean
   /** Raw geometry captured at each step, for diagnosing a failure without
    * having to re-run with guesses. */
   debug: Record<string, unknown>
@@ -96,6 +110,11 @@ const FIXTURE_LINE = {
   direction: "ltr" as const,
   color: { r: 0, g: 0, b: 0, a: 255 },
 }
+
+/** Stands in for "the image rendered on its own". A 1x1 png, distinct from
+ * the page's colour so a test can tell which one the ghost is showing. */
+const IMAGE_PREVIEW_URL =
+  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
 
 const FIXTURE_IMAGE = {
   imageIndex: 0,
@@ -156,6 +175,11 @@ export async function runDragDropSelfTest(): Promise<DragDropTestResult> {
       onMoveStart: () => {},
       draggingSlot: null,
       dropTargetPage: false,
+      imagePreviewUrl: null,
+      // A 1x1 solid GREEN png. Distinct from the page's red, so a test can
+      // tell "the hole is showing the engine's patch" from "the hole is
+      // still showing the page".
+      originPatchUrl: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M/wHwAEBgIA5agATwAAAABJRU5ErkJggg==",
       onResizeText: (_pageIndex, _lineIndex, fontSize, maxWidth) => { captured.textResizes.push({ fontSize, maxWidth }) },
       onDropOnPage: (pageIndex, file, xPts, yFromTopPts) => {
         captured.onPage = {
@@ -270,8 +294,12 @@ export async function runDragDropSelfTest(): Promise<DragDropTestResult> {
 export async function runCrossPageDragSelfTest(): Promise<CrossPageTestResult> {
   const out: CrossPageTestResult = {
     errors: [], sameGhostAppears: false, crossDrop: null, samePageDrop: null,
-    sourceDimmedWhileDragging: false, targetPageHighlighted: false,
+    targetPageHighlighted: false,
     autoScrolledBy: 0, retargetedDuringAutoScroll: false, escapeCancelled: false,
+    clickTravelledPx: null, dragTravelledPx: null,
+    textGhostShowsWords: false, textGhostHasNoCrop: false,
+    imageGhostHasCrop: false, imageGhostColour: null,
+    originCoveredWhileDragging: false,
     debug: {},
   }
 
@@ -326,7 +354,18 @@ export async function runCrossPageDragSelfTest(): Promise<CrossPageTestResult> {
             images: { loaded: true, images: index === 0 ? [FIXTURE_IMAGE] : [] },
             contentMode: "text" as const,
             revision: 0,
-            renderPage: async () => null,
+            // A known solid colour, so the drag preview can be checked by
+            // sampling it rather than by trusting that an <img> appeared.
+            renderPage: async (_p: number, scale: number) => {
+              const w = Math.max(1, Math.round(600 * scale))
+              const h = Math.max(1, Math.round(800 * scale))
+              const rgba = new Uint8ClampedArray(w * h * 4)
+              for (let i = 0; i < w * h; i++) {
+                rgba[i * 4] = 220; rgba[i * 4 + 1] = 40
+                rgba[i * 4 + 2] = 90; rgba[i * 4 + 3] = 255
+              }
+              return { width: w, height: h, rgba: rgba.buffer }
+            },
             loadPageText: async () => {},
             loadPageImages: async () => {},
         loadPageVectors: async () => {},
@@ -343,6 +382,14 @@ export async function runCrossPageDragSelfTest(): Promise<CrossPageTestResult> {
             onMoveStart: start,
             draggingSlot: drag ? { ...drag.item } : null,
             dropTargetPage: drag !== null && drag.targetPageIndex === index,
+            // A 1x1 solid BLUE png standing in for "the image on its own",
+            // distinct from the page's red so the test can tell which one
+            // the ghost is showing.
+            imagePreviewUrl: { pageIndex: index, index: 0, url: IMAGE_PREVIEW_URL },
+            // A 1x1 solid GREEN png. Distinct from the page's red, so a test can
+            // tell "the hole is showing the engine's patch" from "the hole is
+            // still showing the page".
+            originPatchUrl: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M/wHwAEBgIA5agATwAAAABJRU5ErkJggg==",
           })),
         ),
       )
@@ -380,11 +427,28 @@ export async function runCrossPageDragSelfTest(): Promise<CrossPageTestResult> {
     out.sameGhostAppears = !!document.querySelector("[data-engine-drag-ghost]")
     if (!out.sameGhostAppears) out.errors.push("no ghost appeared when the drag began")
 
-    // Source box must dim: the ghost is standing in for it.
-    const dimmed = Array.from(host.querySelectorAll<HTMLElement>("div"))
-      .some((el) => el.className.includes("ring-blue-600") && el.className.includes("opacity-30"))
-    out.sourceDimmedWhileDragging = dimmed
-    if (!dimmed) out.errors.push("the dragged box did not dim while its ghost was in flight")
+    // ---- a TEXT ghost shows the words, not a crop of the page ----
+    const ghost = document.querySelector<HTMLElement>("[data-engine-drag-ghost]")
+    out.textGhostHasNoCrop = !ghost?.querySelector("img")
+    out.textGhostShowsWords = (ghost?.textContent ?? "").includes(FIXTURE_LINE.text)
+    if (!out.textGhostShowsWords) {
+      out.errors.push("the text ghost does not show the words being dragged")
+    }
+    if (!out.textGhostHasNoCrop) {
+      out.errors.push("the text ghost is a page crop — it would carry the background with it")
+    }
+
+    // ---- and the original shows the engine's patch, not the page ----
+    const origin = host.querySelector<HTMLImageElement>("[data-engine-drag-origin]")
+    out.originCoveredWhileDragging = origin?.tagName === "IMG" && !!origin.src
+    if (!out.originCoveredWhileDragging) {
+      out.errors.push("the original still shows while dragging — the move reads as a copy")
+    } else if (!origin!.src.startsWith("data:image/png")) {
+      // It must be the picture the engine rendered of the page WITHOUT this
+      // slot; anything else would be a mark laid over the artwork.
+      out.errors.push("the origin cover is not an engine-rendered patch")
+    }
+
 
     // ---- hold near the bottom edge and let auto-scroll do the work ----
     const scrollBefore = scroller.scrollTop
@@ -481,6 +545,7 @@ export async function runCrossPageDragSelfTest(): Promise<CrossPageTestResult> {
       window.dispatchEvent(pointerEvent("pointerup", s1.left + 40, s1.top + 25))
       await wait(200)
       const last = drops.length > dropsBeforeSame ? drops.at(-1) ?? null : null
+      if (last) out.dragTravelledPx = Math.round(last.travelledPx)
       if (!last) {
         out.errors.push("a drag ending on its own page reported no drop")
       } else if (last.targetPageIndex !== 0) {
@@ -490,10 +555,71 @@ export async function runCrossPageDragSelfTest(): Promise<CrossPageTestResult> {
       }
     }
 
+    // ---- a click on a selected box must read as a CLICK, not a move ----
+    // This is what lets a selected box stay selected when clicked again:
+    // the editor only commits when the pointer really travelled.
+    const clickTarget = Array.from(host.querySelectorAll<HTMLElement>("div"))
+      .find((el) => el.className.includes("ring-blue-600"))
+    if (clickTarget) {
+      const dropsBeforeClick = drops.length
+      const c0 = clickTarget.getBoundingClientRect()
+      clickTarget.dispatchEvent(pointerEvent("pointerdown", c0.left + 15, c0.top + 12))
+      await wait(60)
+      window.dispatchEvent(pointerEvent("pointerup", c0.left + 15, c0.top + 12))
+      await wait(150)
+      const clicked = drops.length > dropsBeforeClick ? drops.at(-1) ?? null : null
+      out.clickTravelledPx = clicked ? Math.round(clicked.travelledPx) : null
+      if (clicked === null) {
+        out.errors.push("a click on a selected box reported no drop at all")
+      } else if (clicked.travelledPx > 2) {
+        out.errors.push(`a click reported ${clicked.travelledPx}px of travel; it must read as ~0`)
+      }
+    }
+
+    // ---- an IMAGE ghost DOES carry a crop, and it is the right pixels ----
+    // The opposite expectation to text: an image is its pixels, so cropping
+    // it is exactly right.
+    scroller.scrollTop = 0
+    await wait(150)
+    const imageSlot = host.querySelector<HTMLElement>("div.group")
+    if (imageSlot) {
+      const i0 = imageSlot.getBoundingClientRect()
+      imageSlot.dispatchEvent(pointerEvent("pointerdown", i0.left + 20, i0.top + 20))
+      await wait(120)
+      const selectedImg = host.querySelector<HTMLElement>("div.group")
+      const i1 = selectedImg!.getBoundingClientRect()
+      selectedImg!.dispatchEvent(pointerEvent("pointerdown", i1.left + 20, i1.top + 20))
+      await wait(60)
+      window.dispatchEvent(pointerEvent("pointermove", i1.left + 60, i1.top + 45))
+      await wait(120)
+
+      const img = document.querySelector<HTMLImageElement>("[data-engine-drag-ghost] img")
+      out.imageGhostHasCrop = !!img?.src
+      if (!img?.src) {
+        out.errors.push("the image ghost shows no picture of the image being dragged")
+      } else {
+        // It must be the IMAGE rendered on its own — the picture supplied
+        // as imagePreviewUrl — and not a crop of the page, which would
+        // carry anything drawn over the image along with it.
+        out.imageGhostColour = img.src.slice(0, 40)
+        if (img.src !== IMAGE_PREVIEW_URL) {
+          out.errors.push(
+            "the image ghost is not the prepared image render — it is showing something else, "
+            + "most likely a crop of the composited page",
+          )
+        }
+      }
+      window.dispatchEvent(pointerEvent("pointerup", i1.left + 60, i1.top + 45))
+      await wait(150)
+    }
+
     // ---- Escape abandons a drag without committing anything ----
     const dropsBefore = drops.length
+    // Whatever is selected at this point — the image case above runs first,
+    // so looking only for a selected TEXT box finds nothing and the check
+    // silently never runs.
     const escTarget = Array.from(host.querySelectorAll<HTMLElement>("div"))
-      .find((el) => el.className.includes("ring-blue-600"))
+      .find((el) => el.className.includes("ring-blue-600") || el.className.includes("ring-sky-500"))
     if (escTarget) {
       const e0 = escTarget.getBoundingClientRect()
       escTarget.dispatchEvent(pointerEvent("pointerdown", e0.left + 10, e0.top + 10))

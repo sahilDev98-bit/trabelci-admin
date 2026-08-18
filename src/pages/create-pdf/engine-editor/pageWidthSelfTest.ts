@@ -145,6 +145,8 @@ export async function runPageWidthSelfTest(): Promise<PageWidthTestResult> {
         onMoveStart: () => {},
         draggingSlot: null,
         dropTargetPage: false,
+        imagePreviewUrl: null,
+        originPatchUrl: null,
       }))
       await wait(400)
 

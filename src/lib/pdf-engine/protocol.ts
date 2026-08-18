@@ -116,6 +116,32 @@ export interface EngineMethods {
     result: { ok: boolean; lines: string[]; fontSize: number; shrunk: boolean; overflows: boolean }
   }
   listImages: { params: { docId: string; pageIndex: number }; result: { images: EngineImage[] } }
+  /**
+   * A picture of one slot's area rendered WITHOUT that slot, so the place a
+   * dragged object came from can look genuinely empty rather than covered.
+   * The document is restored before this returns.
+   */
+  renderCleanPatch: {
+    params: {
+      docId: string; pageIndex: number
+      kind: "text" | "image"
+      index: number
+      scale: number
+    }
+    result: { width: number; height: number; rgba: ArrayBuffer } | { width: 0; height: 0; rgba: ArrayBuffer }
+  }
+  /**
+   * Just one image object, rendered on its own with its clip and
+   * transparency — NOT a crop of the page.
+   *
+   * A crop shows everything painted in that area, including anything drawn
+   * ON TOP of the image, so dragging a photo with a caption over it
+   * previewed the caption moving too when only the photo would.
+   */
+  renderImagePreview: {
+    params: { docId: string; pageIndex: number; imageIndex: number }
+    result: { width: number; height: number; rgba: ArrayBuffer }
+  }
   listVectorGroups: {
     params: { docId: string; pageIndex: number }
     result: { groups: EngineVectorGroup[] }
@@ -146,7 +172,7 @@ export interface EngineMethods {
       docId: string; pageIndex: number; imageIndex: number
       rect: { x: number; y: number; width: number; height: number }
     }
-    result: { ok: boolean }
+    result: { ok: boolean; newIndex: number }
   }
   removeTextLine: { params: { docId: string; pageIndex: number; lineIndex: number }; result: { ok: boolean } }
   /** Shift a grouped text line. dy is in PDF space, so positive is UP. */
@@ -157,7 +183,8 @@ export interface EngineMethods {
       docId: string; sourcePageIndex: number; lineIndex: number
       targetPageIndex: number; x: number; yBaseline: number
     }
-    result: { ok: boolean }
+    /** newIndex: where the line ended up. -1 if it could not be located. */
+    result: { ok: boolean; newIndex: number }
   }
   /** Move an image onto a DIFFERENT page, into the given rect (PDF points,
    * y measured from the bottom). */
@@ -166,11 +193,14 @@ export interface EngineMethods {
       docId: string; sourcePageIndex: number; imageIndex: number
       targetPageIndex: number; rect: { x: number; y: number; width: number; height: number }
     }
-    result: { ok: boolean }
+    /** newIndex: where the image ended up. -1 if it could not be located. */
+    result: { ok: boolean; newIndex: number }
   }
   moveTextLine: {
     params: { docId: string; pageIndex: number; lineIndex: number; dx: number; dy: number }
-    result: { ok: boolean }
+    /** newIndex: where the line ended up. Lines are numbered by POSITION, so
+     * moving one renumbers it — see the worker for why this is reported. */
+    result: { ok: boolean; newIndex: number }
   }
   addTextOverlay: { params: { docId: string; pageIndex: number; overlay: TextOverlayRequest }; result: { ok: boolean } }
   addImageOverlay: {

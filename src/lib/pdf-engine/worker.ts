@@ -20,8 +20,12 @@ import {
   saveDocument, translateTextGroup, removeTextGroup, moveTextGroupToPage, DocumentFonts,
 } from "./text"
 import { groupIntoLines, effectiveFontSize, isRtlText } from "./grouping"
-import { listImageObjects, replaceImageBytes, removeImageObject, setImageRect, moveImageObjectToPage } from "./image"
+import {
+  listImageObjects, replaceImageBytes, removeImageObject, setImageRect,
+  moveImageObjectToPage, renderImageObject,
+} from "./image"
 import { listVectorGroups, removeVectorGroup } from "./vector"
+import { renderRegionWithout } from "./patch"
 import { listPages, buildDocumentFromPlan } from "./pages"
 import { addTextOverlay, addImageOverlay } from "./overlay"
 import { loadFontMetrics, type FontMetrics } from "./layout"
@@ -96,6 +100,32 @@ function withTwoPages<T>(
     pdfium.FPDF_ClosePage(b)
     pdfium.FPDF_ClosePage(a)
   }
+}
+
+/**
+ * Where an object ended up after being moved.
+ *
+ * Needed because an index is not a stable identity here. Text lines are
+ * grouped and then sorted BY POSITION (see grouping.ts), so moving a line
+ * up the page genuinely renumbers it; a cross-page move renumbers on the
+ * page it lands on. Keeping the editor's selection pointing at the old
+ * number would quietly select a DIFFERENT line after the move.
+ *
+ * The object handles survive every move path — translate, transform, and
+ * the detach/re-insert used across pages — so the thing that moved can be
+ * found again exactly rather than guessed at by position or content.
+ */
+function textLineIndexOfHandle(
+  pdfium: WrappedPdfiumModule, page: number, scratch: Scratch, handle: number,
+): number {
+  const objs = listTextObjects(pdfium, page, scratch).filter((o) => o.text.trim() !== "")
+  return groupIntoLines(objs).findIndex((g) => g.objects.some((o) => o.handle === handle))
+}
+
+function imageIndexOfHandle(
+  pdfium: WrappedPdfiumModule, page: number, scratch: Scratch, handle: number,
+): number {
+  return listImageObjects(pdfium, page, scratch).findIndex((im) => im.handle === handle)
 }
 
 const handlers: {
@@ -238,7 +268,61 @@ const handlers: {
       // carried along instead of being left behind.
       const r = setImageRect(pdfium, page, target.handle, rect, target.bounds)
       if (!r.ok) throw new Error(r.error ?? "could not move the image")
-      return { ok: true }
+      return { ok: true, newIndex: imageIndexOfHandle(pdfium, page, doc.scratch, target.handle) }
+    })
+  },
+
+  renderImagePreview: ({ docId, pageIndex, imageIndex }, { pdfium, transfer }) => {
+    const doc = requireDoc(docId)
+    return withPage(pdfium, doc.handle, pageIndex, (page) => {
+      const target = listImageObjects(pdfium, page, doc.scratch)[imageIndex]
+      const empty = { width: 0, height: 0, rgba: new ArrayBuffer(0) }
+      if (!target) return empty
+      const rendered = renderImageObject(pdfium, doc.handle, page, target.handle, doc.scratch)
+      if (!rendered) return empty
+      const out = new Uint8Array(rendered.rgba).buffer
+      transfer.push(out)
+      return { width: rendered.width, height: rendered.height, rgba: out }
+    })
+  },
+
+  renderCleanPatch: ({ docId, pageIndex, kind, index, scale }, { pdfium, transfer }) => {
+    const doc = requireDoc(docId)
+    return withPage(pdfium, doc.handle, pageIndex, (page) => {
+      const empty = { width: 0 as const, height: 0 as const, rgba: new ArrayBuffer(0) }
+
+      let objects: { index: number; handle: number }[] = []
+      let rect: { left: number; bottom: number; right: number; top: number } | null = null
+
+      if (kind === "text") {
+        const objs = listTextObjects(pdfium, page, doc.scratch).filter((o) => o.text.trim() !== "")
+        const line = groupIntoLines(objs)[index]
+        if (!line) return empty
+        objects = line.objects.map((o) => ({ index: o.index, handle: o.handle }))
+        // The union of the pieces' own boxes, which is the area the line
+        // actually covers — a caption's slot is not one rectangle in the PDF.
+        const bounds = line.objects.map((o) => o.bounds).filter((b) => b !== null)
+        if (bounds.length === 0) return empty
+        rect = {
+          left: Math.min(...bounds.map((b) => b!.left)),
+          bottom: Math.min(...bounds.map((b) => b!.bottom)),
+          right: Math.max(...bounds.map((b) => b!.right)),
+          top: Math.max(...bounds.map((b) => b!.top)),
+        }
+      } else {
+        const target = listImageObjects(pdfium, page, doc.scratch)[index]
+        if (!target?.bounds) return empty
+        objects = [{ index: target.index, handle: target.handle }]
+        rect = target.bounds
+      }
+
+      if (!rect || rect.right <= rect.left || rect.top <= rect.bottom) return empty
+      const patch = renderRegionWithout(pdfium, page, objects, rect, scale, doc.scratch)
+      // Copied into its own buffer so it can be transferred rather than
+      // cloned across the worker boundary.
+      const out = new Uint8ClampedArray(patch.rgba).buffer
+      transfer.push(out)
+      return { width: patch.width, height: patch.height, rgba: out }
     })
   },
 
@@ -310,9 +394,10 @@ const handlers: {
       const objs = listTextObjects(pdfium, src, doc.scratch).filter((o) => o.text.trim() !== "")
       const line = groupIntoLines(objs)[lineIndex]
       if (!line) throw new Error(`No text line at index ${lineIndex} on page ${sourcePageIndex}`)
+      const anchorHandle = line.anchor.handle
       const r = moveTextGroupToPage(pdfium, src, dst, line.objects, line.anchor, x, yBaseline, doc.scratch)
       if (!r.ok) throw new Error(r.error ?? "could not move the text to that page")
-      return { ok: true }
+      return { ok: true, newIndex: textLineIndexOfHandle(pdfium, dst, doc.scratch, anchorHandle) }
     })
   },
 
@@ -324,7 +409,7 @@ const handlers: {
       if (!target) throw new Error(`No image at index ${imageIndex} on page ${sourcePageIndex}`)
       const r = moveImageObjectToPage(pdfium, src, dst, target.handle, rect, target.bounds)
       if (!r.ok) throw new Error(r.error ?? "could not move the image to that page")
-      return { ok: true }
+      return { ok: true, newIndex: imageIndexOfHandle(pdfium, dst, doc.scratch, target.handle) }
     })
   },
 
@@ -334,9 +419,10 @@ const handlers: {
       const objs = listTextObjects(pdfium, page, doc.scratch).filter((o) => o.text.trim() !== "")
       const line = groupIntoLines(objs)[lineIndex]
       if (!line) throw new Error(`No text line at index ${lineIndex} on page ${pageIndex}`)
+      const anchorHandle = line.anchor.handle
       const r = translateTextGroup(pdfium, page, line.objects, dx, dy, doc.scratch)
       if (!r.ok) throw new Error(r.error ?? "could not move the text")
-      return { ok: true }
+      return { ok: true, newIndex: textLineIndexOfHandle(pdfium, page, doc.scratch, anchorHandle) }
     })
   },
 

@@ -37,6 +37,15 @@ export interface CrossPageDragItem {
   /** Shown inside the ghost so the user can see what they are carrying. */
   label: string
   direction?: "ltr" | "rtl"
+  /** Text only: how to DRAW the words in the ghost instead of cropping them.
+   * A crop of a text line necessarily brings whatever it sits on along with
+   * it — dragging a white caption off a photo carried a rectangle of that
+   * photo, which reads as pasting a patch rather than moving the words. */
+  fontSizePx?: number
+  color?: { r: number; g: number; b: number; a: number }
+  /** Images only: the image rendered ON ITS OWN, prepared when the slot was
+   * selected. Not a crop of the page — see below. */
+  previewUrl?: string
 }
 
 /** Where a drag ended, in the TARGET page's own CSS pixels. */
@@ -47,6 +56,10 @@ export interface CrossPageDrop {
   topPx: number
   widthPx: number
   heightPx: number
+  /** How far the pointer actually travelled, in CSS px. A click on an
+   * already-selected box arrives here as a drag of ~0, and the caller uses
+   * this to tell the two apart rather than committing a no-op move. */
+  travelledPx: number
 }
 
 /** Box position in viewport coordinates, for a `position: fixed` ghost. */
@@ -62,6 +75,14 @@ export interface CrossPageDragState {
   ghost: GhostRect
   /** Page currently under the pointer — highlighted as the drop target. */
   targetPageIndex: number | null
+  /** A picture of what is being dragged, as a data URL, or null.
+   *
+   * For images this is the image rendered ON ITS OWN. It used to be a crop
+   * of the page canvas, which showed everything painted in that area — so
+   * dragging a photo with a caption over it carried the caption in the
+   * preview even though only the photo would move. The preview has to show
+   * exactly what the drop will do. */
+  preview: string | null
 }
 
 /** How close to the viewport edge the pointer must get before the document
@@ -151,6 +172,8 @@ export function useCrossPageDrag(onDrop: (drop: CrossPageDrop) => void): UseCros
    * corner to it. */
   const grabOffset = useRef({ x: 0, y: 0 })
   const pointer = useRef({ x: 0, y: 0 })
+  /** Where the press started, so a release can say how far it travelled. */
+  const origin = useRef({ x: 0, y: 0 })
   const scroller = useRef<Element | null>(null)
   const frame = useRef<number | null>(null)
   /** The caller's drop handler, held in a ref so a re-created callback does
@@ -253,6 +276,10 @@ export function useCrossPageDrag(onDrop: (drop: CrossPageDrop) => void): UseCros
         topPx: current.ghost.top - rect.top,
         widthPx: current.ghost.width,
         heightPx: current.ghost.height,
+        travelledPx: Math.hypot(
+          pointer.current.x - origin.current.x,
+          pointer.current.y - origin.current.y,
+        ),
       })
     }
 
@@ -282,12 +309,17 @@ export function useCrossPageDrag(onDrop: (drop: CrossPageDrop) => void): UseCros
     e.preventDefault()
     e.stopPropagation()
     pointer.current = { x: e.clientX, y: e.clientY }
+    origin.current = { x: e.clientX, y: e.clientY }
     grabOffset.current = { x: e.clientX - rect.left, y: e.clientY - rect.top }
     scroller.current = scrollParentOf(e.currentTarget as Element)
     apply({
       item,
       ghost: { left: rect.left, top: rect.top, width: rect.width, height: rect.height },
       targetPageIndex: item.pageIndex,
+      // Prepared when the slot was selected, so it is ready by the time a
+      // drag begins. Text carries no picture at all — its words are drawn
+      // from its own properties instead.
+      preview: item.previewUrl ?? null,
     })
   }, [apply])
 

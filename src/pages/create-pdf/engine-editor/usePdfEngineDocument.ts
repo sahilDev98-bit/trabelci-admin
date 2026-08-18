@@ -62,25 +62,30 @@ export interface UsePdfEngineDocumentResult {
   editText: (pageIndex: number, lineIndex: number, newText: string, options?: EditTextOptions) => Promise<void>
   removeText: (pageIndex: number, lineIndex: number) => Promise<void>
   /** Shift a line. dy is PDF-space, so positive moves it up the page. */
-  moveText: (pageIndex: number, lineIndex: number, dx: number, dy: number) => Promise<void>
+  /** All four movers resolve to the object's NEW index, or -1. */
+  moveText: (pageIndex: number, lineIndex: number, dx: number, dy: number) => Promise<number>
   pageVectors: Record<number, PageVectorState>
+  renderCleanPatch: (
+    pageIndex: number, kind: "text" | "image", index: number, scale: number,
+  ) => Promise<string | null>
+  renderImagePreview: (pageIndex: number, imageIndex: number) => Promise<string | null>
   loadPageVectors: (pageIndex: number) => Promise<void>
   removeVector: (pageIndex: number, vectorIndex: number) => Promise<void>
   replaceVector: (pageIndex: number, vectorIndex: number, file: File) => Promise<void>
   moveTextToPage: (
     sourcePageIndex: number, lineIndex: number,
     targetPageIndex: number, x: number, yBaseline: number,
-  ) => Promise<void>
+  ) => Promise<number>
   moveImageToPage: (
     sourcePageIndex: number, imageIndex: number,
     targetPageIndex: number, rect: { x: number; y: number; width: number; height: number },
-  ) => Promise<void>
+  ) => Promise<number>
   replaceImage: (pageIndex: number, imageIndex: number, file: File) => Promise<void>
   removeImage: (pageIndex: number, imageIndex: number) => Promise<void>
   setImageRect: (
     pageIndex: number, imageIndex: number,
     rect: { x: number; y: number; width: number; height: number },
-  ) => Promise<void>
+  ) => Promise<number>
   addTextOverlay: (pageIndex: number, overlay: TextOverlayRequest) => Promise<void>
   addImageOverlay: (pageIndex: number, overlay: ImageOverlayRequest, file: File) => Promise<void>
   applyPagePlan: (plan: PagePlanRequest[]) => Promise<void>
@@ -217,6 +222,51 @@ export function usePdfEngineDocument(templateId: string | null | undefined): Use
     setPageImages((prev) => ({ ...prev, [pageIndex]: { images, loaded: true } }))
   }, [getEngine])
 
+  /**
+   * A picture of a slot's area with the slot itself left out, as a data URL.
+   *
+   * Used to make the spot a dragged object came from look genuinely empty.
+   * Read-only as far as the caller is concerned — the engine puts the
+   * document back before it answers.
+   */
+  const renderCleanPatch = useCallback(async (
+    pageIndex: number, kind: "text" | "image", index: number, scale: number,
+  ): Promise<string | null> => {
+    const id = docIdRef.current
+    if (!id) return null
+    const patch = await getEngine().renderCleanPatch(id, pageIndex, kind, index, scale)
+    if (!patch.width || !patch.height) return null
+    const canvas = document.createElement("canvas")
+    canvas.width = patch.width
+    canvas.height = patch.height
+    const ctx = canvas.getContext("2d")
+    if (!ctx) return null
+    const image = ctx.createImageData(patch.width, patch.height)
+    image.data.set(new Uint8ClampedArray(patch.rgba))
+    ctx.putImageData(image, 0, 0)
+    return canvas.toDataURL("image/png")
+  }, [getEngine])
+
+  /** One image on its own, as a data URL — its clip and transparency
+   * included, and nothing that happens to be drawn over it. */
+  const renderImagePreview = useCallback(async (
+    pageIndex: number, imageIndex: number,
+  ): Promise<string | null> => {
+    const id = docIdRef.current
+    if (!id) return null
+    const shot = await getEngine().renderImagePreview(id, pageIndex, imageIndex)
+    if (!shot.width || !shot.height) return null
+    const canvas = document.createElement("canvas")
+    canvas.width = shot.width
+    canvas.height = shot.height
+    const ctx = canvas.getContext("2d")
+    if (!ctx) return null
+    const image = ctx.createImageData(shot.width, shot.height)
+    image.data.set(new Uint8ClampedArray(shot.rgba))
+    ctx.putImageData(image, 0, 0)
+    return canvas.toDataURL("image/png")
+  }, [getEngine])
+
   const renderPage = useCallback(async (pageIndex: number, scale: number) => {
     const id = docIdRef.current
     if (!id) return null
@@ -231,15 +281,15 @@ export function usePdfEngineDocument(templateId: string | null | undefined): Use
    * Takes a LIST of pages because a cross-page move dirties two of them —
    * refreshing only the target would leave the source still showing a box
    * for content that has left it. */
-  const mutate = useCallback(async (
-    pageIndexes: number | number[], run: (id: string) => Promise<void>,
-  ) => {
+  const mutate = useCallback(async <T,>(
+    pageIndexes: number | number[], run: (id: string) => Promise<T>,
+  ): Promise<T | undefined> => {
     const id = docIdRef.current
-    if (!id) return
+    if (!id) return undefined
     const pages = [...new Set(Array.isArray(pageIndexes) ? pageIndexes : [pageIndexes])]
     setBusy(true)
     try {
-      await run(id)
+      const result = await run(id)
       const refreshed = await Promise.all(pages.map(async (pageIndex) => {
         const [{ lines }, { images }, { groups }] = await Promise.all([
           getEngine().listTextLines(id, pageIndex),
@@ -264,6 +314,7 @@ export function usePdfEngineDocument(templateId: string | null | undefined): Use
         return next
       })
       setRevision((r) => r + 1)
+      return result
     } finally {
       setBusy(false)
     }
@@ -290,8 +341,10 @@ export function usePdfEngineDocument(templateId: string | null | undefined): Use
     await mutate(pageIndex, (id) => getEngine().removeTextLine(id, pageIndex, lineIndex).then(() => undefined))
   }, [getEngine, mutate])
 
+  /** Resolves to the line's NEW index — moving renumbers it, see the worker. */
   const moveText = useCallback(async (pageIndex: number, lineIndex: number, dx: number, dy: number) => {
-    await mutate(pageIndex, (id) => getEngine().moveTextLine(id, pageIndex, lineIndex, dx, dy).then(() => undefined))
+    const r = await mutate(pageIndex, (id) => getEngine().moveTextLine(id, pageIndex, lineIndex, dx, dy))
+    return r?.newIndex ?? -1
   }, [getEngine, mutate])
 
   /** Move a line to ANOTHER page. x/yBaseline are in the target page's PDF
@@ -300,16 +353,18 @@ export function usePdfEngineDocument(templateId: string | null | undefined): Use
     sourcePageIndex: number, lineIndex: number,
     targetPageIndex: number, x: number, yBaseline: number,
   ) => {
-    await mutate([sourcePageIndex, targetPageIndex], (id) =>
-      getEngine().moveTextLineToPage(id, sourcePageIndex, lineIndex, targetPageIndex, x, yBaseline).then(() => undefined))
+    const r = await mutate([sourcePageIndex, targetPageIndex], (id) =>
+      getEngine().moveTextLineToPage(id, sourcePageIndex, lineIndex, targetPageIndex, x, yBaseline))
+    return r?.newIndex ?? -1
   }, [getEngine, mutate])
 
   const moveImageToPage = useCallback(async (
     sourcePageIndex: number, imageIndex: number,
     targetPageIndex: number, rect: { x: number; y: number; width: number; height: number },
   ) => {
-    await mutate([sourcePageIndex, targetPageIndex], (id) =>
-      getEngine().moveImageToPage(id, sourcePageIndex, imageIndex, targetPageIndex, rect).then(() => undefined))
+    const r = await mutate([sourcePageIndex, targetPageIndex], (id) =>
+      getEngine().moveImageToPage(id, sourcePageIndex, imageIndex, targetPageIndex, rect))
+    return r?.newIndex ?? -1
   }, [getEngine, mutate])
 
   const replaceImage = useCallback(async (pageIndex: number, imageIndex: number, file: File) => {
@@ -325,7 +380,8 @@ export function usePdfEngineDocument(templateId: string | null | undefined): Use
     pageIndex: number, imageIndex: number,
     rect: { x: number; y: number; width: number; height: number },
   ) => {
-    await mutate(pageIndex, (id) => getEngine().setImageRect(id, pageIndex, imageIndex, rect).then(() => undefined))
+    const r = await mutate(pageIndex, (id) => getEngine().setImageRect(id, pageIndex, imageIndex, rect))
+    return r?.newIndex ?? -1
   }, [getEngine, mutate])
 
   const addTextOverlay = useCallback(async (pageIndex: number, overlay: TextOverlayRequest) => {
@@ -350,6 +406,7 @@ export function usePdfEngineDocument(templateId: string | null | undefined): Use
       // and cannot be subtly wrong.
       setPageText({})
       setPageImages({})
+      setPageVectors({})
       setRevision((r) => r + 1)
     } finally {
       setBusy(false)
@@ -370,7 +427,7 @@ export function usePdfEngineDocument(templateId: string | null | undefined): Use
 
   return {
     phase, error, downloadPercent, pages, docId, pageText, pageImages,
-    loadPageText, loadPageImages, loadPageVectors, pageVectors,
+    loadPageText, loadPageImages, loadPageVectors, pageVectors, renderCleanPatch, renderImagePreview,
     removeVector, replaceVector, renderPage, editText, moveText, moveTextToPage, moveImageToPage, removeText,
     replaceImage, removeImage, setImageRect, addTextOverlay, addImageOverlay, applyPagePlan,
     save, busy, revision,

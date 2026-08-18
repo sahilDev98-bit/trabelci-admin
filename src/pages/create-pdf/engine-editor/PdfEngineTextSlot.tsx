@@ -10,9 +10,10 @@ interface PdfEngineTextSlotProps {
   pageHeightPx: number
   scale: number
   selected: boolean
-  /** True while THIS box is the one being carried across the document; the
-   * ghost under the cursor is standing in for it, so it dims in place. */
+  /** True while THIS box is the one being carried across the document. */
   dragging: boolean
+  /** The page rendered without this slot, laid over it while in flight. */
+  originPatchUrl: string | null
   onSelect: () => void
   onEdit: () => void
   /** Begins a document-wide move. The element's live viewport rect goes
@@ -43,7 +44,7 @@ const HANDLES: { key: ResizeHandle; className: string; cursor: string }[] = [
  */
 export function PdfEngineTextSlot({
   line, rect, pageWidthPx, pageHeightPx, scale,
-  selected, dragging, onSelect, onEdit, onMoveStart, onResize,
+  selected, dragging, originPatchUrl, onSelect, onEdit, onMoveStart, onResize,
 }: PdfEngineTextSlotProps) {
   const { t } = useTranslation()
 
@@ -71,7 +72,7 @@ export function PdfEngineTextSlot({
         selected
           ? "cursor-move bg-blue-500/5 ring-2 ring-blue-600"
           : "cursor-text ring-1 ring-blue-500/30 hover:bg-blue-500/10 hover:ring-2 hover:ring-blue-500/70"
-      } ${dragging ? "opacity-30" : ""}`}
+      }`}
       style={{ left: live.left, top: live.top, width: live.width, height: live.height }}
       title={`${line.text}
 ${Math.round(line.fontSize)}pt · ${t("pdfTemplates.engineTextHint", "Double-click to edit. Drag to move it anywhere in the document, corners to resize.")}`}
@@ -89,6 +90,20 @@ ${Math.round(line.fontSize)}pt · ${t("pdfTemplates.engineTextHint", "Double-cli
           covered the very artwork the user is positioning against. The
           gesture IS the interface: drag to move, corner to resize,
           double-click to edit the words. */}
+      {/* While this slot is in flight, the place it came from shows the page
+          WITHOUT it — rendered by the engine, which is the only thing that
+          knows what is behind an object. A flat cover could only ever be an
+          opaque mark sitting on the artwork; this is the artwork. */}
+      {dragging && originPatchUrl && (
+        <img
+          data-engine-drag-origin
+          src={originPatchUrl}
+          alt=""
+          draggable={false}
+          className="pointer-events-none absolute inset-0 h-full w-full select-none object-fill"
+        />
+      )}
+
       {selected && HANDLES.map((handle) => (
         <span
           key={handle.key}

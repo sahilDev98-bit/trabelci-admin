@@ -68,6 +68,17 @@ const MIN_PAGE_DISPLAY_WIDTH = 320
  */
 const RAIL_CLEARANCE_PX = 12
 
+/**
+ * How far a box must actually travel before a drag counts as a move, in CSS
+ * pixels.
+ *
+ * Every click on an already-selected box is a drag of zero distance, and a
+ * press with a hand on a mouse is rarely EXACTLY zero. Without a threshold,
+ * clicking a selected caption to look at it would nudge the document by a
+ * pixel and rewrite the PDF.
+ */
+const DRAG_COMMIT_THRESHOLD_PX = 3
+
 /** Where a newly added overlay lands, in PDF points from the page's
  * top-left. Offset rather than centred so it never appears underneath the
  * tool rail the user just clicked. */
@@ -109,6 +120,28 @@ export function PdfEngineEditorPage() {
   const [pageDisplayWidth, setPageDisplayWidth] = useState(FALLBACK_PAGE_DISPLAY_WIDTH)
   /** How much of the column's trailing edge the rail covers right now. */
   const [railGutter, setRailGutter] = useState(0)
+  /**
+   * A picture of the SELECTED slot's area with the slot left out, ready in
+   * advance so the moment a drag starts the place it came from can look
+   * empty with no pause.
+   *
+   * Prepared on SELECTION rather than on drag start because a drag always
+   * follows a separate click here — the first press selects, the second
+   * begins the move — so the work lands in the gap between the two instead
+   * of stalling the gesture.
+   */
+  const [originPatch, setOriginPatch] = useState<
+    { pageIndex: number; kind: "text" | "image"; index: number; url: string } | null
+  >(null)
+  /**
+   * The selected IMAGE rendered on its own, for the thing that travels with
+   * the cursor. Not a crop of the page: a crop shows everything painted in
+   * that area, so dragging a photo with a caption over it previewed the
+   * caption moving too, when only the photo actually would.
+   */
+  const [imagePreview, setImagePreview] = useState<
+    { pageIndex: number; index: number; url: string } | null
+  >(null)
 
   const [organizerMode, setOrganizerMode] = useState<PdfOrganizerMode | null>(null)
   const [thumbnails, setThumbnails] = useState<Record<string, string>>({})
@@ -208,6 +241,38 @@ export function PdfEngineEditorPage() {
     // the rail first exist to be measured.
   }, [doc.phase])
 
+  useEffect(() => {
+    // A stale patch is never CLEARED here, only replaced. Clearing would be
+    // a synchronous setState in an effect, and it buys nothing: the patch
+    // is only ever used when it matches the slot actually being dragged
+    // (see where it is passed down), so one left over from a previous
+    // selection cannot be shown against the wrong object.
+    if (!selection || selection.kind === "vector" || doc.phase !== "ready") return
+    const page = doc.pages[selection.pageIndex]
+    if (!page) return
+    let cancelled = false
+    const { pageIndex, kind, index } = selection
+    // Rendered at the same scale the page is drawn at, so the patch drops
+    // into the hole at exactly the right resolution.
+    const scale = (pageDisplayWidth / page.widthPts) * Math.min(window.devicePixelRatio || 1, 2)
+    void doc.renderCleanPatch(pageIndex, kind, index, scale)
+      .then((url) => {
+        if (cancelled || !url) return
+        setOriginPatch({ pageIndex, kind, index, url })
+      })
+      .catch(() => { /* the drag still works, it just shows no patch */ })
+
+    if (kind === "image") {
+      void doc.renderImagePreview(pageIndex, index)
+        .then((url) => {
+          if (cancelled || !url) return
+          setImagePreview({ pageIndex, index, url })
+        })
+        .catch(() => { /* falls back to the plain outline */ })
+    }
+    return () => { cancelled = true }
+  }, [selection, doc, pageDisplayWidth])
+
   /** Delete/Backspace removes the selected slot, matching how every other
    * canvas editor behaves. Ignored while a dialog or input has focus, so
    * backspacing inside the text field never deletes the box behind it. */
@@ -283,28 +348,45 @@ export function PdfEngineEditorPage() {
     const { xPts, yFromTopPts, widthPts, heightPts } = dropToPagePoints(drop, scale)
     const samePage = targetPageIndex === item.pageIndex
 
-    setSelection(null)
+    // A press that never really travelled is a CLICK, not a move. Bailing
+    // out here — before touching the document and before touching the
+    // selection — is what lets a selected box stay selected when you click
+    // it again, instead of committing a zero-distance move and clearing
+    // itself on the way out.
+    if (samePage && drop.travelledPx < DRAG_COMMIT_THRESHOLD_PX) return
+
+    /** Follow the object to wherever it landed. Indices are not identities:
+     * text lines are numbered by position, so a move renumbers them, and a
+     * cross-page move renumbers on the page it arrives at. */
+    const reselect = (pageIndex: number, index: number) => {
+      if (index < 0) { setSelection(null); return }
+      setSelection({ pageIndex, kind: item.kind, index })
+    }
+
     try {
       if (item.kind === "text") {
         const line = doc.pageText[item.pageIndex]?.lines[item.index]
         if (!line) return
         if (samePage) {
           const { dx, dy } = textMoveDelta(line, sourcePage, xPts, yFromTopPts)
-          if (dx === 0 && dy === 0) return
-          await doc.moveText(item.pageIndex, item.index, dx, dy)
+          const newIndex = await doc.moveText(item.pageIndex, item.index, dx, dy)
+          reselect(item.pageIndex, newIndex)
           return
         }
         const { x, yBaseline } = textPlacementOnPage(line, targetPage, xPts, yFromTopPts)
-        await doc.moveTextToPage(item.pageIndex, item.index, targetPageIndex, x, yBaseline)
+        const newIndex = await doc.moveTextToPage(item.pageIndex, item.index, targetPageIndex, x, yBaseline)
+        reselect(targetPageIndex, newIndex)
         return
       }
 
       const rect = imagePlacement(targetPage, xPts, yFromTopPts, widthPts, heightPts)
       if (samePage) {
-        await doc.setImageRect(item.pageIndex, item.index, rect)
+        const newIndex = await doc.setImageRect(item.pageIndex, item.index, rect)
+        reselect(item.pageIndex, newIndex)
         return
       }
-      await doc.moveImageToPage(item.pageIndex, item.index, targetPageIndex, rect)
+      const newIndex = await doc.moveImageToPage(item.pageIndex, item.index, targetPageIndex, rect)
+      reselect(targetPageIndex, newIndex)
     } catch (err) {
       toast.error(err instanceof Error ? err.message : String(err))
     }
@@ -662,7 +744,18 @@ export function PdfEngineEditorPage() {
                   onDropOnPage={(pageIndex, file, x, y) => void handleDropOnPage(pageIndex, file, x, y)}
                   onTransformImage={(pageIndex, imageIndex, rect) => void handleTransformImage(pageIndex, imageIndex, rect)}
                   onMoveStart={startDrag}
+                  imagePreviewUrl={
+                    imagePreview && imagePreview.pageIndex === index ? imagePreview : null
+                  }
                   draggingSlot={drag ? { ...drag.item } : null}
+                  originPatchUrl={
+                    drag && originPatch
+                      && originPatch.pageIndex === drag.item.pageIndex
+                      && originPatch.kind === drag.item.kind
+                      && originPatch.index === drag.item.index
+                      ? originPatch.url
+                      : null
+                  }
                   dropTargetPage={drag !== null && drag.targetPageIndex === index}
                   onResizeText={(pageIndex, lineIndex, fontSize, maxWidth) => void handleResizeText(pageIndex, lineIndex, fontSize, maxWidth)}
                   selection={selection}

@@ -58,7 +58,13 @@ interface PdfEnginePageProps {
   /** Starts a document-wide move of a slot on this page. */
   onMoveStart: (
     e: React.PointerEvent,
-    item: { kind: "text" | "image"; pageIndex: number; index: number; label: string; direction?: "ltr" | "rtl" },
+    item: {
+      kind: "text" | "image"; pageIndex: number; index: number; label: string
+      direction?: "ltr" | "rtl"
+      fontSizePx?: number
+      color?: { r: number; g: number; b: number; a: number }
+      previewUrl?: string
+    },
     rect: DOMRect,
   ) => void
   /** The slot currently in flight, so its box can dim in place while the
@@ -66,6 +72,13 @@ interface PdfEnginePageProps {
   draggingSlot: { pageIndex: number; kind: "text" | "image"; index: number } | null
   /** True while a cross-page drag is hovering THIS page. */
   dropTargetPage: boolean
+  /** A picture of the dragged slot's area WITHOUT it, laid over the place it
+   * came from so that spot looks empty rather than still occupied. Null
+   * until it has been prepared, or if it could not be. */
+  originPatchUrl: string | null
+  /** The selected image rendered on its own, handed to the drag so the
+   * thing under the cursor is the image and nothing drawn over it. */
+  imagePreviewUrl: { pageIndex: number; index: number; url: string } | null
   /** Text resized: a new type size and the width it should wrap to. */
   onResizeText: (pageIndex: number, lineIndex: number, fontSize: number, maxWidth: number) => void
 }
@@ -104,7 +117,7 @@ export function PdfEnginePage({
   renderPage, loadPageText, loadPageImages, loadPageVectors,
   onSelectLine, onReplaceImage, onReplaceVector,
   onDropOnImage, onDropOnPage, onTransformImage, onResizeText,
-  selection, onSelect, onMoveStart, draggingSlot, dropTargetPage,
+  selection, onSelect, onMoveStart, draggingSlot, dropTargetPage, originPatchUrl, imagePreviewUrl,
 }: PdfEnginePageProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -292,9 +305,15 @@ export function PdfEnginePage({
                 && draggingSlot.pageIndex === pageIndex
                 && draggingSlot.index === image.imageIndex
               }
+              originPatchUrl={originPatchUrl}
               onMoveStart={(e, r) => onMoveStart(
                 e,
-                { kind: "image", pageIndex, index: image.imageIndex, label: "" },
+                {
+                  kind: "image", pageIndex, index: image.imageIndex, label: "",
+                  previewUrl: imagePreviewUrl?.index === image.imageIndex
+                    ? imagePreviewUrl.url
+                    : undefined,
+                },
                 r,
               )}
               onSelect={() => onSelect({ pageIndex, kind: "image", index: image.imageIndex })}
@@ -332,14 +351,25 @@ export function PdfEnginePage({
             && draggingSlot.pageIndex === pageIndex
             && draggingSlot.index === line.lineIndex
           }
+          originPatchUrl={originPatchUrl}
           onSelect={() => onSelect({ pageIndex, kind: "text", index: line.lineIndex })}
           onEdit={() => onSelectLine(pageIndex, line)}
           onMoveStart={(e, r) => onMoveStart(
             e,
-            { kind: "text", pageIndex, index: line.lineIndex, label: line.text, direction: line.direction },
+            {
+              kind: "text", pageIndex, index: line.lineIndex,
+              label: line.text, direction: line.direction,
+              // PDF points -> CSS px, so the ghost's words are the size
+              // they are on the page.
+              fontSizePx: line.fontSize * scale,
+              color: line.color,
+            },
             r,
           )}
-          onResize={(fontSize, maxWidth) => { onSelect(null); onResizeText(pageIndex, line.lineIndex, fontSize, maxWidth) }}
+          // Stays selected through a resize: dropping the selection meant
+          // pulling a corner and then having to click the box again to pull
+          // another.
+          onResize={(fontSize, maxWidth) => onResizeText(pageIndex, line.lineIndex, fontSize, maxWidth)}
         />
       ))}
     </div>
