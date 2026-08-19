@@ -87,7 +87,9 @@ export interface UsePdfEngineDocumentResult {
     rect: { x: number; y: number; width: number; height: number },
   ) => Promise<number>
   addTextOverlay: (pageIndex: number, overlay: TextOverlayRequest) => Promise<void>
-  addImageOverlay: (pageIndex: number, overlay: ImageOverlayRequest, file: File) => Promise<void>
+  addImageOverlay: (
+    pageIndex: number, overlay: ImageOverlayRequest, file: File,
+  ) => Promise<number>
   applyPagePlan: (plan: PagePlanRequest[]) => Promise<void>
   save: () => Promise<Blob>
   /** True while any mutating operation is in flight. */
@@ -388,9 +390,14 @@ export function usePdfEngineDocument(templateId: string | null | undefined): Use
     await mutate(pageIndex, (id) => getEngine().addTextOverlay(id, pageIndex, overlay).then(() => undefined))
   }, [getEngine, mutate])
 
-  const addImageOverlay = useCallback(async (pageIndex: number, overlay: ImageOverlayRequest, file: File) => {
+  /** Resolves to the new image's index, so the caller can select it. */
+  const addImageOverlay = useCallback(async (
+    pageIndex: number, overlay: ImageOverlayRequest, file: File,
+  ) => {
     const { bytes, kind } = await toEmbeddableImage(file)
-    await mutate(pageIndex, (id) => getEngine().addImageOverlay(id, pageIndex, overlay, bytes, kind).then(() => undefined))
+    const r = await mutate(pageIndex, (id) =>
+      getEngine().addImageOverlay(id, pageIndex, overlay, bytes, kind))
+    return r?.newIndex ?? -1
   }, [getEngine, mutate])
 
   const applyPagePlan = useCallback(async (plan: PagePlanRequest[]) => {

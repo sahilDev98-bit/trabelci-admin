@@ -60,6 +60,18 @@ export interface CrossPageDrop {
    * already-selected box arrives here as a drag of ~0, and the caller uses
    * this to tell the two apart rather than committing a no-op move. */
   travelledPx: number
+  /**
+   * How wide the target page is ACTUALLY drawn, in CSS px.
+   *
+   * Reported from the page element itself rather than left for the caller
+   * to look up. The caller used to convert this drop into PDF points using
+   * its own idea of the page width, which was the WINDOWED measurement —
+   * so once the expanded view drew pages at a zoom, every drop landed about
+   * 1.8x too far from the corner, and worse the further you zoomed in. The
+   * page on screen is the only thing that knows how big the page on screen
+   * is, so it is the thing that says.
+   */
+  targetPageWidthPx: number
 }
 
 /** Box position in viewport coordinates, for a `position: fixed` ghost. */
@@ -121,6 +133,38 @@ function scrollBy(target: Element, dy: number) {
     window.scrollBy(0, dy)
   } else {
     target.scrollTop += dy
+  }
+}
+
+/**
+ * Shouts if two elements claim to be the same page.
+ *
+ * That state is not a cosmetic problem: every drag resolves "where is page
+ * N?" through the DOM, and the browser answers with the FIRST match — so a
+ * second, hidden copy silently hijacks every measurement and the drag simply
+ * appears broken, with nothing pointing at the cause. It happened once, when
+ * the expanded view was drawn on top of the windowed one instead of
+ * replacing it.
+ *
+ * Checked at the START of a drag only, never per frame, so it costs nothing
+ * during the gesture. Dev builds only.
+ */
+function warnOnDuplicatePages(): void {
+  if (!import.meta.env.DEV) return
+  const seen = new Set<string>()
+  const duplicates = new Set<string>()
+  for (const el of document.querySelectorAll<HTMLElement>("[data-engine-page-index]")) {
+    const index = el.dataset.enginePageIndex ?? "?"
+    if (seen.has(index)) duplicates.add(index)
+    seen.add(index)
+  }
+  if (duplicates.size > 0) {
+    console.error(
+      "[pdf-engine] Two page columns are mounted at once — pages "
+      + `${[...duplicates].join(", ")} appear more than once. Every drag will `
+      + "measure whichever copy comes first in the DOM, which is not "
+      + "necessarily the one on screen. Render one column at a time.",
+    )
   }
 }
 
@@ -218,16 +262,33 @@ export function useCrossPageDrag(onDrop: (drop: CrossPageDrop) => void): UseCros
       frame.current = null
       if (!dragRef.current) return
       const y = pointer.current.y
-      const height = window.innerHeight
+      // The edges belong to whatever is actually scrolling, not to the
+      // window. In the expanded view the page area starts BELOW a toolbar,
+      // so measuring from the window put the "scroll up" zone on top of the
+      // toolbar — it would scroll while the pointer was over the buttons,
+      // and never trigger at the real top of the pages.
+      const el = scroller.current
+      const isDocument = !el
+        || el === document.scrollingElement
+        || el === document.documentElement
+      const bounds = isDocument
+        ? { top: 0, bottom: window.innerHeight }
+        : (el as Element).getBoundingClientRect()
+
       let dy = 0
-      if (y < AUTOSCROLL_EDGE_PX) {
+      if (y < bounds.top + AUTOSCROLL_EDGE_PX) {
         // Proportional: a pointer just inside the zone creeps, one pressed
         // to the very edge moves at full speed. A fixed rate is either too
         // slow to cross a long document or too fast to stop on a page.
-        dy = -AUTOSCROLL_MAX_STEP_PX * ((AUTOSCROLL_EDGE_PX - y) / AUTOSCROLL_EDGE_PX)
-      } else if (y > height - AUTOSCROLL_EDGE_PX) {
-        dy = AUTOSCROLL_MAX_STEP_PX * ((y - (height - AUTOSCROLL_EDGE_PX)) / AUTOSCROLL_EDGE_PX)
+        dy = -AUTOSCROLL_MAX_STEP_PX
+          * ((bounds.top + AUTOSCROLL_EDGE_PX - y) / AUTOSCROLL_EDGE_PX)
+      } else if (y > bounds.bottom - AUTOSCROLL_EDGE_PX) {
+        dy = AUTOSCROLL_MAX_STEP_PX
+          * ((y - (bounds.bottom - AUTOSCROLL_EDGE_PX)) / AUTOSCROLL_EDGE_PX)
       }
+      // Never faster than the zone allows, however far past the edge the
+      // pointer goes.
+      dy = Math.max(-AUTOSCROLL_MAX_STEP_PX, Math.min(AUTOSCROLL_MAX_STEP_PX, dy))
       if (dy !== 0 && scroller.current) {
         scrollBy(scroller.current, dy)
         // The pages just moved under a stationary cursor, so the target
@@ -280,6 +341,7 @@ export function useCrossPageDrag(onDrop: (drop: CrossPageDrop) => void): UseCros
           pointer.current.x - origin.current.x,
           pointer.current.y - origin.current.y,
         ),
+        targetPageWidthPx: rect.width,
       })
     }
 
@@ -308,6 +370,7 @@ export function useCrossPageDrag(onDrop: (drop: CrossPageDrop) => void): UseCros
   const start = useCallback((e: React.PointerEvent, item: CrossPageDragItem, rect: DOMRect) => {
     e.preventDefault()
     e.stopPropagation()
+    warnOnDuplicatePages()
     pointer.current = { x: e.clientX, y: e.clientY }
     origin.current = { x: e.clientX, y: e.clientY }
     grabOffset.current = { x: e.clientX - rect.left, y: e.clientY - rect.top }

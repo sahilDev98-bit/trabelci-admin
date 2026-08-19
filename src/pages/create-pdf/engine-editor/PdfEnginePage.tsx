@@ -83,9 +83,15 @@ interface PdfEnginePageProps {
   onResizeText: (pageIndex: number, lineIndex: number, fontSize: number, maxWidth: number) => void
 }
 
-/** Widest bitmap PDFium is asked to produce for one page, in device pixels.
- * See the paint effect for why this is capped independently of layout. */
-const MAX_RENDER_WIDTH_PX = 2400
+/**
+ * Widest bitmap PDFium is asked to produce for one page, in device pixels.
+ *
+ * Paired with the zoom ceiling (see zoom.ts): at the maximum 400% an A4 page
+ * is ~3173 CSS px, so this has to be at least that or zooming in to read
+ * small text would just enlarge a blurry bitmap. One page at this size is
+ * ~54MB of RGBA, and only pages near the viewport are ever rendered.
+ */
+const MAX_RENDER_WIDTH_PX = 3200
 
 /** The first image file in a drag payload, or null if it carries none.
  * Checked before showing any drop affordance so dragging a text selection

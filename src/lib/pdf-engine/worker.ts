@@ -443,7 +443,15 @@ const handlers: {
       const r = addImageOverlay(pdfium, doc.handle, page, overlay, new Uint8Array(bytes), kind, doc.scratch)
       if (!r.ok) throw new Error(r.error ?? "image overlay failed")
       pdfium.FPDFPage_GenerateContent(page)
-      return { ok: true }
+      // Reported so the caller can select it straight away. An image that
+      // lands with no handles showing reads as "nothing happened", which is
+      // how the fixed top-left placement felt when a logo covered its
+      // corners.
+      const added = r.handles?.[0]
+      const newIndex = added !== undefined
+        ? imageIndexOfHandle(pdfium, page, doc.scratch, added)
+        : listImageObjects(pdfium, page, doc.scratch).length - 1
+      return { ok: true, newIndex }
     })
   },
 

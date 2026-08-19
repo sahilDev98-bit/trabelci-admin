@@ -203,9 +203,11 @@ export interface EngineMethods {
     result: { ok: boolean; newIndex: number }
   }
   addTextOverlay: { params: { docId: string; pageIndex: number; overlay: TextOverlayRequest }; result: { ok: boolean } }
+  /** newIndex: where the added image ended up, so the caller can select it
+   * immediately — an image you cannot see the handles of looks broken. */
   addImageOverlay: {
     params: { docId: string; pageIndex: number; overlay: ImageOverlayRequest; bytes: ArrayBuffer; kind: "png" | "jpeg" }
-    result: { ok: boolean }
+    result: { ok: boolean; newIndex: number }
   }
   applyPagePlan: { params: { docId: string; plan: PagePlanRequest[] }; result: { docId: string; pages: EnginePage[] } }
   save: { params: { docId: string }; result: { bytes: ArrayBuffer } }

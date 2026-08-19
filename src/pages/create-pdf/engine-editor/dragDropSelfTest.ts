@@ -62,6 +62,12 @@ export interface CrossPageTestResult {
   retargetedDuringAutoScroll: boolean
   /** Escape abandons a drag without reporting a drop. */
   escapeCancelled: boolean
+  /** The page width the drop reported, and the width that page is actually
+   * drawn at. They must match: converting a drop with a width from
+   * somewhere else is what made every drop land ~1.8x too far once the
+   * expanded view drew pages at a zoom. */
+  reportedPageWidth: number | null
+  actualPageWidth: number | null
   /** Distance reported for a plain CLICK on an already-selected box. The
    * editor uses this to tell a click from a move; if it is not ~0 a click
    * would commit a move and clear the selection. */
@@ -297,6 +303,7 @@ export async function runCrossPageDragSelfTest(): Promise<CrossPageTestResult> {
     targetPageHighlighted: false,
     autoScrolledBy: 0, retargetedDuringAutoScroll: false, escapeCancelled: false,
     clickTravelledPx: null, dragTravelledPx: null,
+    reportedPageWidth: null, actualPageWidth: null,
     textGhostShowsWords: false, textGhostHasNoCrop: false,
     imageGhostHasCrop: false, imageGhostColour: null,
     originCoveredWhileDragging: false,
@@ -493,6 +500,14 @@ export async function runCrossPageDragSelfTest(): Promise<CrossPageTestResult> {
     await wait(200)
 
     out.crossDrop = drops.at(-1) ?? null
+    out.reportedPageWidth = out.crossDrop ? Math.round(out.crossDrop.targetPageWidthPx) : null
+    out.actualPageWidth = Math.round(page1!.getBoundingClientRect().width)
+    if (out.reportedPageWidth !== out.actualPageWidth) {
+      out.errors.push(
+        `the drop reported the page as ${out.reportedPageWidth}px wide but it is drawn at `
+        + `${out.actualPageWidth}px — the conversion to PDF points would be wrong by that ratio`,
+      )
+    }
     if (!out.crossDrop) {
       out.errors.push("releasing over page 1 reported no drop")
     } else {

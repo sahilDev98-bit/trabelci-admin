@@ -150,6 +150,8 @@ const checks = {
   "the original is covered while in flight": cross.originCoveredWhileDragging === true,
   "a click reads as ~0 travel, not a move": cross.clickTravelledPx !== null && cross.clickTravelledPx <= 2,
   "a real drag reads as clear travel": cross.dragTravelledPx !== null && cross.dragTravelledPx > 5,
+  "the drop measures the page as it is actually drawn":
+    cross.reportedPageWidth !== null && cross.reportedPageWidth === cross.actualPageWidth,
 
   // ---- geometry ----
   "no geometry errors": geometry.errors.length === 0,

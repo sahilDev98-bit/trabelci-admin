@@ -162,7 +162,7 @@ export class PdfEngineClient {
 
   addImageOverlay(
     docId: string, pageIndex: number, overlay: ImageOverlayRequest, bytes: ArrayBuffer, kind: "png" | "jpeg",
-  ): Promise<{ ok: boolean }> {
+  ): Promise<{ ok: boolean; newIndex: number }> {
     return this.call("addImageOverlay", { docId, pageIndex, overlay, bytes, kind }, [bytes])
   }
 

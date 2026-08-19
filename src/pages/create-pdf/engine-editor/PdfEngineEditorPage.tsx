@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useNavigate, useParams } from "@tanstack/react-router"
 import { useTranslation } from "react-i18next"
-import { ArrowLeftIcon, DownloadIcon, Loader2Icon } from "lucide-react"
+import { ArrowLeftIcon, DownloadIcon, Loader2Icon, MaximizeIcon } from "lucide-react"
 import { toast } from "sonner"
 
 import { usePdfTemplateQuery } from "@/features/pdfTemplates/api"
@@ -18,10 +18,12 @@ import type { EngineTextLine, PagePlanRequest } from "@/lib/pdf-engine"
 import { PdfEditorRail, type PdfContentMode, type PdfOrganizerMode } from "../PdfEditorRail"
 import { PdfPageOrganizer, type OrganizerPage } from "../PdfPageOrganizer"
 import { usePdfEngineDocument } from "./usePdfEngineDocument"
-import { PdfEnginePage } from "./PdfEnginePage"
 import { useCrossPageDrag, type CrossPageDrop } from "./useCrossPageDrag"
 import { dropToPagePoints, textMoveDelta, textPlacementOnPage, imagePlacement } from "./dropGeometry"
 import { CrossPageDragGhost } from "./CrossPageDragGhost"
+import { findFreeSpot, newImageSize, type Box } from "./placement"
+import { PdfEnginePageColumn } from "./PdfEnginePageColumn"
+import { PdfEngineFullscreen } from "./PdfEngineFullscreen"
 
 /**
  * PDF Master editor, rebuilt on the PDFium engine.
@@ -120,6 +122,10 @@ export function PdfEngineEditorPage() {
   const [pageDisplayWidth, setPageDisplayWidth] = useState(FALLBACK_PAGE_DISPLAY_WIDTH)
   /** How much of the column's trailing edge the rail covers right now. */
   const [railGutter, setRailGutter] = useState(0)
+  /** What the EXPANDED view is drawing pages at, reported by it. Null while
+   * windowed. Kept so work prepared for a drag (the erase patch) is rendered
+   * at the size the pages are actually on screen. */
+  const [expandedWidth, setExpandedWidth] = useState<number | null>(null)
   /**
    * A picture of the SELECTED slot's area with the slot left out, ready in
    * advance so the moment a drag starts the place it came from can look
@@ -142,6 +148,11 @@ export function PdfEngineEditorPage() {
   const [imagePreview, setImagePreview] = useState<
     { pageIndex: number; index: number; url: string } | null
   >(null)
+
+  /** Full screen: the pages get the whole display and the tools move into a
+   * toolbar across the top. A separate shell over the same document — the
+   * windowed view is untouched by it. */
+  const [fullscreen, setFullscreen] = useState(false)
 
   const [organizerMode, setOrganizerMode] = useState<PdfOrganizerMode | null>(null)
   const [thumbnails, setThumbnails] = useState<Record<string, string>>({})
@@ -237,9 +248,10 @@ export function PdfEngineEditorPage() {
       observer.disconnect()
       window.removeEventListener("resize", measure)
     }
-    // Re-runs once the document is ready, which is when both the column and
-    // the rail first exist to be measured.
-  }, [doc.phase])
+    // Re-runs when the document becomes ready AND when leaving the expanded
+    // view, which is when this column is mounted again and there is
+    // something to measure.
+  }, [doc.phase, fullscreen])
 
   useEffect(() => {
     // A stale patch is never CLEARED here, only replaced. Clearing would be
@@ -254,7 +266,11 @@ export function PdfEngineEditorPage() {
     const { pageIndex, kind, index } = selection
     // Rendered at the same scale the page is drawn at, so the patch drops
     // into the hole at exactly the right resolution.
-    const scale = (pageDisplayWidth / page.widthPts) * Math.min(window.devicePixelRatio || 1, 2)
+    // At the size the pages are actually drawn — windowed or expanded — so
+    // the patch that fills the hole is not a low-resolution one stretched to
+    // fit once the page is zoomed in.
+    const shownWidth = fullscreen && expandedWidth ? expandedWidth : pageDisplayWidth
+    const scale = (shownWidth / page.widthPts) * Math.min(window.devicePixelRatio || 1, 2)
     void doc.renderCleanPatch(pageIndex, kind, index, scale)
       .then((url) => {
         if (cancelled || !url) return
@@ -271,7 +287,46 @@ export function PdfEngineEditorPage() {
         .catch(() => { /* falls back to the plain outline */ })
     }
     return () => { cancelled = true }
-  }, [selection, doc, pageDisplayWidth])
+  }, [selection, doc, pageDisplayWidth, fullscreen, expandedWidth])
+
+  /**
+   * Expand the editor to fill the browser window.
+   *
+   * Deliberately NOT the browser's own full-screen mode. That takes over the
+   * whole display and hides the tabs, the address bar and the taskbar, which
+   * is more than was wanted — the point is to give the PAGE the window, not
+   * to take the machine over. This is an overlay pinned to the viewport, the
+   * same shape as the page-organizer dialog, so everything outside the
+   * browser stays exactly where it was.
+   */
+  const enterFullscreen = useCallback(() => setFullscreen(true), [])
+  const exitFullscreen = useCallback(() => setFullscreen(false), [])
+
+  /** Everything already on a page, so a new item can be put somewhere free
+   * rather than on top of the logo. */
+  const occupiedBoxes = useCallback((pageIndex: number): Box[] => {
+    const boxes: Box[] = []
+    for (const line of doc.pageText[pageIndex]?.lines ?? []) boxes.push(line.bbox)
+    for (const image of doc.pageImages[pageIndex]?.images ?? []) {
+      if (image.bbox) boxes.push(image.bbox)
+    }
+    for (const group of doc.pageVectors[pageIndex]?.groups ?? []) boxes.push(group.bbox)
+    return boxes
+  }, [doc.pageText, doc.pageImages, doc.pageVectors])
+
+  /** Removes whatever is selected. Shared by the Delete key and the
+   * toolbar's delete button, so the two can never diverge. */
+  const deleteSelected = useCallback(() => {
+    if (!selection) return
+    const target = selection
+    setSelection(null)
+    const run = target.kind === "image"
+      ? doc.removeImage(target.pageIndex, target.index)
+      : target.kind === "vector"
+        ? doc.removeVector(target.pageIndex, target.index)
+        : doc.removeText(target.pageIndex, target.index)
+    void run.catch((err: unknown) => toast.error(err instanceof Error ? err.message : String(err)))
+  }, [selection, doc])
 
   /** Delete/Backspace removes the selected slot, matching how every other
    * canvas editor behaves. Ignored while a dialog or input has focus, so
@@ -285,18 +340,11 @@ export function PdfEngineEditorPage() {
         && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)
       if (typing) return
       e.preventDefault()
-      const target = selection
-      setSelection(null)
-      const run = target.kind === "image"
-        ? doc.removeImage(target.pageIndex, target.index)
-        : target.kind === "vector"
-          ? doc.removeVector(target.pageIndex, target.index)
-          : doc.removeText(target.pageIndex, target.index)
-      void run.catch((err: unknown) => toast.error(err instanceof Error ? err.message : String(err)))
+      deleteSelected()
     }
     window.addEventListener("keydown", onKeyDown)
     return () => window.removeEventListener("keydown", onKeyDown)
-  }, [selection, doc])
+  }, [selection, deleteSelected])
 
   /** Opens the editor for one line. The draft is seeded HERE rather than in
    * an effect keyed on `selected`: deriving it in an effect means an extra
@@ -343,8 +391,14 @@ export function PdfEngineEditorPage() {
     const targetPage = doc.pages[targetPageIndex]
     if (!sourcePage || !targetPage) return
 
-    // Every page is drawn at the same CSS width, so one scale serves both.
-    const scale = pageDisplayWidth / targetPage.widthPts
+    // Taken from the page as it is ACTUALLY drawn, reported by the drop
+    // itself. This used to read the windowed measurement, which the expanded
+    // view does not use — so once the pages were zoomed, every drop landed
+    // about 1.8x too far from the corner, and further the more you zoomed.
+    // There is now one number instead of two that could disagree.
+    const scale = drop.targetPageWidthPx > 0
+      ? drop.targetPageWidthPx / targetPage.widthPts
+      : pageDisplayWidth / targetPage.widthPts
     const { xPts, yFromTopPts, widthPts, heightPts } = dropToPagePoints(drop, scale)
     const samePage = targetPageIndex === item.pageIndex
 
@@ -394,6 +448,23 @@ export function PdfEngineEditorPage() {
 
   const { drag, start: startDrag } = useCrossPageDrag((drop) => void handleDrop(drop))
 
+  /**
+   * Escape means "cancel what I am doing", and a drag is more immediate than
+   * the whole view — so while something is in flight the drag cancels and
+   * full screen stays. useCrossPageDrag handles the drag half; this only
+   * acts when nothing is being dragged.
+   */
+  useEffect(() => {
+    if (!fullscreen) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || drag) return
+      exitFullscreen()
+    }
+    window.addEventListener("keydown", onKey)
+    return () => window.removeEventListener("keydown", onKey)
+  }, [fullscreen, drag, exitFullscreen])
+
+
   /** Resizing text re-draws the same words at a new size and wrap width —
    * there is no box to stretch, so the line is rebuilt rather than scaled. */
   const handleResizeText = async (pageIndex: number, lineIndex: number, fontSize: number, maxWidth: number) => {
@@ -430,27 +501,27 @@ export function PdfEngineEditorPage() {
       } else {
         const page = doc.pages[target.pageIndex]
         if (!page) return
-        // Sized to the image's own aspect ratio so a logo isn't stretched
-        // into whatever box we happened to guess.
+        // Sized to the image's own aspect ratio so it isn't stretched into
+        // whatever box we happened to guess.
         const bitmap = await createImageBitmap(file)
-        const ratio = bitmap.height / bitmap.width
+        const size = newImageSize(page, bitmap.width, bitmap.height, NEW_IMAGE_WIDTH_PTS)
         bitmap.close()
-        const width = Math.min(NEW_IMAGE_WIDTH_PTS, page.widthPts - NEW_OVERLAY_INSET_PTS * 2)
-        const height = width * ratio
-        await doc.addImageOverlay(
+        // Put somewhere with ROOM, rather than always the same corner.
+        // A fixed top-left inset is where a designed page keeps its logo, so
+        // the new image landed underneath it — and since logos and text draw
+        // above images, its top corners (the resize handles) were buried and
+        // could not be grabbed. It looked like adding an image was broken.
+        const spot = findFreeSpot(page, occupiedBoxes(target.pageIndex), size)
+        const newIndex = await doc.addImageOverlay(
           target.pageIndex,
-          {
-            x: NEW_OVERLAY_INSET_PTS,
-            // y is the BOTTOM edge in PDF space, so an item inset from the
-            // top of the page sits at pageHeight - inset - its own height.
-            y: page.heightPts - NEW_OVERLAY_INSET_PTS - height,
-            width,
-            height,
-          },
+          { x: spot.x, y: spot.y, width: size.width, height: size.height },
           file,
         )
-        // No mode change needed: image slots are always visible, so the
-        // new one appears immediately wherever the text layer stands.
+        // Selected immediately, so its handles are showing and it is obvious
+        // both that something was added and where it went.
+        if (newIndex >= 0) {
+          setSelection({ pageIndex: target.pageIndex, kind: "image", index: newIndex })
+        }
       }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : String(err))
@@ -489,20 +560,20 @@ export function PdfEngineEditorPage() {
     if (!page) return
     try {
       const bitmap = await createImageBitmap(file)
-      const ratio = bitmap.height / bitmap.width
+      const { width, height } = newImageSize(page, bitmap.width, bitmap.height, NEW_IMAGE_WIDTH_PTS)
       bitmap.close()
-      const width = Math.min(NEW_IMAGE_WIDTH_PTS, page.widthPts * 0.8)
-      const height = width * ratio
-      // Centred on the cursor, then clamped so an image dropped near an
-      // edge still lands wholly on the page rather than half off it.
+      // Centred on the cursor — the whole point of dropping rather than
+      // clicking is that YOU chose the spot — then clamped so an image
+      // dropped near an edge still lands wholly on the page.
       const left = Math.min(Math.max(0, xPts - width / 2), Math.max(0, page.widthPts - width))
       const topFromTop = Math.min(Math.max(0, yFromTopPts - height / 2), Math.max(0, page.heightPts - height))
-      await doc.addImageOverlay(
+      const newIndex = await doc.addImageOverlay(
         pageIndex,
         // PDF y grows upward, so the bottom edge is measured from the far side.
         { x: left, y: page.heightPts - topFromTop - height, width, height },
         file,
       )
+      if (newIndex >= 0) setSelection({ pageIndex, kind: "image", index: newIndex })
     } catch (err) {
       toast.error(err instanceof Error ? err.message : String(err))
     }
@@ -623,6 +694,38 @@ export function PdfEngineEditorPage() {
 
   // Counts both layers: image slots are always clickable, and text slots
   // are too unless the text layer has been switched off.
+  /**
+   * Everything the page column needs, gathered once.
+   *
+   * Both views render the SAME column from this, so a slot behaves
+   * identically whether you are windowed or in full screen — there is no
+   * second copy of the wiring to fall out of step.
+   */
+  const pageColumnProps = {
+    contentMode,
+    selection,
+    onSelect: setSelection,
+    drag,
+    onMoveStart: startDrag,
+    originPatch,
+    imagePreview,
+    onEditLine: openLine,
+    onReplaceImage: (pageIndex: number, imageIndex: number) =>
+      openFilePicker({ kind: "replace", pageIndex, imageIndex }),
+    onReplaceVector: (pageIndex: number, vectorIndex: number) =>
+      openFilePicker({ kind: "replaceVector", pageIndex, vectorIndex }),
+    onDropOnImage: (pageIndex: number, imageIndex: number, file: File) =>
+      void handleDropOnImage(pageIndex, imageIndex, file),
+    onDropOnPage: (pageIndex: number, file: File, x: number, y: number) =>
+      void handleDropOnPage(pageIndex, file, x, y),
+    onTransformImage: (
+      pageIndex: number, imageIndex: number,
+      rect: { x: number; y: number; width: number; height: number },
+    ) => void handleTransformImage(pageIndex, imageIndex, rect),
+    onResizeText: (pageIndex: number, lineIndex: number, fontSize: number, maxWidth: number) =>
+      void handleResizeText(pageIndex, lineIndex, fontSize, maxWidth),
+  }
+
   const editableCount = useMemo(() => {
     const images = Object.values(doc.pageImages).reduce((n, p) => n + (p?.images.length ?? 0), 0)
     const vectors = Object.values(doc.pageVectors).reduce((n, p) => n + (p?.groups.length ?? 0), 0)
@@ -673,6 +776,21 @@ export function PdfEngineEditorPage() {
 
         <div className="ms-auto flex items-center gap-2">
           {doc.busy && <Loader2Icon className="size-4 animate-spin text-muted-foreground" />}
+          {doc.phase === "ready" && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={enterFullscreen}
+              className="gap-1.5"
+              title={t(
+                "pdfTemplates.engineFullscreenHint",
+                "Fill the window with the page, so it can be zoomed enough to read small text",
+              )}
+            >
+              <MaximizeIcon className="size-4" />
+              {t("pdfTemplates.engineFullscreen", "Expand")}
+            </Button>
+          )}
           <Button
             size="sm"
             onClick={handleDownload}
@@ -705,65 +823,21 @@ export function PdfEngineEditorPage() {
           <CenteredMessage><span className="text-destructive">{doc.error}</span></CenteredMessage>
         )}
 
-        {doc.phase === "ready" && (
-          <div
-            ref={pagesColumnRef}
-            className="flex flex-col items-center gap-6"
-            // Applied as padding rather than subtracted from the page
-            // width alone: this column centres its pages, so a subtracted
-            // gutter gets split in half and only half lands on the side the
-            // rail is on.
-            style={{ paddingInlineEnd: railGutter }}
-          >
-            {/* data-engine-page-index lives on the page SURFACE inside
-                PdfEnginePage, not on this wrapper: a drop is converted using
-                the target's rect, and this wrapper can be wider than the page
-                it holds, which would offset every landing position. Two
-                elements carrying the attribute would also make the drag's
-                hit-test ambiguous. */}
-            {doc.pages.map((page, index) => (
-              <div key={`${index}-${page.rotation}`}>
-                <PdfEnginePage
-                  page={page}
-                  pageIndex={index}
-                  displayWidth={pageDisplayWidth}
-                  text={doc.pageText[index]}
-                  images={doc.pageImages[index]}
-                  contentMode={contentMode}
-                  revision={doc.revision}
-                  renderPage={doc.renderPage}
-                  loadPageText={doc.loadPageText}
-                  loadPageImages={doc.loadPageImages}
-                  loadPageVectors={doc.loadPageVectors}
-                  vectors={doc.pageVectors[index]}
-                  onReplaceVector={(pageIndex, vectorIndex) =>
-                    openFilePicker({ kind: "replaceVector", pageIndex, vectorIndex })}
-                  onSelectLine={openLine}
-                  onReplaceImage={(pageIndex, imageIndex) => openFilePicker({ kind: "replace", pageIndex, imageIndex })}
-                  onDropOnImage={(pageIndex, imageIndex, file) => void handleDropOnImage(pageIndex, imageIndex, file)}
-                  onDropOnPage={(pageIndex, file, x, y) => void handleDropOnPage(pageIndex, file, x, y)}
-                  onTransformImage={(pageIndex, imageIndex, rect) => void handleTransformImage(pageIndex, imageIndex, rect)}
-                  onMoveStart={startDrag}
-                  imagePreviewUrl={
-                    imagePreview && imagePreview.pageIndex === index ? imagePreview : null
-                  }
-                  draggingSlot={drag ? { ...drag.item } : null}
-                  originPatchUrl={
-                    drag && originPatch
-                      && originPatch.pageIndex === drag.item.pageIndex
-                      && originPatch.kind === drag.item.kind
-                      && originPatch.index === drag.item.index
-                      ? originPatch.url
-                      : null
-                  }
-                  dropTargetPage={drag !== null && drag.targetPageIndex === index}
-                  onResizeText={(pageIndex, lineIndex, fontSize, maxWidth) => void handleResizeText(pageIndex, lineIndex, fontSize, maxWidth)}
-                  selection={selection}
-                  onSelect={setSelection}
-                />
-              </div>
-            ))}
-          </div>
+        {/* Not rendered while expanded. The expanded view draws its own copy
+            of these pages ON TOP, and leaving this one mounted underneath
+            put TWO elements in the document claiming to be page N — so
+            "where is page 3?" answered with the hidden windowed one, and
+            every drag measured a page the user could not see, at the wrong
+            size and position. It also rendered every page twice, two full
+            sets of canvases for one visible document. */}
+        {doc.phase === "ready" && !fullscreen && (
+          <PdfEnginePageColumn
+            {...pageColumnProps}
+            doc={doc}
+            columnRef={pagesColumnRef}
+            displayWidth={pageDisplayWidth}
+            gutter={railGutter}
+          />
         )}
       </div>
 
@@ -785,6 +859,45 @@ export function PdfEngineEditorPage() {
         />
       )}
 
+      {fullscreen && doc.phase === "ready" && (
+        <PdfEngineFullscreen
+          doc={doc}
+          documentName={template.name}
+          onExit={exitFullscreen}
+          onDisplayWidthChange={setExpandedWidth}
+          selection={selection}
+          column={pageColumnProps}
+          toolbar={{
+            contentMode,
+            onToggleContentMode: () => setContentMode((m) => (m === "text" ? "images" : "text")),
+            onAddText: () => setNewTextDraft({ pageIndex: visiblePageIndex(), text: "" }),
+            onAddImage: () => openFilePicker({ kind: "overlay", pageIndex: visiblePageIndex() }),
+            onOpenOrganizer: (mode) => void openOrganizer(mode),
+            onEditSelectedText: () => {
+              if (selection?.kind !== "text") return
+              const line = doc.pageText[selection.pageIndex]?.lines[selection.index]
+              if (line) openLine(selection.pageIndex, line)
+            },
+            onReplaceSelectedImage: () => {
+              if (selection?.kind !== "image") return
+              openFilePicker({ kind: "replace", pageIndex: selection.pageIndex, imageIndex: selection.index })
+            },
+            onReplaceSelectedVector: () => {
+              if (selection?.kind !== "vector") return
+              openFilePicker({ kind: "replaceVector", pageIndex: selection.pageIndex, vectorIndex: selection.index })
+            },
+            onDeleteSelected: deleteSelected,
+            onDownload: () => void handleDownload(),
+            downloading,
+            busy: doc.busy,
+            selection,
+          }}
+        />
+      )}
+
+      {/* Outside the full-screen shell on purpose: it is fixed to the
+          viewport, so one instance serves both views and the ghost never
+          disappears behind the overlay. */}
       <CrossPageDragGhost drag={drag} />
 
       {/* One hidden picker serves both "replace this image" and "add an
