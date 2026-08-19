@@ -1,7 +1,7 @@
 import {
   ArrowUpDownIcon, CopyIcon, DownloadIcon, ImageIcon, ImagePlusIcon,
   Loader2Icon, MinimizeIcon, MinusIcon, PlusIcon, ScanSearchIcon,
-  TextIcon, Trash2Icon, TypeIcon,
+  TextIcon, Trash2Icon, TypeIcon, XIcon,
 } from "lucide-react"
 import { useTranslation } from "react-i18next"
 
@@ -12,13 +12,19 @@ import type { SlotSelection } from "./PdfEnginePageColumn"
 import { ZOOM_LEVELS } from "./zoom"
 
 /**
- * The full-screen editor's toolbar.
+ * The expanded editor's toolbar.
  *
- * Deliberately CONTEXTUAL, the way a real editor's is: the tools change to
- * match whatever is selected, instead of showing every tool at all times and
- * leaving most of them meaningless. Click nothing and you get document
- * tools; click a caption and you get text tools; click a photo and you get
- * photo tools.
+ * Two zones, and the split matters:
+ *
+ *   - The DOCUMENT tools are always there. Zoom, page tools, add text, add
+ *     image. An earlier version swapped these out for the selected item's
+ *     tools, which meant that adding an image — which selects it — made
+ *     "Add image" disappear, and the only way back was to guess that
+ *     clicking blank paper would restore it. Tools you need constantly must
+ *     not vanish because you happen to have something selected.
+ *
+ *   - The SELECTION tools are added alongside when something is selected,
+ *     never in place of anything.
  *
  * The text section is where formatting (bold, italic, colour, alignment)
  * will live. It is left visibly empty rather than filled with buttons that
@@ -51,6 +57,8 @@ interface PdfEditorToolbarProps {
   onReplaceSelectedImage: () => void
   onReplaceSelectedVector: () => void
   onDeleteSelected: () => void
+  /** Clears the selection, so the selection tools fold away again. */
+  onDeselect: () => void
   onExit: () => void
   onDownload: () => void
   downloading: boolean
@@ -96,7 +104,7 @@ export function PdfEditorToolbar({
   onZoomToSelection, selection, contentMode, onToggleContentMode,
   onAddText, onAddImage, onOpenOrganizer,
   onEditSelectedText, onReplaceSelectedImage, onReplaceSelectedVector, onDeleteSelected,
-  onExit, onDownload, downloading, busy,
+  onDeselect, onExit, onDownload, downloading, busy,
 }: PdfEditorToolbarProps) {
   const { t } = useTranslation()
 
@@ -162,63 +170,62 @@ export function PdfEditorToolbar({
 
         <Divider />
 
-        {/* ── Contextual: what you can do to the thing you clicked ── */}
-        {selection === null && (
-          <>
+        {/* ── Document tools. ALWAYS present, whatever is selected. ── */}
+        <ToolButton
+          label={contentMode === "text"
+            ? t("pdfTemplates.railTextEditingOn", "Text boxes on")
+            : t("pdfTemplates.railTextEditingOff", "Text boxes off")}
+          icon={TypeIcon}
+          onClick={onToggleContentMode}
+          active={contentMode === "text"}
+        />
+        <ToolButton label={t("pdfTemplates.railAddText", "Add text")} icon={TextIcon} onClick={onAddText} />
+        <ToolButton label={t("pdfTemplates.railAddImage", "Add image")} icon={ImagePlusIcon} onClick={onAddImage} />
+        <Divider />
+        <ToolButton label={t("pdfTemplates.railCopyPage", "Duplicate pages")} icon={CopyIcon} onClick={() => onOpenOrganizer("copy")} />
+        <ToolButton label={t("pdfTemplates.railMovePage", "Reorder pages")} icon={ArrowUpDownIcon} onClick={() => onOpenOrganizer("move")} />
+        <ToolButton label={t("pdfTemplates.railDeletePages", "Delete pages")} icon={Trash2Icon} onClick={() => onOpenOrganizer("delete")} danger />
+
+        {/* ── Selection tools, ADDED alongside when something is chosen. ──
+            Visually grouped so it is obvious they belong to the selection
+            and not to the document. */}
+        {selection && (
+          <div
+            data-pdf-toolbar-selection
+            className="ms-1 flex shrink-0 items-center gap-1 rounded-md bg-muted/70 px-1.5 py-1"
+          >
+            {selection.kind === "text" && (
+              <>
+                <Button type="button" size="sm" variant="secondary" className="h-8 shrink-0 gap-1.5" onClick={onEditSelectedText}>
+                  <TypeIcon className="size-4" />
+                  {t("pdfTemplates.masterEditTextTitle", "Edit text")}
+                </Button>
+                {/* Formatting lands here — bold, italic, underline, colour,
+                    size, alignment, font. An honest gap, not dead buttons. */}
+                <span className="px-1 text-xs italic text-muted-foreground">
+                  {t("pdfTemplates.engineFormattingSoon", "Formatting tools coming here")}
+                </span>
+              </>
+            )}
+            {selection.kind === "image" && (
+              <Button type="button" size="sm" variant="secondary" className="h-8 shrink-0 gap-1.5" onClick={onReplaceSelectedImage}>
+                <ImageIcon className="size-4" />
+                {t("pdfTemplates.engineReplaceImage", "Replace image")}
+              </Button>
+            )}
+            {selection.kind === "vector" && (
+              <Button type="button" size="sm" variant="secondary" className="h-8 shrink-0 gap-1.5" onClick={onReplaceSelectedVector}>
+                <ImageIcon className="size-4" />
+                {t("pdfTemplates.engineReplaceArtwork", "Replace with image")}
+              </Button>
+            )}
+            <ToolButton label={t("common.delete", "Delete")} icon={Trash2Icon} onClick={onDeleteSelected} danger />
             <ToolButton
-              label={contentMode === "text"
-                ? t("pdfTemplates.railTextEditingOn", "Text boxes on")
-                : t("pdfTemplates.railTextEditingOff", "Text boxes off")}
-              icon={TypeIcon}
-              onClick={onToggleContentMode}
-              active={contentMode === "text"}
+              label={t("pdfTemplates.engineDeselect", "Deselect")}
+              icon={XIcon}
+              onClick={onDeselect}
             />
-            <ToolButton label={t("pdfTemplates.railAddText", "Add text")} icon={TextIcon} onClick={onAddText} />
-            <ToolButton label={t("pdfTemplates.railAddImage", "Add image")} icon={ImagePlusIcon} onClick={onAddImage} />
-            <Divider />
-            <ToolButton label={t("pdfTemplates.railCopyPage", "Duplicate pages")} icon={CopyIcon} onClick={() => onOpenOrganizer("copy")} />
-            <ToolButton label={t("pdfTemplates.railMovePage", "Reorder pages")} icon={ArrowUpDownIcon} onClick={() => onOpenOrganizer("move")} />
-            <ToolButton label={t("pdfTemplates.railDeletePages", "Delete pages")} icon={Trash2Icon} onClick={() => onOpenOrganizer("delete")} danger />
-          </>
-        )}
-
-        {selection?.kind === "text" && (
-          <>
-            <Button type="button" size="sm" variant="secondary" className="h-9 shrink-0 gap-1.5" onClick={onEditSelectedText}>
-              <TypeIcon className="size-4" />
-              {t("pdfTemplates.masterEditTextTitle", "Edit text")}
-            </Button>
-            {/* Formatting lands here — bold, italic, underline, colour,
-                size, alignment, font. Left as an honest gap rather than
-                dead buttons. */}
-            <span className="ms-1 shrink-0 text-xs italic text-muted-foreground">
-              {t("pdfTemplates.engineFormattingSoon", "Formatting tools coming here")}
-            </span>
-            <Divider />
-            <ToolButton label={t("common.delete", "Delete")} icon={Trash2Icon} onClick={onDeleteSelected} danger />
-          </>
-        )}
-
-        {selection?.kind === "image" && (
-          <>
-            <Button type="button" size="sm" variant="secondary" className="h-9 shrink-0 gap-1.5" onClick={onReplaceSelectedImage}>
-              <ImageIcon className="size-4" />
-              {t("pdfTemplates.engineReplaceImage", "Replace image")}
-            </Button>
-            <Divider />
-            <ToolButton label={t("common.delete", "Delete")} icon={Trash2Icon} onClick={onDeleteSelected} danger />
-          </>
-        )}
-
-        {selection?.kind === "vector" && (
-          <>
-            <Button type="button" size="sm" variant="secondary" className="h-9 shrink-0 gap-1.5" onClick={onReplaceSelectedVector}>
-              <ImageIcon className="size-4" />
-              {t("pdfTemplates.engineReplaceArtwork", "Replace with image")}
-            </Button>
-            <Divider />
-            <ToolButton label={t("common.delete", "Delete")} icon={Trash2Icon} onClick={onDeleteSelected} danger />
-          </>
+          </div>
         )}
 
         <div className="ms-auto flex shrink-0 items-center gap-2">

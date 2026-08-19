@@ -1052,6 +1052,7 @@ const he = {
     enginePageOf: "עמוד {{current}} מתוך {{total}}",
     engineReplaceArtwork: "החלף בתמונה",
     engineFormattingSoon: "כלי עיצוב יגיעו לכאן",
+    engineDeselect: "בטל בחירה",
     engineTextHint: "לחיצה כפולה לעריכה. גרירה להזזה לכל מקום במסמך, פינות לשינוי גודל.",
     engineDragToPage: "העבר לעמוד {{page}}",
     engineDragSamePage: "עמוד {{page}}",

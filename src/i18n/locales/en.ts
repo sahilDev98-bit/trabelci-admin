@@ -1068,6 +1068,7 @@ const en = {
     enginePageOf: "Page {{current}} of {{total}}",
     engineReplaceArtwork: "Replace with image",
     engineFormattingSoon: "Formatting tools coming here",
+    engineDeselect: "Deselect",
     engineTextHint: "Double-click to edit. Drag to move it anywhere in the document, corners to resize.",
     engineDragToPage: "Move to page {{page}}",
     engineDragSamePage: "Page {{page}}",

@@ -458,11 +458,16 @@ export function PdfEngineEditorPage() {
     if (!fullscreen) return
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape" || drag) return
+      // One layer at a time. A drag is cancelled by useCrossPageDrag; then a
+      // selection is cleared; only with nothing held does Escape close the
+      // expanded view. Jumping straight out would throw away the view
+      // because someone wanted to drop a selection.
+      if (selection) { setSelection(null); return }
       exitFullscreen()
     }
     window.addEventListener("keydown", onKey)
     return () => window.removeEventListener("keydown", onKey)
-  }, [fullscreen, drag, exitFullscreen])
+  }, [fullscreen, drag, selection, exitFullscreen])
 
 
   /** Resizing text re-draws the same words at a new size and wrap width —
@@ -887,6 +892,7 @@ export function PdfEngineEditorPage() {
               openFilePicker({ kind: "replaceVector", pageIndex: selection.pageIndex, vectorIndex: selection.index })
             },
             onDeleteSelected: deleteSelected,
+            onDeselect: () => setSelection(null),
             onDownload: () => void handleDownload(),
             downloading,
             busy: doc.busy,

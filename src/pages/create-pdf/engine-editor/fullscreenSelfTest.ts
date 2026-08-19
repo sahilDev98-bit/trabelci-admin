@@ -36,6 +36,14 @@ export interface FullscreenTestResult {
   toolsWhenNothingSelected: number
   toolsWhenTextSelected: number
   toolbarChangedWithSelection: boolean
+  /** The document tools must SURVIVE a selection. Selecting something used
+   * to replace them, so adding an image — which selects it — made "Add
+   * image" vanish with no obvious way back. */
+  addToolsPresentWhenNothingSelected: boolean
+  addToolsPresentWhenTextSelected: boolean
+  addToolsPresentWhenImageSelected: boolean
+  /** And the selection's own tools appear alongside, not instead. */
+  selectionToolsAppear: boolean
   hasZoomControl: boolean
   /** Highest number of elements claiming to be the SAME page. Must be 1:
    * every drag resolves "where is page N?" through the DOM and takes the
@@ -82,6 +90,10 @@ export async function runFullscreenSelfTest(): Promise<FullscreenTestResult> {
     pageWidthFitPage: 0, wholePageVisible: false,
     toolsWhenNothingSelected: 0, toolsWhenTextSelected: 0,
     toolbarChangedWithSelection: false, hasZoomControl: false,
+    addToolsPresentWhenNothingSelected: false,
+    addToolsPresentWhenTextSelected: false,
+    addToolsPresentWhenImageSelected: false,
+    selectionToolsAppear: false,
     maxElementsPerPage: 0, maxElementsPerPageWithDuplicate: 0,
   }
 
@@ -159,6 +171,7 @@ export async function runFullscreenSelfTest(): Promise<FullscreenTestResult> {
       onReplaceSelectedImage: () => {},
       onReplaceSelectedVector: () => {},
       onDeleteSelected: () => {},
+      onDeselect: () => {},
       onDownload: () => {},
       downloading: false,
       busy: false,
@@ -216,15 +229,43 @@ export async function runFullscreenSelfTest(): Promise<FullscreenTestResult> {
       }
     }
 
-    // Selecting text must change the toolbar.
+    /** Are the always-available document tools on screen? */
+    const addToolsPresent = () => {
+      const labels = Array.from(document.querySelectorAll("[data-pdf-toolbar] button"))
+        .map((b) => b.getAttribute("aria-label") ?? "")
+      return labels.some((l) => /add text/i.test(l)) && labels.some((l) => /add image/i.test(l))
+    }
+
     out.toolsWhenNothingSelected = document.querySelectorAll("[data-pdf-toolbar] button").length
+    out.addToolsPresentWhenNothingSelected = addToolsPresent()
+
     mount({ pageIndex: 0, kind: "text", index: 0 })
     await wait(300)
     out.toolsWhenTextSelected = document.querySelectorAll("[data-pdf-toolbar] button").length
+    out.addToolsPresentWhenTextSelected = addToolsPresent()
+    out.selectionToolsAppear = !!document.querySelector("[data-pdf-toolbar-selection]")
+    // Selecting must ADD, never replace: more buttons, not different ones.
     out.toolbarChangedWithSelection =
-      out.toolsWhenTextSelected !== out.toolsWhenNothingSelected
+      out.toolsWhenTextSelected > out.toolsWhenNothingSelected
+
+    mount({ pageIndex: 0, kind: "image", index: 0 })
+    await wait(300)
+    out.addToolsPresentWhenImageSelected = addToolsPresent()
+
+    if (!out.addToolsPresentWhenNothingSelected) {
+      out.errors.push("Add text / Add image are missing with nothing selected")
+    }
+    if (!out.addToolsPresentWhenTextSelected || !out.addToolsPresentWhenImageSelected) {
+      out.errors.push(
+        "Add text / Add image disappear once something is selected — after adding an "
+        + "image, which selects it, there would be no way to add another",
+      )
+    }
+    if (!out.selectionToolsAppear) {
+      out.errors.push("no selection tools appeared for a selected item")
+    }
     if (!out.toolbarChangedWithSelection) {
-      out.errors.push("the toolbar did not change when something was selected")
+      out.errors.push("selecting something added no tools at all")
     }
 
     // ── exactly one element per page ──

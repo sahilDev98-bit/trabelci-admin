@@ -47,7 +47,11 @@ const checks = {
   "the toolbar has zoom": result.hasZoomControl === true,
   "fit-width fills the width": result.pageFitsWidth === true,
   "fit-page shows the whole page": result.wholePageVisible === true,
-  "the toolbar changes with the selection": result.toolbarChangedWithSelection === true,
+  "selecting adds tools rather than replacing them": result.toolbarChangedWithSelection === true,
+  "Add text / Add image are there with nothing selected": result.addToolsPresentWhenNothingSelected === true,
+  "and they survive selecting text": result.addToolsPresentWhenTextSelected === true,
+  "and survive selecting an image": result.addToolsPresentWhenImageSelected === true,
+  "the selection gets its own tools alongside": result.selectionToolsAppear === true,
   "exactly one element per page": result.maxElementsPerPage === 1,
   "and that check really detects duplicates": result.maxElementsPerPageWithDuplicate > result.maxElementsPerPage,
 }
