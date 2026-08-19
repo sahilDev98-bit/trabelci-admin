@@ -22,10 +22,11 @@ import {
 import { groupIntoLines, effectiveFontSize, isRtlText } from "./grouping"
 import {
   listImageObjects, replaceImageBytes, removeImageObject, setImageRect,
-  moveImageObjectToPage, renderImageObject,
+  moveImageObjectToPage, renderImageObject, transformImageObject,
 } from "./image"
 import { listVectorGroups, removeVectorGroup } from "./vector"
 import { renderRegionWithout } from "./patch"
+import { applyTextStyle, readTextStyle, scaleTextSize, alignTextGroup } from "./textStyle"
 import { listPages, buildDocumentFromPlan } from "./pages"
 import { addTextOverlay, addImageOverlay } from "./overlay"
 import { loadFontMetrics, type FontMetrics } from "./layout"
@@ -185,6 +186,10 @@ const handlers: {
           fontName: line.anchor.fontBaseName,
           direction: isRtlText(line.text) ? "rtl" : "ltr",
           color: line.anchor.fill,
+          ...(() => {
+            const style = readTextStyle(pdfium, line.anchor)
+            return { bold: style.bold, italic: style.italic }
+          })(),
         }
       })
       return { lines }
@@ -410,6 +415,58 @@ const handlers: {
       const r = moveImageObjectToPage(pdfium, src, dst, target.handle, rect, target.bounds)
       if (!r.ok) throw new Error(r.error ?? "could not move the image to that page")
       return { ok: true, newIndex: imageIndexOfHandle(pdfium, dst, doc.scratch, target.handle) }
+    })
+  },
+
+  styleTextLine: ({ docId, pageIndex, lineIndex, style }, { pdfium }) => {
+    const doc = requireDoc(docId)
+    return withPage(pdfium, doc.handle, pageIndex, (page) => {
+      const objs = listTextObjects(pdfium, page, doc.scratch).filter((o) => o.text.trim() !== "")
+      const line = groupIntoLines(objs)[lineIndex]
+      if (!line) throw new Error(`No text line at index ${lineIndex} on page ${pageIndex}`)
+      const anchorHandle = line.anchor.handle
+      const r = applyTextStyle(pdfium, page, line.objects, style, doc.scratch)
+      if (!r.ok) throw new Error(r.error ?? "could not style the text")
+      return { ok: true, newIndex: textLineIndexOfHandle(pdfium, page, doc.scratch, anchorHandle) }
+    })
+  },
+
+  scaleTextLine: ({ docId, pageIndex, lineIndex, factor }, { pdfium }) => {
+    const doc = requireDoc(docId)
+    return withPage(pdfium, doc.handle, pageIndex, (page) => {
+      const objs = listTextObjects(pdfium, page, doc.scratch).filter((o) => o.text.trim() !== "")
+      const line = groupIntoLines(objs)[lineIndex]
+      if (!line) throw new Error(`No text line at index ${lineIndex} on page ${pageIndex}`)
+      const anchorHandle = line.anchor.handle
+      const r = scaleTextSize(pdfium, page, line.objects, line.anchor, factor, doc.scratch)
+      if (!r.ok) throw new Error(r.error ?? "could not resize the text")
+      return { ok: true, newIndex: textLineIndexOfHandle(pdfium, page, doc.scratch, anchorHandle) }
+    })
+  },
+
+  alignTextLine: ({ docId, pageIndex, lineIndex, alignment }, { pdfium }) => {
+    const doc = requireDoc(docId)
+    return withPage(pdfium, doc.handle, pageIndex, (page) => {
+      const objs = listTextObjects(pdfium, page, doc.scratch).filter((o) => o.text.trim() !== "")
+      const line = groupIntoLines(objs)[lineIndex]
+      if (!line) throw new Error(`No text line at index ${lineIndex} on page ${pageIndex}`)
+      const anchorHandle = line.anchor.handle
+      // The same margin new content is inset by, so an aligned line lines up
+      // with anything else placed on the page.
+      const r = alignTextGroup(pdfium, page, line.objects, alignment, 24, doc.scratch)
+      if (!r.ok) throw new Error(r.error ?? "could not align the text")
+      return { ok: true, newIndex: textLineIndexOfHandle(pdfium, page, doc.scratch, anchorHandle) }
+    })
+  },
+
+  transformImage: ({ docId, pageIndex, imageIndex, op }, { pdfium }) => {
+    const doc = requireDoc(docId)
+    return withPage(pdfium, doc.handle, pageIndex, (page) => {
+      const target = listImageObjects(pdfium, page, doc.scratch)[imageIndex]
+      if (!target) throw new Error(`No image at index ${imageIndex} on page ${pageIndex}`)
+      const r = transformImageObject(pdfium, page, target.handle, target.bounds, op)
+      if (!r.ok) throw new Error(r.error ?? "could not transform the image")
+      return { ok: true, newIndex: imageIndexOfHandle(pdfium, page, doc.scratch, target.handle) }
     })
   },
 

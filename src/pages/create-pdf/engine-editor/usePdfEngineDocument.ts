@@ -71,6 +71,18 @@ export interface UsePdfEngineDocumentResult {
   renderImagePreview: (pageIndex: number, imageIndex: number) => Promise<string | null>
   loadPageVectors: (pageIndex: number) => Promise<void>
   removeVector: (pageIndex: number, vectorIndex: number) => Promise<void>
+  styleText: (
+    pageIndex: number, lineIndex: number,
+    style: { bold: boolean; italic: boolean; color: { r: number; g: number; b: number } },
+  ) => Promise<number>
+  scaleText: (pageIndex: number, lineIndex: number, factor: number) => Promise<number>
+  alignText: (
+    pageIndex: number, lineIndex: number, alignment: "left" | "center" | "right",
+  ) => Promise<number>
+  transformImage: (
+    pageIndex: number, imageIndex: number,
+    op: "rotate-left" | "rotate-right" | "flip-horizontal" | "flip-vertical",
+  ) => Promise<number>
   replaceVector: (pageIndex: number, vectorIndex: number, file: File) => Promise<void>
   moveTextToPage: (
     sourcePageIndex: number, lineIndex: number,
@@ -328,6 +340,36 @@ export function usePdfEngineDocument(templateId: string | null | undefined): Use
     await mutate(pageIndex, (id) => getEngine().editTextLine(id, pageIndex, lineIndex, newText, options).then(() => undefined))
   }, [getEngine, mutate])
 
+  /** Bold / italic / colour, applied without rebuilding the text — so the
+   * document's own typeface survives. Resolves to the line's new index. */
+  const styleText = useCallback(async (
+    pageIndex: number, lineIndex: number,
+    style: { bold: boolean; italic: boolean; color: { r: number; g: number; b: number } },
+  ) => {
+    const r = await mutate(pageIndex, (id) => getEngine().styleTextLine(id, pageIndex, lineIndex, style))
+    return r?.newIndex ?? -1
+  }, [getEngine, mutate])
+
+  const scaleText = useCallback(async (pageIndex: number, lineIndex: number, factor: number) => {
+    const r = await mutate(pageIndex, (id) => getEngine().scaleTextLine(id, pageIndex, lineIndex, factor))
+    return r?.newIndex ?? -1
+  }, [getEngine, mutate])
+
+  const alignText = useCallback(async (
+    pageIndex: number, lineIndex: number, alignment: "left" | "center" | "right",
+  ) => {
+    const r = await mutate(pageIndex, (id) => getEngine().alignTextLine(id, pageIndex, lineIndex, alignment))
+    return r?.newIndex ?? -1
+  }, [getEngine, mutate])
+
+  const transformImage = useCallback(async (
+    pageIndex: number, imageIndex: number,
+    op: "rotate-left" | "rotate-right" | "flip-horizontal" | "flip-vertical",
+  ) => {
+    const r = await mutate(pageIndex, (id) => getEngine().transformImage(id, pageIndex, imageIndex, op))
+    return r?.newIndex ?? -1
+  }, [getEngine, mutate])
+
   const removeVector = useCallback(async (pageIndex: number, vectorIndex: number) => {
     await mutate(pageIndex, (id) => getEngine().removeVectorGroup(id, pageIndex, vectorIndex).then(() => undefined))
   }, [getEngine, mutate])
@@ -435,7 +477,7 @@ export function usePdfEngineDocument(templateId: string | null | undefined): Use
   return {
     phase, error, downloadPercent, pages, docId, pageText, pageImages,
     loadPageText, loadPageImages, loadPageVectors, pageVectors, renderCleanPatch, renderImagePreview,
-    removeVector, replaceVector, renderPage, editText, moveText, moveTextToPage, moveImageToPage, removeText,
+    removeVector, replaceVector, styleText, scaleText, alignText, transformImage, renderPage, editText, moveText, moveTextToPage, moveImageToPage, removeText,
     replaceImage, removeImage, setImageRect, addTextOverlay, addImageOverlay, applyPagePlan,
     save, busy, revision,
   }

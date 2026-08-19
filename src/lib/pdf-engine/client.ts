@@ -150,6 +150,33 @@ export class PdfEngineClient {
     return this.call("moveImageToPage", { docId, sourcePageIndex, imageIndex, targetPageIndex, rect })
   }
 
+  styleTextLine(
+    docId: string, pageIndex: number, lineIndex: number,
+    style: { bold: boolean; italic: boolean; color: { r: number; g: number; b: number } },
+  ): Promise<{ ok: boolean; newIndex: number }> {
+    return this.call("styleTextLine", { docId, pageIndex, lineIndex, style })
+  }
+
+  scaleTextLine(
+    docId: string, pageIndex: number, lineIndex: number, factor: number,
+  ): Promise<{ ok: boolean; newIndex: number }> {
+    return this.call("scaleTextLine", { docId, pageIndex, lineIndex, factor })
+  }
+
+  alignTextLine(
+    docId: string, pageIndex: number, lineIndex: number,
+    alignment: "left" | "center" | "right",
+  ): Promise<{ ok: boolean; newIndex: number }> {
+    return this.call("alignTextLine", { docId, pageIndex, lineIndex, alignment })
+  }
+
+  transformImage(
+    docId: string, pageIndex: number, imageIndex: number,
+    op: "rotate-left" | "rotate-right" | "flip-horizontal" | "flip-vertical",
+  ): Promise<{ ok: boolean; newIndex: number }> {
+    return this.call("transformImage", { docId, pageIndex, imageIndex, op })
+  }
+
   moveTextLine(
     docId: string, pageIndex: number, lineIndex: number, dx: number, dy: number,
   ): Promise<{ ok: boolean; newIndex: number }> {

@@ -1,7 +1,9 @@
 import {
-  ArrowUpDownIcon, CopyIcon, DownloadIcon, ImageIcon, ImagePlusIcon,
-  Loader2Icon, MinimizeIcon, MinusIcon, PlusIcon, ScanSearchIcon,
-  TextIcon, Trash2Icon, TypeIcon, XIcon,
+  AlignCenterIcon, AlignLeftIcon, AlignRightIcon, ArrowUpDownIcon,
+  BoldIcon, CopyIcon, DownloadIcon, FlipHorizontalIcon, FlipVerticalIcon,
+  ImageIcon, ImagePlusIcon, ItalicIcon, Loader2Icon, MinimizeIcon,
+  MinusIcon, PlusIcon, RotateCcwIcon, RotateCwIcon, ScanSearchIcon,
+  Trash2Icon, TypeIcon, TypeOutlineIcon, XIcon,
 } from "lucide-react"
 import { useTranslation } from "react-i18next"
 
@@ -57,6 +59,17 @@ interface PdfEditorToolbarProps {
   onReplaceSelectedImage: () => void
   onReplaceSelectedVector: () => void
   onDeleteSelected: () => void
+  /** How the selected line is currently drawn, so the buttons show as
+   * pressed rather than guessing. */
+  textStyle: { bold: boolean; italic: boolean; color: { r: number; g: number; b: number } } | null
+  onToggleBold: () => void
+  onToggleItalic: () => void
+  onTextColor: (color: { r: number; g: number; b: number }) => void
+  onScaleText: (factor: number) => void
+  onAlignText: (alignment: "left" | "center" | "right") => void
+  onTransformImage: (
+    op: "rotate-left" | "rotate-right" | "flip-horizontal" | "flip-vertical",
+  ) => void
   /** Clears the selection, so the selection tools fold away again. */
   onDeselect: () => void
   onExit: () => void
@@ -103,7 +116,9 @@ export function PdfEditorToolbar({
   zoomLevel, zoomLabel, onZoomIn, onZoomOut, onZoomLevel, onFitWidth, onFitPage,
   onZoomToSelection, selection, contentMode, onToggleContentMode,
   onAddText, onAddImage, onOpenOrganizer,
-  onEditSelectedText, onReplaceSelectedImage, onReplaceSelectedVector, onDeleteSelected,
+  onEditSelectedText, onReplaceSelectedImage, onReplaceSelectedVector,
+  textStyle, onToggleBold, onToggleItalic, onTextColor, onScaleText, onAlignText,
+  onTransformImage,
   onDeselect, onExit, onDownload, downloading, busy,
 }: PdfEditorToolbarProps) {
   const { t } = useTranslation()
@@ -179,8 +194,42 @@ export function PdfEditorToolbar({
           onClick={onToggleContentMode}
           active={contentMode === "text"}
         />
-        <ToolButton label={t("pdfTemplates.railAddText", "Add text")} icon={TextIcon} onClick={onAddText} />
-        <ToolButton label={t("pdfTemplates.railAddImage", "Add image")} icon={ImagePlusIcon} onClick={onAddImage} />
+        {/* The two ways to put something NEW on the page, kept together and
+            LABELLED rather than left as bare icons.
+
+            "Add text" used to be an icon alone — lucide's TextIcon, which
+            actually draws as text-align-start, so it was indistinguishable
+            from the Align left button a few controls away. Two different
+            actions must not look the same, and for the primary creation
+            tools a word is clearer than any glyph could be. */}
+        <div className="flex shrink-0 items-center gap-1 rounded-md border border-dashed px-1.5 py-0.5">
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            onClick={onAddText}
+            className="h-8 shrink-0 gap-1.5 px-2"
+            // The visible word is short so the toolbar stays compact; the
+            // full action stays on the accessible name and the tooltip.
+            aria-label={t("pdfTemplates.railAddText", "Add text")}
+            title={t("pdfTemplates.railAddText", "Add text")}
+          >
+            <TypeOutlineIcon className="size-4" />
+            <span className="text-xs">{t("pdfTemplates.engineAddTextShort", "Text")}</span>
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            onClick={onAddImage}
+            className="h-8 shrink-0 gap-1.5 px-2"
+            aria-label={t("pdfTemplates.railAddImage", "Add image")}
+            title={t("pdfTemplates.railAddImage", "Add image")}
+          >
+            <ImagePlusIcon className="size-4" />
+            <span className="text-xs">{t("pdfTemplates.engineAddImageShort", "Image")}</span>
+          </Button>
+        </div>
         <Divider />
         <ToolButton label={t("pdfTemplates.railCopyPage", "Duplicate pages")} icon={CopyIcon} onClick={() => onOpenOrganizer("copy")} />
         <ToolButton label={t("pdfTemplates.railMovePage", "Reorder pages")} icon={ArrowUpDownIcon} onClick={() => onOpenOrganizer("move")} />
@@ -200,18 +249,71 @@ export function PdfEditorToolbar({
                   <TypeIcon className="size-4" />
                   {t("pdfTemplates.masterEditTextTitle", "Edit text")}
                 </Button>
-                {/* Formatting lands here — bold, italic, underline, colour,
-                    size, alignment, font. An honest gap, not dead buttons. */}
-                <span className="px-1 text-xs italic text-muted-foreground">
-                  {t("pdfTemplates.engineFormattingSoon", "Formatting tools coming here")}
-                </span>
+                {/* Formatting. Applied to the text ALREADY in the document
+                    rather than redrawing it, so the page keeps its own
+                    typeface — see textStyle.ts. */}
+                <ToolButton
+                  label={t("pdfTemplates.engineBold", "Bold")}
+                  icon={BoldIcon}
+                  onClick={onToggleBold}
+                  active={textStyle?.bold}
+                />
+                <ToolButton
+                  label={t("pdfTemplates.engineItalic", "Italic")}
+                  icon={ItalicIcon}
+                  onClick={onToggleItalic}
+                  active={textStyle?.italic}
+                />
+                <ToolButton
+                  label={t("pdfTemplates.engineSmaller", "Smaller")}
+                  icon={MinusIcon}
+                  onClick={() => onScaleText(1 / 1.15)}
+                />
+                <ToolButton
+                  label={t("pdfTemplates.engineBigger", "Bigger")}
+                  icon={PlusIcon}
+                  onClick={() => onScaleText(1.15)}
+                />
+                <ToolButton label={t("pdfTemplates.engineAlignLeft", "Align left")} icon={AlignLeftIcon} onClick={() => onAlignText("left")} />
+                <ToolButton label={t("pdfTemplates.engineAlignCenter", "Centre")} icon={AlignCenterIcon} onClick={() => onAlignText("center")} />
+                <ToolButton label={t("pdfTemplates.engineAlignRight", "Align right")} icon={AlignRightIcon} onClick={() => onAlignText("right")} />
+                <label
+                  className="flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-md border"
+                  title={t("pdfTemplates.engineTextColor", "Text colour")}
+                >
+                  <input
+                    type="color"
+                    aria-label={t("pdfTemplates.engineTextColor", "Text colour")}
+                    className="size-5 cursor-pointer border-0 bg-transparent p-0"
+                    value={textStyle
+                      ? `#${[textStyle.color.r, textStyle.color.g, textStyle.color.b]
+                        .map((n) => n.toString(16).padStart(2, "0")).join("")}`
+                      : "#000000"}
+                    onChange={(e) => {
+                      const hex = e.target.value
+                      onTextColor({
+                        r: parseInt(hex.slice(1, 3), 16),
+                        g: parseInt(hex.slice(3, 5), 16),
+                        b: parseInt(hex.slice(5, 7), 16),
+                      })
+                    }}
+                  />
+                </label>
               </>
             )}
             {selection.kind === "image" && (
-              <Button type="button" size="sm" variant="secondary" className="h-8 shrink-0 gap-1.5" onClick={onReplaceSelectedImage}>
-                <ImageIcon className="size-4" />
-                {t("pdfTemplates.engineReplaceImage", "Replace image")}
-              </Button>
+              <>
+                <Button type="button" size="sm" variant="secondary" className="h-8 shrink-0 gap-1.5" onClick={onReplaceSelectedImage}>
+                  <ImageIcon className="size-4" />
+                  {t("pdfTemplates.engineReplaceImage", "Replace image")}
+                </Button>
+                {/* Turning and flipping are matrix changes, so the picture is
+                    never re-encoded and loses no quality. */}
+                <ToolButton label={t("pdfTemplates.engineRotateLeft", "Rotate left")} icon={RotateCcwIcon} onClick={() => onTransformImage("rotate-left")} />
+                <ToolButton label={t("pdfTemplates.engineRotateRight", "Rotate right")} icon={RotateCwIcon} onClick={() => onTransformImage("rotate-right")} />
+                <ToolButton label={t("pdfTemplates.engineFlipH", "Flip horizontally")} icon={FlipHorizontalIcon} onClick={() => onTransformImage("flip-horizontal")} />
+                <ToolButton label={t("pdfTemplates.engineFlipV", "Flip vertically")} icon={FlipVerticalIcon} onClick={() => onTransformImage("flip-vertical")} />
+              </>
             )}
             {selection.kind === "vector" && (
               <Button type="button" size="sm" variant="secondary" className="h-8 shrink-0 gap-1.5" onClick={onReplaceSelectedVector}>
@@ -219,7 +321,11 @@ export function PdfEditorToolbar({
                 {t("pdfTemplates.engineReplaceArtwork", "Replace with image")}
               </Button>
             )}
-            <ToolButton label={t("common.delete", "Delete")} icon={Trash2Icon} onClick={onDeleteSelected} danger />
+            {/* No delete here on purpose. A "Delete" sitting a few pixels
+                from "Delete pages" is a genuinely dangerous confusion — one
+                removes a caption, the other removes whole pages. Deleting a
+                selected item is the Delete key, which is where it is in
+                every other canvas editor. */}
             <ToolButton
               label={t("pdfTemplates.engineDeselect", "Deselect")}
               icon={XIcon}

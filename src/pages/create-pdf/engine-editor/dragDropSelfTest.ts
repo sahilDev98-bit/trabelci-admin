@@ -115,6 +115,8 @@ const FIXTURE_LINE = {
   fontName: "JosefinSans-Light",
   direction: "ltr" as const,
   color: { r: 0, g: 0, b: 0, a: 255 },
+  bold: false,
+  italic: false,
 }
 
 /** Stands in for "the image rendered on its own". A 1x1 png, distinct from

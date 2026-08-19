@@ -22,6 +22,10 @@ export interface EngineTextLine {
   matrix: PdfMatrix
   fontName: string
   direction: "ltr" | "rtl"
+  /** How it is currently drawn, so the toolbar can show the right buttons
+   * as pressed rather than assuming. */
+  bold: boolean
+  italic: boolean
   /** Fill colour, so a line moved to another page keeps its appearance. */
   color: { r: number; g: number; b: number; a: number }
 }
@@ -194,6 +198,36 @@ export interface EngineMethods {
       targetPageIndex: number; rect: { x: number; y: number; width: number; height: number }
     }
     /** newIndex: where the image ended up. -1 if it could not be located. */
+    result: { ok: boolean; newIndex: number }
+  }
+  /** Bold / italic / colour, applied to the text already in the document.
+   * Does NOT rebuild it, so the page's own typeface survives. */
+  styleTextLine: {
+    params: {
+      docId: string; pageIndex: number; lineIndex: number
+      style: { bold: boolean; italic: boolean; color: { r: number; g: number; b: number } }
+    }
+    result: { ok: boolean; newIndex: number }
+  }
+  /** Grow or shrink a line about its own start, keeping its typeface. */
+  scaleTextLine: {
+    params: { docId: string; pageIndex: number; lineIndex: number; factor: number }
+    result: { ok: boolean; newIndex: number }
+  }
+  /** Move a line to the left, centre or right of the page. */
+  alignTextLine: {
+    params: {
+      docId: string; pageIndex: number; lineIndex: number
+      alignment: "left" | "center" | "right"
+    }
+    result: { ok: boolean; newIndex: number }
+  }
+  /** Turn or flip an image in place — a matrix change, so no re-encoding. */
+  transformImage: {
+    params: {
+      docId: string; pageIndex: number; imageIndex: number
+      op: "rotate-left" | "rotate-right" | "flip-horizontal" | "flip-vertical"
+    }
     result: { ok: boolean; newIndex: number }
   }
   moveTextLine: {

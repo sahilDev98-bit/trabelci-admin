@@ -258,6 +258,45 @@ export function moveImageObjectToPage(
   return { ok: true }
 }
 
+/**
+ * Turn or flip an image where it stands.
+ *
+ * Applied to the matrix rather than to the pixels: a PDF image draws the
+ * unit square and its matrix decides how that square lands on the page, so
+ * rotating is a change of matrix and costs nothing — no re-encoding, no loss
+ * of quality, and the file does not grow.
+ *
+ * The rotation is about the image's own CENTRE, which is what "turn this
+ * photo" means to a person; rotating about the corner would send it sliding
+ * across the page.
+ */
+export function transformImageObject(
+  pdfium: WrappedPdfiumModule,
+  page: number,
+  imageObj: number,
+  bounds: { left: number; bottom: number; right: number; top: number } | null,
+  op: "rotate-left" | "rotate-right" | "flip-horizontal" | "flip-vertical",
+): { ok: boolean; error?: string } {
+  if (!bounds) return { ok: false, error: "image has no bounds to transform from" }
+  const cx = (bounds.left + bounds.right) / 2
+  const cy = (bounds.bottom + bounds.top) / 2
+
+  // Each operation as a matrix about the origin...
+  const m = op === "rotate-left" ? { a: 0, b: 1, c: -1, d: 0 }
+    : op === "rotate-right" ? { a: 0, b: -1, c: 1, d: 0 }
+      : op === "flip-horizontal" ? { a: -1, b: 0, c: 0, d: 1 }
+        : { a: 1, b: 0, c: 0, d: -1 }
+
+  // ...then moved so the centre stays put: translate to the origin, apply,
+  // translate back.
+  const e = cx - (m.a * cx + m.c * cy)
+  const f = cy - (m.b * cx + m.d * cy)
+
+  pdfium.FPDFPageObj_TransformClipPath(imageObj, m.a, m.b, m.c, m.d, e, f)
+  pdfium.FPDFPageObj_Transform(imageObj, m.a, m.b, m.c, m.d, e, f)
+  return { ok: pdfium.FPDFPage_GenerateContent(page) }
+}
+
 /** Delete an image from the page entirely, leaving whatever was drawn
  * beneath it visible — the equivalent of production's
  * _remove_image_content, but without needing to paint over anything. */

@@ -302,6 +302,50 @@ export function PdfEngineEditorPage() {
   const enterFullscreen = useCallback(() => setFullscreen(true), [])
   const exitFullscreen = useCallback(() => setFullscreen(false), [])
 
+  /** The selected line, when the selection is text. */
+  const selectedLine = selection?.kind === "text"
+    ? doc.pageText[selection.pageIndex]?.lines[selection.index]
+    : undefined
+
+  /**
+   * Styling runs through one place, because bold, italic and colour are one
+   * operation on the engine side — applying them separately would mean
+   * re-reading and re-writing the other two every time, and a stale read
+   * would silently un-bold a line the moment its colour changed.
+   */
+  const restyle = useCallback((
+    patch: Partial<{ bold: boolean; italic: boolean; color: { r: number; g: number; b: number } }>,
+  ) => {
+    if (selection?.kind !== "text") return
+    const line = doc.pageText[selection.pageIndex]?.lines[selection.index]
+    if (!line) return
+    const next = {
+      bold: patch.bold ?? line.bold,
+      italic: patch.italic ?? line.italic,
+      color: patch.color ?? { r: line.color.r, g: line.color.g, b: line.color.b },
+    }
+    const { pageIndex, index } = selection
+    void doc.styleText(pageIndex, index, next)
+      .then((newIndex) => {
+        if (newIndex >= 0) setSelection({ pageIndex, kind: "text", index: newIndex })
+      })
+      .catch((err: unknown) => toast.error(err instanceof Error ? err.message : String(err)))
+  }, [selection, doc])
+
+  /** Anything that keeps the selection on the same item after the engine
+   * renumbers it. */
+  const runOnSelection = useCallback((
+    kind: "text" | "image", run: (pageIndex: number, index: number) => Promise<number>,
+  ) => {
+    if (!selection || selection.kind !== kind) return
+    const { pageIndex, index } = selection
+    void run(pageIndex, index)
+      .then((newIndex) => {
+        if (newIndex >= 0) setSelection({ pageIndex, kind, index: newIndex })
+      })
+      .catch((err: unknown) => toast.error(err instanceof Error ? err.message : String(err)))
+  }, [selection])
+
   /** Everything already on a page, so a new item can be put somewhere free
    * rather than on top of the logo. */
   const occupiedBoxes = useCallback((pageIndex: number): Box[] => {
@@ -893,6 +937,24 @@ export function PdfEngineEditorPage() {
             },
             onDeleteSelected: deleteSelected,
             onDeselect: () => setSelection(null),
+            textStyle: selectedLine
+              ? {
+                bold: selectedLine.bold,
+                italic: selectedLine.italic,
+                color: {
+                  r: selectedLine.color.r, g: selectedLine.color.g, b: selectedLine.color.b,
+                },
+              }
+              : null,
+            onToggleBold: () => restyle({ bold: !(selectedLine?.bold ?? false) }),
+            onToggleItalic: () => restyle({ italic: !(selectedLine?.italic ?? false) }),
+            onTextColor: (color) => restyle({ color }),
+            onScaleText: (factor) =>
+              runOnSelection("text", (p, i) => doc.scaleText(p, i, factor)),
+            onAlignText: (alignment) =>
+              runOnSelection("text", (p, i) => doc.alignText(p, i, alignment)),
+            onTransformImage: (op) =>
+              runOnSelection("image", (p, i) => doc.transformImage(p, i, op)),
             onDownload: () => void handleDownload(),
             downloading,
             busy: doc.busy,
