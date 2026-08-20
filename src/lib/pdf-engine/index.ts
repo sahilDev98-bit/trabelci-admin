@@ -12,7 +12,7 @@
  *   const { bytes } = await engine.save(docId)
  *   engine.terminate()
  */
-export { PdfEngineClient, drawRenderedPage } from "./client"
+export { PdfEngineClient, drawRenderedPage, drawPagePatch } from "./client"
 export type {
   EnginePage, EngineTextLine, EngineImage, EngineVectorGroup, RenderedPage,
   EditTextOptions, TextOverlayRequest, ImageOverlayRequest, PagePlanRequest,

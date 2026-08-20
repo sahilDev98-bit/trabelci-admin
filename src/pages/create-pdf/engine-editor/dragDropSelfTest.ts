@@ -167,6 +167,8 @@ export async function runDragDropSelfTest(): Promise<DragDropTestResult> {
       contentMode: "text",
       revision: 0,
       renderPage: async () => null,
+      renderPageRegion: async () => null,
+      lastChange: null,
       loadPageText: async () => {},
       loadPageImages: async () => {},
       loadPageVectors: async () => {},
@@ -365,6 +367,8 @@ export async function runCrossPageDragSelfTest(): Promise<CrossPageTestResult> {
             revision: 0,
             // A known solid colour, so the drag preview can be checked by
             // sampling it rather than by trusting that an <img> appeared.
+            renderPageRegion: async () => null,
+            lastChange: null,
             renderPage: async (_p: number, scale: number) => {
               const w = Math.max(1, Math.round(600 * scale))
               const h = Math.max(1, Math.round(800 * scale))

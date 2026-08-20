@@ -89,7 +89,7 @@ export class PdfEngineClient {
 
   replaceImage(
     docId: string, pageIndex: number, imageIndex: number, bytes: ArrayBuffer, kind: "png" | "jpeg",
-  ): Promise<{ ok: boolean }> {
+  ): Promise<EngineMethods["replaceImage"]["result"]> {
     return this.call("replaceImage", { docId, pageIndex, imageIndex, bytes, kind }, [bytes])
   }
 
@@ -102,8 +102,15 @@ export class PdfEngineClient {
   setImageRect(
     docId: string, pageIndex: number, imageIndex: number,
     rect: { x: number; y: number; width: number; height: number },
-  ): Promise<{ ok: boolean; newIndex: number }> {
+  ): Promise<EngineMethods["setImageRect"]["result"]> {
     return this.call("setImageRect", { docId, pageIndex, imageIndex, rect })
+  }
+
+  renderPageRegion(
+    docId: string, pageIndex: number,
+    rect: { left: number; bottom: number; right: number; top: number }, scale: number,
+  ) {
+    return this.call("renderPageRegion", { docId, pageIndex, rect, scale })
   }
 
   renderImagePreview(docId: string, pageIndex: number, imageIndex: number) {
@@ -153,33 +160,33 @@ export class PdfEngineClient {
   styleTextLine(
     docId: string, pageIndex: number, lineIndex: number,
     style: { bold: boolean; italic: boolean; color: { r: number; g: number; b: number } },
-  ): Promise<{ ok: boolean; newIndex: number }> {
+  ): Promise<EngineMethods["styleTextLine"]["result"]> {
     return this.call("styleTextLine", { docId, pageIndex, lineIndex, style })
   }
 
   scaleTextLine(
     docId: string, pageIndex: number, lineIndex: number, factor: number,
-  ): Promise<{ ok: boolean; newIndex: number }> {
+  ): Promise<EngineMethods["scaleTextLine"]["result"]> {
     return this.call("scaleTextLine", { docId, pageIndex, lineIndex, factor })
   }
 
   alignTextLine(
     docId: string, pageIndex: number, lineIndex: number,
     alignment: "left" | "center" | "right",
-  ): Promise<{ ok: boolean; newIndex: number }> {
+  ): Promise<EngineMethods["alignTextLine"]["result"]> {
     return this.call("alignTextLine", { docId, pageIndex, lineIndex, alignment })
   }
 
   transformImage(
     docId: string, pageIndex: number, imageIndex: number,
     op: "rotate-left" | "rotate-right" | "flip-horizontal" | "flip-vertical",
-  ): Promise<{ ok: boolean; newIndex: number }> {
+  ): Promise<EngineMethods["transformImage"]["result"]> {
     return this.call("transformImage", { docId, pageIndex, imageIndex, op })
   }
 
   moveTextLine(
     docId: string, pageIndex: number, lineIndex: number, dx: number, dy: number,
-  ): Promise<{ ok: boolean; newIndex: number }> {
+  ): Promise<EngineMethods["moveTextLine"]["result"]> {
     return this.call("moveTextLine", { docId, pageIndex, lineIndex, dx, dy })
   }
 
@@ -209,6 +216,35 @@ export class PdfEngineClient {
     this.pending.clear()
     this.worker.terminate()
   }
+}
+
+/**
+ * Paints ONE rectangle of an already-painted page, leaving the rest of the
+ * canvas untouched.
+ *
+ * This is what makes an edit feel instant. A full page repaint at editing
+ * zoom costs 145-417ms; the edit itself costs about 7ms, so nearly all the
+ * lag the user saw after moving or resizing something was the page being
+ * redrawn in its entirety to show one changed caption.
+ *
+ * Deliberately does NOT resize the canvas — resizing clears it, which would
+ * wipe the page this patch is meant to touch up. A caller whose canvas is
+ * the wrong size must repaint in full instead.
+ */
+export function drawPagePatch(
+  canvas: HTMLCanvasElement,
+  patch: { width: number; height: number; rgba: ArrayBuffer; x: number; y: number },
+): boolean {
+  if (patch.width <= 0 || patch.height <= 0) return false
+  const ctx = canvas.getContext("2d")
+  if (!ctx) return false
+  const data = ctx.createImageData(patch.width, patch.height)
+  data.data.set(new Uint8ClampedArray(patch.rgba))
+  // putImageData ignores transforms and clipping and writes raw pixels, so
+  // the patched area is bit-for-bit what the engine produced — the same
+  // pixels a full repaint would have put there.
+  ctx.putImageData(data, patch.x, patch.y)
+  return true
 }
 
 /** Paints a rendered page into a canvas. Kept here so callers don't have

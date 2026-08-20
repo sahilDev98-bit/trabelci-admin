@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from "react"
 
-import { drawRenderedPage, type EnginePage, type EngineTextLine } from "@/lib/pdf-engine"
+import {
+  drawRenderedPage, drawPagePatch,
+  type EnginePage, type EngineTextLine, type PdfRect,
+} from "@/lib/pdf-engine"
 import type { PdfContentMode } from "../PdfEditorRail"
 import type { PageTextState, PageImageState, PageVectorState } from "./usePdfEngineDocument"
 import { PdfEngineImageSlot } from "./PdfEngineImageSlot"
@@ -31,6 +34,14 @@ interface PdfEnginePageProps {
   /** Changes whenever the document is edited, forcing a repaint. */
   revision: number
   renderPage: (pageIndex: number, scale: number) => Promise<{ width: number; height: number; rgba: ArrayBuffer } | null>
+  /** Pixels for one rectangle of the page, used to touch up the canvas
+   * after an edit instead of redrawing the whole thing. */
+  renderPageRegion: (
+    pageIndex: number, rect: PdfRect, scale: number,
+  ) => Promise<{ width: number; height: number; rgba: ArrayBuffer; x: number; y: number } | null>
+  /** The area the last edit touched, or null when the whole page has to be
+   * repainted (a cross-page move, or anything that did not report an area). */
+  lastChange: { pageIndex: number; rect: PdfRect; revision: number } | null
   loadPageText: (pageIndex: number) => Promise<void>
   loadPageImages: (pageIndex: number) => Promise<void>
   loadPageVectors: (pageIndex: number) => Promise<void>
@@ -93,6 +104,15 @@ interface PdfEnginePageProps {
  */
 const MAX_RENDER_WIDTH_PX = 3200
 
+/**
+ * Largest share of a page that is still worth repainting as a patch.
+ *
+ * Rendering a region costs roughly in proportion to its area, so patching
+ * most of a page saves little while adding a second code path to be wrong
+ * in. Past this, the page is simply repainted.
+ */
+const MAX_PATCH_COVERAGE = 0.4
+
 /** The first image file in a drag payload, or null if it carries none.
  * Checked before showing any drop affordance so dragging a text selection
  * or a link never lights the page up as if it were droppable. */
@@ -120,12 +140,22 @@ function dragCarriesFile(dt: DataTransfer | null): boolean {
  */
 export function PdfEnginePage({
   page, pageIndex, displayWidth, text, images, vectors, contentMode, revision,
-  renderPage, loadPageText, loadPageImages, loadPageVectors,
+  renderPage, renderPageRegion, lastChange, loadPageText, loadPageImages, loadPageVectors,
   onSelectLine, onReplaceImage, onReplaceVector,
   onDropOnImage, onDropOnPage, onTransformImage, onResizeText,
   selection, onSelect, onMoveStart, draggingSlot, dropTargetPage, originPatchUrl, imagePreviewUrl,
 }: PdfEnginePageProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  /**
+   * What is currently ON the canvas: which revision, at which raster scale.
+   *
+   * A patch is only valid as a touch-up of the picture immediately before
+   * it. If this page missed a revision (it was scrolled out of view), or the
+   * zoom changed since it was painted, the canvas is not the picture the
+   * patch assumes and the page must be repainted in full.
+   */
+  const paintedRef = useRef<{ revision: number; scale: number; width: number } | null>(null)
+  const lastChangeRef = useRef(lastChange)
   const containerRef = useRef<HTMLDivElement>(null)
   const [visible, setVisible] = useState(false)
   const [painting, setPainting] = useState(false)
@@ -155,15 +185,63 @@ export function PdfEnginePage({
     return () => observer.disconnect()
   }, [])
 
+  // Declared BEFORE the paint effect so it runs first on every commit: the
+  // paint effect reads this ref, and must see the change belonging to the
+  // revision it is about to paint, not the previous one.
+  useEffect(() => { lastChangeRef.current = lastChange })
+
   useEffect(() => {
     if (!visible || displayWidth <= 0) return
     let cancelled = false
+
+    /** True if `rect` is a small enough part of the page to be worth
+     * patching. A region render costs roughly in proportion to its area, so
+     * past this share there is little left to save and a full repaint is
+     * the simpler, always-correct path. */
+    const worthPatching = (rect: PdfRect) => {
+      const pageArea = page.widthPts * page.heightPts
+      if (pageArea <= 0) return false
+      const area = Math.max(0, rect.right - rect.left) * Math.max(0, rect.top - rect.bottom)
+      return area / pageArea <= MAX_PATCH_COVERAGE
+    }
+
+    /** Repaints only what changed. Returns false if that was not possible,
+     * in which case the caller falls back to repainting everything. */
+    const patch = async (cappedScale: number) => {
+      const change = lastChangeRef.current
+      const painted = paintedRef.current
+      const canvas = canvasRef.current
+      if (!change || !painted || !canvas) return false
+      // Every one of these must hold, or the patch would be applied to a
+      // picture it was not computed against.
+      if (change.pageIndex !== pageIndex) return false
+      if (change.revision !== revision) return false
+      if (painted.revision !== revision - 1) return false
+      if (painted.scale !== cappedScale) return false
+      if (canvas.width <= 0 || canvas.height <= 0) return false
+      if (!worthPatching(change.rect)) return false
+
+      const region = await renderPageRegion(pageIndex, change.rect, cappedScale)
+      if (cancelled || !region || !canvasRef.current) return false
+      // The canvas may have been resized between the request and the reply.
+      if (canvasRef.current !== canvas || canvas.width !== painted.width) return false
+      if (!drawPagePatch(canvas, region)) return false
+      paintedRef.current = { ...painted, revision }
+      return true
+    }
+
     const paint = async () => {
+      // Render above CSS size so the page stays sharp on high-DPI screens.
+      const dpr = Math.min(window.devicePixelRatio || 1, 2)
+      const cappedScale = Math.min(scale * dpr, MAX_RENDER_WIDTH_PX / page.widthPts)
+      // Tried first, and silently: a patch is fast enough that showing a
+      // "rendering" state for it would be a flash of overlay rather than
+      // useful feedback.
+      if (await patch(cappedScale)) return
+      if (cancelled) return
       setPainting(true)
       try {
-        // Render above CSS size so the page stays sharp on high-DPI screens.
-        const dpr = Math.min(window.devicePixelRatio || 1, 2)
-        // ...but never beyond MAX_RENDER_WIDTH_PX. Pages are laid out as
+        // The raster is never wider than MAX_RENDER_WIDTH_PX. Pages are laid out as
         // wide as the window allows, and on a large monitor "CSS width x
         // device pixel ratio" grows fast: a 2500px-wide page at 2x is a
         // 5000x7000 bitmap, ~140MB of RGBA for ONE page, several of which
@@ -171,17 +249,20 @@ export function PdfEnginePage({
         // the layout keeps the paper full width and bounds the memory; the
         // cap only bites on displays wider than roughly 1200 CSS px of
         // page, and costs sharpness there rather than correctness.
-        const cappedScale = Math.min(scale * dpr, MAX_RENDER_WIDTH_PX / page.widthPts)
         const result = await renderPage(pageIndex, cappedScale)
         if (cancelled || !result || !canvasRef.current) return
         drawRenderedPage(canvasRef.current, result)
+        paintedRef.current = { revision, scale: cappedScale, width: result.width }
       } finally {
         if (!cancelled) setPainting(false)
       }
     }
     void paint()
     return () => { cancelled = true }
-  }, [visible, pageIndex, scale, displayWidth, page.widthPts, revision, renderPage])
+  }, [
+    visible, pageIndex, scale, displayWidth, page.widthPts, page.heightPts,
+    revision, renderPage, renderPageRegion,
+  ])
 
   useEffect(() => {
     if (!visible || text?.loaded) return

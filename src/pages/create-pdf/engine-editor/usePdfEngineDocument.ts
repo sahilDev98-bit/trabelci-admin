@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 
 import {
   PdfEngineClient,
@@ -6,6 +6,7 @@ import {
   type EngineTextLine,
   type EngineImage,
   type EngineVectorGroup,
+  type PdfRect,
   type EditTextOptions,
   type TextOverlayRequest,
   type ImageOverlayRequest,
@@ -69,6 +70,13 @@ export interface UsePdfEngineDocumentResult {
     pageIndex: number, kind: "text" | "image", index: number, scale: number,
   ) => Promise<string | null>
   renderImagePreview: (pageIndex: number, imageIndex: number) => Promise<string | null>
+  /** Raw pixels for one rectangle of a page, for patching a canvas. */
+  renderPageRegion: (
+    pageIndex: number, rect: PdfRect, scale: number,
+  ) => Promise<{ width: number; height: number; rgba: ArrayBuffer; x: number; y: number } | null>
+  /** The area the last edit touched, or null if the whole page must be
+   * repainted. */
+  lastChange: { pageIndex: number; rect: PdfRect; revision: number } | null
   loadPageVectors: (pageIndex: number) => Promise<void>
   removeVector: (pageIndex: number, vectorIndex: number) => Promise<void>
   styleText: (
@@ -154,6 +162,17 @@ export function usePdfEngineDocument(templateId: string | null | undefined): Use
   const [pageText, setPageText] = useState<Record<number, PageTextState>>({})
   const [pageImages, setPageImages] = useState<Record<number, PageImageState>>({})
   const [pageVectors, setPageVectors] = useState<Record<number, PageVectorState>>({})
+  /**
+   * The area the last edit touched, if it reported one.
+   *
+   * Carried so a page can repaint just that rectangle rather than the whole
+   * page. Repainting a page at editing zoom costs 145-417ms against about
+   * 7ms for the edit itself, which is the entire reason the editor felt
+   * slow after every action.
+   */
+  const [lastChange, setLastChange] = useState<
+    { pageIndex: number; rect: PdfRect; revision: number } | null
+  >(null)
   const [busy, setBusy] = useState(false)
   const [revision, setRevision] = useState(0)
 
@@ -281,6 +300,14 @@ export function usePdfEngineDocument(templateId: string | null | undefined): Use
     return canvas.toDataURL("image/png")
   }, [getEngine])
 
+  const renderPageRegion = useCallback(async (
+    pageIndex: number, rect: PdfRect, scale: number,
+  ) => {
+    const id = docIdRef.current
+    if (!id) return null
+    return getEngine().renderPageRegion(id, pageIndex, rect, scale)
+  }, [getEngine])
+
   const renderPage = useCallback(async (pageIndex: number, scale: number) => {
     const id = docIdRef.current
     if (!id) return null
@@ -327,7 +354,18 @@ export function usePdfEngineDocument(templateId: string | null | undefined): Use
         for (const r of refreshed) next[r.pageIndex] = { groups: r.groups, loaded: true }
         return next
       })
-      setRevision((r) => r + 1)
+      // A change that reported the area it touched, and touched only ONE
+      // page, can be patched instead of fully repainted. Anything else
+      // (a cross-page move, an operation with no reported area) falls back
+      // to a full repaint, which is always correct if slower.
+      const changed = (result as { changedRect?: PdfRect } | undefined)?.changedRect
+      setRevision((r) => {
+        const next = r + 1
+        setLastChange(changed && pages.length === 1
+          ? { pageIndex: pages[0], rect: changed, revision: next }
+          : null)
+        return next
+      })
       return result
     } finally {
       setBusy(false)
@@ -474,11 +512,31 @@ export function usePdfEngineDocument(templateId: string | null | undefined): Use
     }
   }, [getEngine])
 
-  return {
+  // Memoised deliberately, and it matters more than it looks.
+  //
+  // The editor holds this whole object and passes it to effects. Returned
+  // as a fresh literal, its identity changed on EVERY render — including
+  // the one React does for each pointermove of a drag — so effects keyed on
+  // it re-ran continuously. Two of them ask the engine to re-render the
+  // dragged object and the hole it left, about 35ms each, which piled work
+  // into the worker faster than it could clear it: the drag stuttered and
+  // the drop had to wait behind the backlog. Stable identity means those
+  // effects run when the document actually changes, and not while a finger
+  // is moving.
+  return useMemo(() => ({
     phase, error, downloadPercent, pages, docId, pageText, pageImages,
-    loadPageText, loadPageImages, loadPageVectors, pageVectors, renderCleanPatch, renderImagePreview,
+    loadPageText, loadPageImages, loadPageVectors, pageVectors,
+    renderCleanPatch, renderImagePreview, renderPageRegion, lastChange,
     removeVector, replaceVector, styleText, scaleText, alignText, transformImage, renderPage, editText, moveText, moveTextToPage, moveImageToPage, removeText,
     replaceImage, removeImage, setImageRect, addTextOverlay, addImageOverlay, applyPagePlan,
     save, busy, revision,
-  }
+  }), [
+    phase, error, downloadPercent, pages, docId, pageText, pageImages,
+    loadPageText, loadPageImages, loadPageVectors, pageVectors,
+    renderCleanPatch, renderImagePreview, renderPageRegion, lastChange,
+    removeVector, replaceVector, styleText, scaleText, alignText, transformImage,
+    renderPage, editText, moveText, moveTextToPage, moveImageToPage, removeText,
+    replaceImage, removeImage, setImageRect, addTextOverlay, addImageOverlay,
+    applyPagePlan, save, busy, revision,
+  ])
 }

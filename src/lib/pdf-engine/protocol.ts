@@ -142,6 +142,12 @@ export interface EngineMethods {
    * ON TOP of the image, so dragging a photo with a caption over it
    * previewed the caption moving too when only the photo would.
    */
+  /** One rectangle of the page, so a change can repaint just the area it
+   * touched instead of the whole page. */
+  renderPageRegion: {
+    params: { docId: string; pageIndex: number; rect: PdfRect; scale: number }
+    result: { width: number; height: number; rgba: ArrayBuffer; x: number; y: number }
+  }
   renderImagePreview: {
     params: { docId: string; pageIndex: number; imageIndex: number }
     result: { width: number; height: number; rgba: ArrayBuffer }
@@ -166,7 +172,7 @@ export interface EngineMethods {
   }
   replaceImage: {
     params: { docId: string; pageIndex: number; imageIndex: number; bytes: ArrayBuffer; kind: "png" | "jpeg" }
-    result: { ok: boolean }
+    result: { ok: boolean; method?: string; changedRect?: PdfRect }
   }
   removeImage: { params: { docId: string; pageIndex: number; imageIndex: number }; result: { ok: boolean } }
   /** Move/resize an image. Valid for ANY image: a clipped photo's frame is
@@ -176,7 +182,7 @@ export interface EngineMethods {
       docId: string; pageIndex: number; imageIndex: number
       rect: { x: number; y: number; width: number; height: number }
     }
-    result: { ok: boolean; newIndex: number }
+    result: { ok: boolean; newIndex: number; changedRect?: PdfRect }
   }
   removeTextLine: { params: { docId: string; pageIndex: number; lineIndex: number }; result: { ok: boolean } }
   /** Shift a grouped text line. dy is in PDF space, so positive is UP. */
@@ -207,12 +213,12 @@ export interface EngineMethods {
       docId: string; pageIndex: number; lineIndex: number
       style: { bold: boolean; italic: boolean; color: { r: number; g: number; b: number } }
     }
-    result: { ok: boolean; newIndex: number }
+    result: { ok: boolean; newIndex: number; changedRect?: PdfRect }
   }
   /** Grow or shrink a line about its own start, keeping its typeface. */
   scaleTextLine: {
     params: { docId: string; pageIndex: number; lineIndex: number; factor: number }
-    result: { ok: boolean; newIndex: number }
+    result: { ok: boolean; newIndex: number; changedRect?: PdfRect }
   }
   /** Move a line to the left, centre or right of the page. */
   alignTextLine: {
@@ -220,7 +226,7 @@ export interface EngineMethods {
       docId: string; pageIndex: number; lineIndex: number
       alignment: "left" | "center" | "right"
     }
-    result: { ok: boolean; newIndex: number }
+    result: { ok: boolean; newIndex: number; changedRect?: PdfRect }
   }
   /** Turn or flip an image in place — a matrix change, so no re-encoding. */
   transformImage: {
@@ -228,13 +234,15 @@ export interface EngineMethods {
       docId: string; pageIndex: number; imageIndex: number
       op: "rotate-left" | "rotate-right" | "flip-horizontal" | "flip-vertical"
     }
-    result: { ok: boolean; newIndex: number }
+    result: { ok: boolean; newIndex: number; changedRect?: PdfRect }
   }
   moveTextLine: {
     params: { docId: string; pageIndex: number; lineIndex: number; dx: number; dy: number }
     /** newIndex: where the line ended up. Lines are numbered by POSITION, so
-     * moving one renumbers it — see the worker for why this is reported. */
-    result: { ok: boolean; newIndex: number }
+     * moving one renumbers it — see the worker for why this is reported.
+     * changedRect: the area the edit touched, so the editor can repaint just
+     * that instead of the whole page. */
+    result: { ok: boolean; newIndex: number; changedRect?: PdfRect }
   }
   addTextOverlay: { params: { docId: string; pageIndex: number; overlay: TextOverlayRequest }; result: { ok: boolean } }
   /** newIndex: where the added image ended up, so the caller can select it

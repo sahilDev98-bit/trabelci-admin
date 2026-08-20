@@ -71,6 +71,8 @@ function fakeDoc(): UsePdfEngineDocumentResult {
     pageVectors: { 0: { loaded: true, groups: [] }, 1: { loaded: true, groups: [] } },
     loadPageText: noop, loadPageImages: noop, loadPageVectors: noop,
     renderPage: async () => null,
+    renderPageRegion: async () => null,
+    lastChange: null,
     renderCleanPatch: async () => null,
     renderImagePreview: async () => null,
     editText: noop, moveText: async () => -1, moveTextToPage: async () => -1,

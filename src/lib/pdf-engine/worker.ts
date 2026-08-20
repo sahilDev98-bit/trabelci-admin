@@ -13,7 +13,7 @@
  * pointer — it holds a docId string — so there is no way for it to use a
  * handle after the document behind it has been closed.
  */
-import { Scratch, type WrappedPdfiumModule } from "./core"
+import { Scratch, type PdfRect, type WrappedPdfiumModule } from "./core"
 import { getPdfium, getFallbackFont, type FallbackFontKey } from "./loader"
 import {
   openDocument, listTextObjects, rebuildGroupWithWrappedText, renderPageToRGBA,
@@ -25,7 +25,7 @@ import {
   moveImageObjectToPage, renderImageObject, transformImageObject,
 } from "./image"
 import { listVectorGroups, removeVectorGroup } from "./vector"
-import { renderRegionWithout } from "./patch"
+import { renderRegion, renderRegionWithout } from "./patch"
 import { applyTextStyle, readTextStyle, scaleTextSize, alignTextGroup } from "./textStyle"
 import { listPages, buildDocumentFromPlan } from "./pages"
 import { addTextOverlay, addImageOverlay } from "./overlay"
@@ -127,6 +127,66 @@ function imageIndexOfHandle(
   pdfium: WrappedPdfiumModule, page: number, scratch: Scratch, handle: number,
 ): number {
   return listImageObjects(pdfium, page, scratch).findIndex((im) => im.handle === handle)
+}
+
+/**
+ * The area of the page an edit actually touched.
+ *
+ * Reported from the worker because only it holds the object before AND after
+ * the change — the union of where it was and where it now is. The editor
+ * uses it to repaint just that rectangle instead of the whole page, which is
+ * the difference between roughly 20ms and 400ms per action.
+ *
+ * Padded slightly: a synthetic bold strokes OUTSIDE the glyph outline, and
+ * anti-aliasing bleeds a pixel or two past any bounding box, so repainting
+ * the exact box can leave a faint edge of the old drawing behind.
+ */
+const CHANGED_RECT_PAD_PTS = 3
+
+function unionRect(
+  a: PdfRect | null | undefined, b: PdfRect | null | undefined,
+): PdfRect | undefined {
+  if (!a) return b ?? undefined
+  if (!b) return a ?? undefined
+  return {
+    left: Math.min(a.left, b.left),
+    bottom: Math.min(a.bottom, b.bottom),
+    right: Math.max(a.right, b.right),
+    top: Math.max(a.top, b.top),
+  }
+}
+
+function padRect(r: PdfRect | undefined): PdfRect | undefined {
+  if (!r) return undefined
+  return {
+    left: r.left - CHANGED_RECT_PAD_PTS,
+    bottom: r.bottom - CHANGED_RECT_PAD_PTS,
+    right: r.right + CHANGED_RECT_PAD_PTS,
+    top: r.top + CHANGED_RECT_PAD_PTS,
+  }
+}
+
+/** The bounding box of one grouped text line, by index. */
+function textLineRect(
+  pdfium: WrappedPdfiumModule, page: number, scratch: Scratch, index: number,
+): PdfRect | undefined {
+  const objs = listTextObjects(pdfium, page, scratch).filter((o) => o.text.trim() !== "")
+  const line = groupIntoLines(objs)[index]
+  if (!line) return undefined
+  const bounds = line.objects.map((o) => o.bounds).filter((b): b is NonNullable<typeof b> => b !== null)
+  if (bounds.length === 0) return undefined
+  return {
+    left: Math.min(...bounds.map((b) => b.left)),
+    bottom: Math.min(...bounds.map((b) => b.bottom)),
+    right: Math.max(...bounds.map((b) => b.right)),
+    top: Math.max(...bounds.map((b) => b.top)),
+  }
+}
+
+function imageRect(
+  pdfium: WrappedPdfiumModule, page: number, scratch: Scratch, index: number,
+): PdfRect | undefined {
+  return listImageObjects(pdfium, page, scratch)[index]?.bounds ?? undefined
 }
 
 const handlers: {
@@ -271,9 +331,24 @@ const handlers: {
       if (!target) throw new Error(`No image at index ${imageIndex} on page ${pageIndex}`)
       // The current matrix goes with it so a clipped photo's frame is
       // carried along instead of being left behind.
+      const beforeRect = target.bounds ?? undefined
       const r = setImageRect(pdfium, page, target.handle, rect, target.bounds)
       if (!r.ok) throw new Error(r.error ?? "could not move the image")
-      return { ok: true, newIndex: imageIndexOfHandle(pdfium, page, doc.scratch, target.handle) }
+      const newIndex = imageIndexOfHandle(pdfium, page, doc.scratch, target.handle)
+      return {
+        ok: true, newIndex,
+        changedRect: padRect(unionRect(beforeRect, imageRect(pdfium, page, doc.scratch, newIndex))),
+      }
+    })
+  },
+
+  renderPageRegion: ({ docId, pageIndex, rect, scale }, { pdfium, transfer }) => {
+    const doc = requireDoc(docId)
+    return withPage(pdfium, doc.handle, pageIndex, (page) => {
+      const patch = renderRegion(pdfium, page, rect, scale, doc.scratch)
+      const out = new Uint8ClampedArray(patch.rgba).buffer
+      transfer.push(out)
+      return { width: patch.width, height: patch.height, rgba: out, x: patch.x, y: patch.y }
     })
   },
 
@@ -425,9 +500,14 @@ const handlers: {
       const line = groupIntoLines(objs)[lineIndex]
       if (!line) throw new Error(`No text line at index ${lineIndex} on page ${pageIndex}`)
       const anchorHandle = line.anchor.handle
+      const beforeRect = textLineRect(pdfium, page, doc.scratch, lineIndex)
       const r = applyTextStyle(pdfium, page, line.objects, style, doc.scratch)
       if (!r.ok) throw new Error(r.error ?? "could not style the text")
-      return { ok: true, newIndex: textLineIndexOfHandle(pdfium, page, doc.scratch, anchorHandle) }
+      const newIndex = textLineIndexOfHandle(pdfium, page, doc.scratch, anchorHandle)
+      return {
+        ok: true, newIndex,
+        changedRect: padRect(unionRect(beforeRect, textLineRect(pdfium, page, doc.scratch, newIndex))),
+      }
     })
   },
 
@@ -438,9 +518,14 @@ const handlers: {
       const line = groupIntoLines(objs)[lineIndex]
       if (!line) throw new Error(`No text line at index ${lineIndex} on page ${pageIndex}`)
       const anchorHandle = line.anchor.handle
+      const beforeRect = textLineRect(pdfium, page, doc.scratch, lineIndex)
       const r = scaleTextSize(pdfium, page, line.objects, line.anchor, factor, doc.scratch)
       if (!r.ok) throw new Error(r.error ?? "could not resize the text")
-      return { ok: true, newIndex: textLineIndexOfHandle(pdfium, page, doc.scratch, anchorHandle) }
+      const newIndex = textLineIndexOfHandle(pdfium, page, doc.scratch, anchorHandle)
+      return {
+        ok: true, newIndex,
+        changedRect: padRect(unionRect(beforeRect, textLineRect(pdfium, page, doc.scratch, newIndex))),
+      }
     })
   },
 
@@ -451,11 +536,16 @@ const handlers: {
       const line = groupIntoLines(objs)[lineIndex]
       if (!line) throw new Error(`No text line at index ${lineIndex} on page ${pageIndex}`)
       const anchorHandle = line.anchor.handle
+      const beforeRect = textLineRect(pdfium, page, doc.scratch, lineIndex)
       // The same margin new content is inset by, so an aligned line lines up
       // with anything else placed on the page.
       const r = alignTextGroup(pdfium, page, line.objects, alignment, 24, doc.scratch)
       if (!r.ok) throw new Error(r.error ?? "could not align the text")
-      return { ok: true, newIndex: textLineIndexOfHandle(pdfium, page, doc.scratch, anchorHandle) }
+      const newIndex = textLineIndexOfHandle(pdfium, page, doc.scratch, anchorHandle)
+      return {
+        ok: true, newIndex,
+        changedRect: padRect(unionRect(beforeRect, textLineRect(pdfium, page, doc.scratch, newIndex))),
+      }
     })
   },
 
@@ -464,9 +554,14 @@ const handlers: {
     return withPage(pdfium, doc.handle, pageIndex, (page) => {
       const target = listImageObjects(pdfium, page, doc.scratch)[imageIndex]
       if (!target) throw new Error(`No image at index ${imageIndex} on page ${pageIndex}`)
+      const beforeRect = target.bounds ?? undefined
       const r = transformImageObject(pdfium, page, target.handle, target.bounds, op)
       if (!r.ok) throw new Error(r.error ?? "could not transform the image")
-      return { ok: true, newIndex: imageIndexOfHandle(pdfium, page, doc.scratch, target.handle) }
+      const newIndex = imageIndexOfHandle(pdfium, page, doc.scratch, target.handle)
+      return {
+        ok: true, newIndex,
+        changedRect: padRect(unionRect(beforeRect, imageRect(pdfium, page, doc.scratch, newIndex))),
+      }
     })
   },
 
@@ -477,9 +572,14 @@ const handlers: {
       const line = groupIntoLines(objs)[lineIndex]
       if (!line) throw new Error(`No text line at index ${lineIndex} on page ${pageIndex}`)
       const anchorHandle = line.anchor.handle
+      const beforeRect = textLineRect(pdfium, page, doc.scratch, lineIndex)
       const r = translateTextGroup(pdfium, page, line.objects, dx, dy, doc.scratch)
       if (!r.ok) throw new Error(r.error ?? "could not move the text")
-      return { ok: true, newIndex: textLineIndexOfHandle(pdfium, page, doc.scratch, anchorHandle) }
+      const newIndex = textLineIndexOfHandle(pdfium, page, doc.scratch, anchorHandle)
+      return {
+        ok: true, newIndex,
+        changedRect: padRect(unionRect(beforeRect, textLineRect(pdfium, page, doc.scratch, newIndex))),
+      }
     })
   },
 

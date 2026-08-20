@@ -129,6 +129,8 @@ export async function runPageWidthSelfTest(): Promise<PageWidthTestResult> {
         contentMode: "text" as const,
         revision: 0,
         renderPage: async () => null,
+        renderPageRegion: async () => null,
+        lastChange: null,
         loadPageText: async () => {},
         loadPageImages: async () => {},
         loadPageVectors: async () => {},

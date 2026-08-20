@@ -76,6 +76,8 @@ export function PdfEnginePageColumn({
             contentMode={contentMode}
             revision={doc.revision}
             renderPage={doc.renderPage}
+            renderPageRegion={doc.renderPageRegion}
+            lastChange={doc.lastChange}
             loadPageText={doc.loadPageText}
             loadPageImages={doc.loadPageImages}
             loadPageVectors={doc.loadPageVectors}
