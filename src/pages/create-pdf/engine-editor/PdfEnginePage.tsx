@@ -205,6 +205,28 @@ export function PdfEnginePage({
       return area / pageArea <= MAX_PATCH_COVERAGE
     }
 
+    /**
+     * True if this page is ALREADY right and needs no drawing at all.
+     *
+     * Every page the reader has scrolled past stays mounted, and an edit
+     * bumps a revision the whole document shares — so without this, moving
+     * one caption on page 2 redrew all fourteen pages at roughly 145ms
+     * each. Thirteen of those redraw content that did not change.
+     *
+     * Safe only when the engine named the page it touched and this is not
+     * it, this page is already painted at the size being asked for, and it
+     * did not miss the revision in between.
+     */
+    const alreadyCurrent = (cappedScale: number) => {
+      const change = lastChangeRef.current
+      const painted = paintedRef.current
+      if (!change || !painted) return false
+      if (change.revision !== revision) return false
+      if (change.pageIndex === pageIndex) return false
+      if (painted.revision !== revision - 1) return false
+      return painted.scale === cappedScale
+    }
+
     /** Repaints only what changed. Returns false if that was not possible,
      * in which case the caller falls back to repainting everything. */
     const patch = async (cappedScale: number) => {
@@ -234,6 +256,12 @@ export function PdfEnginePage({
       // Render above CSS size so the page stays sharp on high-DPI screens.
       const dpr = Math.min(window.devicePixelRatio || 1, 2)
       const cappedScale = Math.min(scale * dpr, MAX_RENDER_WIDTH_PX / page.widthPts)
+      // Nothing happened on this page: keep the picture, and record that it
+      // is current so the next edit can reason from it too.
+      if (alreadyCurrent(cappedScale)) {
+        paintedRef.current = { ...paintedRef.current!, revision }
+        return
+      }
       // Tried first, and silently: a patch is fast enough that showing a
       // "rendering" state for it would be a flash of overlay rather than
       // useful feedback.

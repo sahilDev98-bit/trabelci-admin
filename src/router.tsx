@@ -357,6 +357,16 @@ const pdfEngineEditorRoute = createRoute({
   component: PdfEngineEditorPage,
 })
 
+// Same component as pdfEngineEditorRoute: PdfEngineEditorPage reads its
+// mode from the URL (see fullscreenRoute.ts), not from a prop, so a real
+// navigation between the two routes is what takes the editor in and out of
+// full screen, in place of the overlay toggle it used to be.
+const pdfEngineEditorFullscreenRoute = createRoute({
+  getParentRoute: () => appLayoutRoute,
+  path: "/create-pdf/customize-v2/$templateId/fullscreen",
+  component: PdfEngineEditorPage,
+})
+
 const aiImagesRoute = createRoute({
   getParentRoute: () => appLayoutRoute,
   path: "/ai-images",
@@ -402,6 +412,7 @@ const routeTree = rootRoute.addChildren([
     pdfTemplateEditRoute,
     pdfCustomizerRoute,
     pdfEngineEditorRoute,
+    pdfEngineEditorFullscreenRoute,
     aiImagesRoute,
     extractProductPdfRoute,
   ]),

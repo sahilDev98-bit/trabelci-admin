@@ -45,6 +45,21 @@ interface PdfEnginePageColumnProps {
   onResizeText: (pageIndex: number, lineIndex: number, fontSize: number, maxWidth: number) => void
 }
 
+/**
+ * Space between pages, as a fraction of the page's width.
+ *
+ * Proportional rather than a fixed 24px because zooming with the wheel
+ * previews itself with a CSS transform, which scales EVERYTHING including
+ * the gaps, and then commits a real width, under which a fixed gap would
+ * snap back to 24px. Across fourteen pages that difference is a couple of
+ * hundred pixels of column height, which the reader sees as the document
+ * lurching the moment they stop scrolling. A proportional gap scales the
+ * same way in both, so the preview and the committed layout agree exactly.
+ *
+ * 0.03 keeps a normally-sized page at roughly the 24px it used to have.
+ */
+const PAGE_GAP_RATIO = 0.03
+
 export function PdfEnginePageColumn({
   doc, displayWidth, gutter, columnRef, contentMode, selection, onSelect,
   drag, onMoveStart, originPatch, imagePreview,
@@ -54,11 +69,11 @@ export function PdfEnginePageColumn({
   return (
     <div
       ref={columnRef}
-      className="flex flex-col items-center gap-6"
+      className="flex flex-col items-center"
       // Applied as padding rather than subtracted from the page width alone:
       // this column centres its pages, so a subtracted gutter gets split in
       // half and only half lands on the side the rail is on.
-      style={{ paddingInlineEnd: gutter }}
+      style={{ paddingInlineEnd: gutter, gap: displayWidth * PAGE_GAP_RATIO }}
     >
       {/* data-engine-page-index lives on the page SURFACE inside
           PdfEnginePage, not on these wrappers: a drop is converted using the

@@ -45,6 +45,9 @@ export interface FullscreenTestResult {
   /** And the selection's own tools appear alongside, not instead. */
   selectionToolsAppear: boolean
   hasZoomControl: boolean
+  /** The dropdown and the +/- buttons were asked to be taken out of the
+   * toolbar, zoom now living on the wheel and the floating bar. */
+  toolbarHasNoZoomSelect: boolean
   /** Highest number of elements claiming to be the SAME page. Must be 1:
    * every drag resolves "where is page N?" through the DOM and takes the
    * first answer, so a second hidden copy silently hijacks the gesture. */
@@ -92,6 +95,7 @@ export async function runFullscreenSelfTest(): Promise<FullscreenTestResult> {
     pageWidthFitPage: 0, wholePageVisible: false,
     toolsWhenNothingSelected: 0, toolsWhenTextSelected: 0,
     toolbarChangedWithSelection: false, hasZoomControl: false,
+    toolbarHasNoZoomSelect: false,
     addToolsPresentWhenNothingSelected: false,
     addToolsPresentWhenTextSelected: false,
     addToolsPresentWhenImageSelected: false,
@@ -218,8 +222,18 @@ export async function runFullscreenSelfTest(): Promise<FullscreenTestResult> {
     const toolbarEl = document.querySelector<HTMLElement>("[data-pdf-toolbar]")
     out.hasToolbar = !!toolbarEl
     if (!toolbarEl) out.errors.push("no toolbar in full screen")
-    out.hasZoomControl = !!document.querySelector("[data-pdf-toolbar] select")
-    if (!out.hasZoomControl) out.errors.push("no zoom control in the toolbar")
+    // Zoom is deliberately NOT in the toolbar. Ctrl with the wheel does it,
+    // pinned to the pointer, and the bar floating over the page carries the
+    // buttons — a third copy up here only lengthened the row. What must
+    // hold is that zoom is still reachable SOMEWHERE, so this checks the
+    // floating bar rather than simply dropping the check.
+    out.hasZoomControl = !!document.querySelector(
+      '[data-pdf-viewport-bar] button[aria-label*="Zoom" i]')
+    if (!out.hasZoomControl) out.errors.push("zoom is not reachable from the floating bar")
+    out.toolbarHasNoZoomSelect = !document.querySelector("[data-pdf-toolbar] select")
+    if (!out.toolbarHasNoZoomSelect) {
+      out.errors.push("the zoom dropdown is still in the toolbar")
+    }
 
     // Fit width is the default: the paper should use the screen's width.
     const surface = overlay.querySelector<HTMLElement>("[data-engine-page-index]")

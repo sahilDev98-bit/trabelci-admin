@@ -29,6 +29,26 @@ const result = await page.evaluate(async () => {
 
 console.log(JSON.stringify(result, null, 2))
 if (pageErrors.length) console.log("\nPAGE ERRORS:", pageErrors)
+
+// ---- full screen is now a URL, not a flag: check the string maths ----
+// Expand navigates the browser rather than flipping local state, so the
+// one thing that has to be exactly right is which URL means which mode.
+// Checked here as pure string arithmetic rather than by driving an
+// authenticated page through the real router, which this harness has no
+// way to log into.
+const route = await page.evaluate(async () => {
+  const mod = await import("/src/pages/create-pdf/engine-editor/fullscreenRoute.ts")
+  const id = "abc123"
+  return {
+    windowed: mod.windowedPath(id),
+    fullscreen: mod.fullscreenPath(id),
+    windowedIsFullscreen: mod.isFullscreenPath(mod.windowedPath(id)),
+    fullscreenIsFullscreen: mod.isFullscreenPath(mod.fullscreenPath(id)),
+    // A control: the word "fullscreen" appearing somewhere in the path must
+    // not be enough on its own — only ending with the segment counts.
+    unrelatedIsFullscreen: mod.isFullscreenPath("/create-pdf/customize-v2/fullscreen-demo/abc123"),
+  }
+})
 await browser.close()
 
 const m = result.maths ?? {}
@@ -44,7 +64,8 @@ const checks = {
   // ---- the shell ----
   "the shell fills the screen": result.overlayCoversViewport === true,
   "there is a toolbar": result.hasToolbar === true,
-  "the toolbar has zoom": result.hasZoomControl === true,
+  "zoom is reachable from the floating bar": result.hasZoomControl === true,
+  "and is no longer duplicated in the toolbar": result.toolbarHasNoZoomSelect === true,
   "fit-width fills the width": result.pageFitsWidth === true,
   "fit-page shows the whole page": result.wholePageVisible === true,
   "selecting adds tools rather than replacing them": result.toolbarChangedWithSelection === true,
@@ -54,6 +75,12 @@ const checks = {
   "the selection gets its own tools alongside": result.selectionToolsAppear === true,
   "exactly one element per page": result.maxElementsPerPage === 1,
   "and that check really detects duplicates": result.maxElementsPerPageWithDuplicate > result.maxElementsPerPage,
+
+  // ---- Expand is a URL now ----
+  "the fullscreen URL sits under the windowed one": route.fullscreen === `${route.windowed}/fullscreen`,
+  "the windowed URL does not read as full screen": route.windowedIsFullscreen === false,
+  "the fullscreen URL reads as full screen": route.fullscreenIsFullscreen === true,
+  "an unrelated URL does not read as full screen": route.unrelatedIsFullscreen === false,
 }
 
 console.log("\n=========== FULL SCREEN CHECKS ===========")

@@ -23,6 +23,8 @@ export interface PartialRepaintTestResult {
   actions: Record<string, string>
   patchedPixel: string | null
   untouchedPixel: string | null
+  /** What a page left alone still shows after an edit somewhere else. */
+  pixelAfterEditElsewhere: string | null
 }
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms))
@@ -42,6 +44,7 @@ function solid(width: number, height: number, r: number, g: number, b: number) {
 export async function runPartialRepaintSelfTest(): Promise<PartialRepaintTestResult> {
   const out: PartialRepaintTestResult = {
     errors: [], actions: {}, patchedPixel: null, untouchedPixel: null,
+    pixelAfterEditElsewhere: null,
   }
 
   const host = document.createElement("div")
@@ -134,6 +137,12 @@ export async function runPartialRepaintSelfTest(): Promise<PartialRepaintTestRes
     })
     // ---- everything below MUST fall back ----
     await step("edit reporting no area", { revision: 2, displayWidth: 600, lastChange: null })
+    // ...except this one, which must do NOTHING AT ALL. Every page the
+    // reader has scrolled past stays mounted and an edit bumps a revision
+    // the whole document shares, so a page that redraws whenever the
+    // revision moves redraws on every edit anywhere — fourteen pages at
+    // roughly 145ms each for one moved caption. A page the engine did not
+    // name is already correct and must be left alone.
     await step("edit on another page", {
       revision: 3, displayWidth: 600,
       lastChange: { pageIndex: 1, rect: SMALL, revision: 3 },
@@ -155,7 +164,7 @@ export async function runPartialRepaintSelfTest(): Promise<PartialRepaintTestRes
       "first paint": "full",
       "edit on this page": "patch",
       "edit reporting no area": "full",
-      "edit on another page": "full",
+      "edit on another page": "nothing",
       "change from an older revision": "full",
       "change covering most of the page": "full",
       "zoom changed with the edit": "full",
@@ -163,6 +172,21 @@ export async function runPartialRepaintSelfTest(): Promise<PartialRepaintTestRes
     for (const [name, want] of Object.entries(expected)) {
       const got = out.actions[name]
       if (got !== want) out.errors.push(`${name}: expected a ${want} repaint, got "${got}"`)
+    }
+
+    // Leaving a page alone is only right if the picture on it is still the
+    // right picture, so the canvas is read rather than trusted: after an
+    // edit elsewhere it must still hold the page it was painted with.
+    const untouched = host.querySelector("canvas")
+    if (untouched) {
+      const ctx = untouched.getContext("2d", { willReadFrequently: true })
+      const px = ctx?.getImageData(4, 4, 1, 1).data
+      out.pixelAfterEditElsewhere = px ? `${px[0]},${px[1]},${px[2]}` : null
+      if (out.pixelAfterEditElsewhere !== "255,0,0") {
+        out.errors.push(
+          `after an edit on another page this page shows ${out.pixelAfterEditElsewhere},`
+          + " not the page it was painted with")
+      }
     }
 
     // ---- and the patch has to land in the right place on the canvas ----

@@ -145,3 +145,53 @@ body.checkbox-drag-selecting * {
 html[dir="rtl"] [data-slot="breadcrumb-separator"] svg {
   transform: scaleX(-1);
 }
+/* Scrollbars that belong to the app rather than to the operating system.
+   
+   The browser's default bars are a wide grey slab with square ends, drawn
+   from the OS palette — so in dark mode they stay light, and against the
+   PDF editor's dark page area they read as a stripe of the wrong colour
+   pasted down the edge. These follow the theme's own tokens instead, so
+   light and dark are handled by the same rule with nothing to keep in sync.
+   
+   Applied by class, not globally: the rest of the admin scrolls with the
+   window, where the OS bar is what people expect. */
+.themed-scrollbar::-webkit-scrollbar {
+    width: 12px;
+    height: 12px;
+}
+
+.themed-scrollbar::-webkit-scrollbar-track,
+.themed-scrollbar::-webkit-scrollbar-corner {
+    background: transparent;
+}
+
+.themed-scrollbar::-webkit-scrollbar-thumb {
+    /* Mixed with the theme's muted foreground rather than a fixed grey, so
+       it stays legible on the light page area AND on the dark one. */
+    background-color: color-mix(in oklab, var(--muted-foreground) 30%, transparent);
+    /* A transparent border with background-clip is what rounds the thumb and
+       insets it from the edge; a bar that touches both sides of its track
+       looks like a scrollbar, one that floats looks like part of the page. */
+    border: 3px solid transparent;
+    background-clip: padding-box;
+    border-radius: 999px;
+}
+
+.themed-scrollbar::-webkit-scrollbar-thumb:hover {
+    background-color: color-mix(in oklab, var(--muted-foreground) 55%, transparent);
+}
+
+.themed-scrollbar::-webkit-scrollbar-thumb:active {
+    background-color: color-mix(in oklab, var(--muted-foreground) 70%, transparent);
+}
+
+/* Firefox has no pseudo-elements for this and offers only a width keyword
+   and two colours. Kept behind @supports so Chrome kicks it out — setting
+   scrollbar-color there makes the browser IGNORE everything above and fall
+   back to a plain square bar. */
+@supports not selector(::-webkit-scrollbar) {
+    .themed-scrollbar {
+        scrollbar-width: thin;
+        scrollbar-color: color-mix(in oklab, var(--muted-foreground) 35%, transparent) transparent;
+    }
+}

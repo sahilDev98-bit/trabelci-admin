@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { useNavigate, useParams } from "@tanstack/react-router"
+import { useLocation, useNavigate, useParams } from "@tanstack/react-router"
 import { useTranslation } from "react-i18next"
 import { ArrowLeftIcon, DownloadIcon, Loader2Icon, MaximizeIcon } from "lucide-react"
 import { toast } from "sonner"
@@ -24,6 +24,7 @@ import { CrossPageDragGhost } from "./CrossPageDragGhost"
 import { findFreeSpot, newImageSize, type Box } from "./placement"
 import { PdfEnginePageColumn } from "./PdfEnginePageColumn"
 import { PdfEngineFullscreen } from "./PdfEngineFullscreen"
+import { fullscreenPath, isFullscreenPath, windowedPath } from "./fullscreenRoute"
 
 /**
  * PDF Master editor, rebuilt on the PDFium engine.
@@ -104,6 +105,7 @@ interface SelectedLine {
 export function PdfEngineEditorPage() {
   const { t } = useTranslation()
   const navigate = useNavigate()
+  const location = useLocation()
   const { templateId } = useParams({ strict: false }) as { templateId?: string }
   const templateQuery = usePdfTemplateQuery(templateId ?? "")
   const template = templateQuery.data
@@ -149,10 +151,18 @@ export function PdfEngineEditorPage() {
     { pageIndex: number; index: number; url: string } | null
   >(null)
 
-  /** Full screen: the pages get the whole display and the tools move into a
+  /**
+   * Full screen: the pages get the whole display and the tools move into a
    * toolbar across the top. A separate shell over the same document — the
-   * windowed view is untouched by it. */
-  const [fullscreen, setFullscreen] = useState(false)
+   * windowed view is untouched by it.
+   *
+   * Read from the URL rather than held as its own `useState`: full screen
+   * is a distinct route (see fullscreenRoute.ts), so which shell renders is
+   * exactly the same question as which page matched, and keeping a second,
+   * separate flag in sync with that would only be a second place for the
+   * two to disagree.
+   */
+  const fullscreen = isFullscreenPath(location.pathname)
 
   const [organizerMode, setOrganizerMode] = useState<PdfOrganizerMode | null>(null)
   const [thumbnails, setThumbnails] = useState<Record<string, string>>({})
@@ -298,9 +308,22 @@ export function PdfEngineEditorPage() {
    * to take the machine over. This is an overlay pinned to the viewport, the
    * same shape as the page-organizer dialog, so everything outside the
    * browser stays exactly where it was.
+   *
+   * A navigation to a distinct URL, not a local toggle — so Expand behaves
+   * like following a link (Back returns to the windowed view, refreshing
+   * while expanded reopens straight into it) rather than like opening a
+   * dialog. The document itself does not travel with it: the new page is a
+   * fresh mount of this same component, so it opens its own Web Worker and
+   * re-reads the template rather than inheriting the one being edited.
    */
-  const enterFullscreen = useCallback(() => setFullscreen(true), [])
-  const exitFullscreen = useCallback(() => setFullscreen(false), [])
+  const enterFullscreen = useCallback(() => {
+    if (!templateId) return
+    void navigate({ to: fullscreenPath(templateId) })
+  }, [navigate, templateId])
+  const exitFullscreen = useCallback(() => {
+    if (!templateId) return
+    void navigate({ to: windowedPath(templateId) })
+  }, [navigate, templateId])
 
   /** The selected line, when the selection is text. */
   const selectedLine = selection?.kind === "text"
