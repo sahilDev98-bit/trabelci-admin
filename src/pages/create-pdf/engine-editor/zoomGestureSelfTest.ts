@@ -21,7 +21,7 @@
 import { createElement } from "react"
 import { createRoot } from "react-dom/client"
 
-import { PdfEngineFullscreen } from "./PdfEngineFullscreen"
+import { PdfEngineWorkspace } from "./PdfEngineWorkspace"
 import type { UsePdfEngineDocumentResult } from "./usePdfEngineDocument"
 import { ZOOM_SETTLE_MS } from "./zoomGesture"
 
@@ -173,7 +173,7 @@ export async function runZoomGestureSelfTest(): Promise<ZoomGestureTestResult> {
       onTransformSelectedImage: () => {},
     }
 
-    root.render(createElement(PdfEngineFullscreen, {
+    root.render(createElement(PdfEngineWorkspace, {
       doc,
       documentName: "test.pdf",
       onExit: () => {},
@@ -184,7 +184,7 @@ export async function runZoomGestureSelfTest(): Promise<ZoomGestureTestResult> {
     }))
     await wait(700)
 
-    const scroller = host.querySelector<HTMLElement>("[data-pdf-fullscreen] .overflow-auto")
+    const scroller = host.querySelector<HTMLElement>("[data-pdf-workspace] .overflow-auto")
     const pageEl = () => host.querySelector<HTMLElement>('[data-engine-page-index="0"]')
     if (!scroller || !pageEl()) {
       out.errors.push("the full-screen shell did not mount")

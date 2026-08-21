@@ -1051,6 +1051,7 @@ const he = {
     engineZoomToSelection: "הגדל לבחירה",
     enginePageOf: "עמוד {{current}} מתוך {{total}}",
     engineThumbnails: "עמודים",
+    engineBackToTemplates: "תבניות",
     engineGoToPage: "עבור לעמוד {{n}}",
     enginePageLabel: "עמוד",
     enginePreviousPage: "העמוד הקודם",

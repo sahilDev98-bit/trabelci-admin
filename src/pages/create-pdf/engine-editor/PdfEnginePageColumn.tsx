@@ -1,5 +1,5 @@
 import type { EngineTextLine } from "@/lib/pdf-engine"
-import type { PdfContentMode } from "../PdfEditorRail"
+import type { PdfContentMode } from "../pdfEditorTypes"
 import { PdfEnginePage } from "./PdfEnginePage"
 import type { UsePdfEngineDocumentResult } from "./usePdfEngineDocument"
 import type { CrossPageDragState } from "./useCrossPageDrag"

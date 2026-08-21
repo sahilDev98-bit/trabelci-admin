@@ -4,7 +4,7 @@ import {
   drawRenderedPage, drawPagePatch,
   type EnginePage, type EngineTextLine, type PdfRect,
 } from "@/lib/pdf-engine"
-import type { PdfContentMode } from "../PdfEditorRail"
+import type { PdfContentMode } from "../pdfEditorTypes"
 import type { PageTextState, PageImageState, PageVectorState } from "./usePdfEngineDocument"
 import { PdfEngineImageSlot } from "./PdfEngineImageSlot"
 import { PdfEngineTextSlot } from "./PdfEngineTextSlot"

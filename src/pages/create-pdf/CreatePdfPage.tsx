@@ -1,5 +1,6 @@
-import { useRef, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { useNavigate } from "@tanstack/react-router"
+import { useQueryClient } from "@tanstack/react-query"
 import { useTranslation } from "react-i18next"
 import { FileTextIcon, Loader2Icon, PlusIcon, PencilIcon, Trash2Icon, UploadIcon } from "lucide-react"
 import { toast } from "sonner"
@@ -25,6 +26,7 @@ import {
   useDeletePdfTemplateMutation,
   useCreatePdfMasterTemplateMutation,
 } from "@/features/pdfTemplates/api"
+import { pdfTemplatesQueryKeys } from "@/features/pdfTemplates/queryKeys"
 import type { PdfTemplate } from "@/features/pdfTemplates/types"
 
 // Manual template creation/editing is disabled for now — PDF upload is the
@@ -103,9 +105,23 @@ function TemplateCard({
   isAdmin: boolean
   onEdit: (id: string) => void
   onDelete: (t: PdfTemplate) => void
-  onUse: (id: string) => void
+  onUse: (template: PdfTemplate) => void
 }) {
   const { t } = useTranslation()
+
+  /**
+   * Start downloading the editor while the pointer is still on its way to
+   * the button.
+   *
+   * The editor is a separate chunk, so the very first time anyone opens a
+   * template the click is followed by a wait for that code to arrive. There
+   * is a fallback for it, but the better answer is not to need one: hovering
+   * is a reliable half-second of warning, and by the time the click lands
+   * the code is usually already here. Harmless if the pointer moves away —
+   * the browser keeps what it fetched, and the same import is what the route
+   * asks for, so nothing is downloaded twice.
+   */
+  const preloadEditor = () => { void import("./PdfCustomizerPage") }
 
   return (
     <Card className="flex flex-col overflow-hidden transition-shadow hover:shadow-md">
@@ -148,7 +164,13 @@ function TemplateCard({
       <CardContent className="flex flex-1 flex-col gap-3 pt-0">
         <MiniPreview template={template} />
         <div className="flex gap-2">
-          <Button size="sm" className="flex-1" onClick={() => onUse(template.id)}>
+          <Button
+            size="sm"
+            className="flex-1"
+            onPointerEnter={preloadEditor}
+            onFocus={preloadEditor}
+            onClick={() => onUse(template)}
+          >
             {t("pdfTemplates.useTemplate")}
           </Button>
           {isAdmin && (
@@ -171,6 +193,22 @@ function TemplateCard({
 export function CreatePdfPage() {
   const { t } = useTranslation()
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
+
+  /**
+   * Fetch the editor's code as soon as this list is on screen.
+   *
+   * Anyone looking at this page is one click from opening a template, and
+   * the editor ships as a separate bundle that is not downloaded until it is
+   * asked for. Starting it here means the click almost never has to wait for
+   * it — the button also warms it on hover, but that only helps if the
+   * pointer pauses, and a decisive click does not.
+   *
+   * A background fetch that blocks nothing. If the template is opened before
+   * it finishes, the wait shown is the editor's own loading screen, so it
+   * still reads as one screen rather than two.
+   */
+  useEffect(() => { void import("./PdfCustomizerPage") }, [])
   const profile = useAppSelector((s) => s.auth.profile)
   const isAdmin = profile?.role === USER_ROLES.ADMIN
 
@@ -215,8 +253,15 @@ export function CreatePdfPage() {
     void navigate({ to: ROUTES.CREATE_PDF_TEMPLATE_EDIT.replace("$templateId", id) })
   }
 
-  function handleUse(id: string) {
-    void navigate({ to: ROUTES.CREATE_PDF_CUSTOMIZE.replace("$templateId", id) })
+  function handleUse(template: PdfTemplate) {
+    // Handed to the editor before navigating, not fetched again once it gets
+    // there. The whole template is already on this card, and without this the
+    // editor opens on a spinner INSIDE the admin shell — sidebar, breadcrumbs
+    // and all — while it re-asks the server for something the browser is
+    // already holding. Seeding it means the editor knows what it is opening
+    // in the same frame it mounts, and goes straight to its own full page.
+    queryClient.setQueryData(pdfTemplatesQueryKeys.byId(template.id), template)
+    void navigate({ to: ROUTES.CREATE_PDF_CUSTOMIZE.replace("$templateId", template.id) })
   }
 
   async function handleDeleteConfirm() {

@@ -16,31 +16,28 @@ import type { SlotSelection } from "./PdfEnginePageColumn"
 import type { UsePdfEngineDocumentResult } from "./usePdfEngineDocument"
 
 /**
- * The editor filling the browser window.
+ * The editor, filling the browser window.
  *
- * An overlay pinned to the viewport — the same shape as the page-organizer
- * dialog — NOT the browser's own full-screen mode, which would also hide the
- * tabs, the address bar and the taskbar. The page gets the window; nothing
- * outside the browser is disturbed.
+ * Pinned to the viewport rather than using the browser's own full-screen
+ * mode, which would also hide the tabs, the address bar and the taskbar.
+ * The page gets the window; nothing outside the browser is disturbed.
  *
- * A separate shell rather than a mode inside the windowed editor, wrapping
- * the SAME page column and the same document state. The windowed view keeps
- * working exactly as it did; this one just gives the pages the whole display
- * and puts the tools in a proper toolbar across the top.
+ * This began as a shell that opened on top of a windowed editor, reached
+ * through an "Expand" button. That windowed editor is gone: this layout was
+ * the one that got approved, so it is simply the editor now, and keeping the
+ * old one alongside would have meant two layouts over one document and two
+ * sets of interaction bugs to chase.
  *
- * Two things it must get right, both learned the hard way in the windowed
- * view:
- *   - the pages need the full width, with nothing reserved against a rail
- *     that is not there;
- *   - Escape has to mean "cancel the drag" while dragging, and only mean
- *     "leave full screen" when nothing is in flight.
+ * It owns the LAYOUT only — the page strip, the toolbar, the zoom, the bar
+ * over the bottom. The document, and every dialog that acts on it, belong to
+ * PdfEngineEditorPage.
  */
 
 /** Padding around the page column. Small — the point is to give the paper
  * the screen, not to frame it. */
 const PAGE_AREA_PADDING_PX = 16
 
-interface PdfEngineFullscreenProps {
+interface PdfEngineWorkspaceProps {
   doc: UsePdfEngineDocumentResult
   documentName: string
   onExit: () => void
@@ -58,9 +55,9 @@ interface PdfEngineFullscreenProps {
   selection: SlotSelection
 }
 
-export function PdfEngineFullscreen({
+export function PdfEngineWorkspace({
   doc, documentName, onExit, onDisplayWidthChange, column, toolbar, selection,
-}: PdfEngineFullscreenProps) {
+}: PdfEngineWorkspaceProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
   /** Sized to the SCALED content during a gesture, so the scrollbars match
    * what is on screen — a CSS transform changes no layout, so without this
@@ -349,10 +346,13 @@ export function PdfEngineFullscreen({
 
   return (
     <div
-      data-pdf-fullscreen
+      data-pdf-workspace
       className="fixed inset-0 z-50 flex flex-col bg-background"
-      role="dialog"
-      aria-modal="true"
+      // Not a dialog. It was one while it opened ON TOP of a windowed view
+      // and could be dismissed back to it; now it is the editor itself, and
+      // announcing it as a modal would tell a screen-reader user there is
+      // something behind it to return to.
+      role="region"
       aria-label={documentName}
     >
       <PdfEditorToolbar
@@ -372,6 +372,20 @@ export function PdfEngineFullscreen({
       <div
         ref={scrollRef}
         onScroll={onScroll}
+        // dir="ltr" even in Hebrew, and this is not an oversight.
+        //
+        // A browser numbers a container's horizontal scroll from the reading
+        // direction: right-to-left containers report scrollLeft as ZERO at
+        // the RIGHT edge and negative going left. Every measurement in here
+        // — where the pointer is over the page, where to scroll so a zoom
+        // stays pinned to it — is in the page's own physical coordinates,
+        // because a sheet of paper does not flip when the interface language
+        // does. Left in RTL, zooming under Hebrew threw the page nearly a
+        // thousand pixels sideways.
+        //
+        // Only the scroll axis is fixed here. The toolbar, the page strip and
+        // every word of the interface still follow the user's language.
+        dir="ltr"
         className="themed-scrollbar min-h-0 flex-1 overflow-auto bg-muted/40"
         style={{ padding: PAGE_AREA_PADDING_PX }}
       >

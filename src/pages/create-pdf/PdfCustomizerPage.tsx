@@ -290,8 +290,18 @@ export function PdfCustomizerPage() {
   const { data: template, isLoading, isError } = usePdfTemplateQuery(templateId ?? "")
 
   if (isLoading) {
+    // Full page, not a spinner in the middle of the admin shell.
+    //
+    // This route leads to an editor that fills the window, and showing the
+    // sidebar and breadcrumbs first meant opening a template flashed through
+    // two different-looking waits — one framed by the app, then the editor's
+    // own — before anything useful appeared. One wait, in the shape of the
+    // thing being waited for.
+    //
+    // Carries no data-pdf-editor marker on purpose: which editor this becomes
+    // is exactly what has not been decided yet.
     return (
-      <div className="flex min-h-96 items-center justify-center">
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-background">
         <Loader2Icon className="size-5 animate-spin text-muted-foreground" />
       </div>
     )

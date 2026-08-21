@@ -15,13 +15,13 @@
 import { createElement } from "react"
 import { createRoot } from "react-dom/client"
 
-import { PdfEngineFullscreen } from "./PdfEngineFullscreen"
+import { PdfEngineWorkspace } from "./PdfEngineWorkspace"
 import type { UsePdfEngineDocumentResult } from "./usePdfEngineDocument"
 import {
   pageWidthForZoom, zoomLevelOf, stepZoom, zoomToFitSlot, PX_PER_PT,
 } from "./zoom"
 
-export interface FullscreenTestResult {
+export interface WorkspaceTestResult {
   errors: string[]
   /** The arithmetic behind the whole feature. */
   maths: Record<string, number>
@@ -44,6 +44,14 @@ export interface FullscreenTestResult {
   addToolsPresentWhenImageSelected: boolean
   /** And the selection's own tools appear alongside, not instead. */
   selectionToolsAppear: boolean
+  /** The toolbar's height with nothing selected and with something selected.
+   * They must match, or the document moves when you click on it. */
+  toolbarHeightBefore: number
+  toolbarHeightAfter: number
+  /** How far the first page moved when something was selected. */
+  pageShiftOnSelect: number
+  /** Distinct vertical positions of the toolbar's buttons — one row is 1. */
+  toolbarRowCount: number
   hasZoomControl: boolean
   /** The dropdown and the +/- buttons were asked to be taken out of the
    * toolbar, zoom now living on the wheel and the floating bar. */
@@ -87,8 +95,8 @@ function fakeDoc(): UsePdfEngineDocumentResult {
   } as unknown as UsePdfEngineDocumentResult
 }
 
-export async function runFullscreenSelfTest(): Promise<FullscreenTestResult> {
-  const out: FullscreenTestResult = {
+export async function runWorkspaceSelfTest(): Promise<WorkspaceTestResult> {
+  const out: WorkspaceTestResult = {
     errors: [], maths: {},
     overlayCoversViewport: false, hasToolbar: false,
     pageWidthFitWidth: 0, pageFitsWidth: false,
@@ -100,6 +108,8 @@ export async function runFullscreenSelfTest(): Promise<FullscreenTestResult> {
     addToolsPresentWhenTextSelected: false,
     addToolsPresentWhenImageSelected: false,
     selectionToolsAppear: false,
+    toolbarHeightBefore: 0, toolbarHeightAfter: 0,
+    pageShiftOnSelect: 0, toolbarRowCount: 0,
     maxElementsPerPage: 0, maxElementsPerPageWithDuplicate: 0,
   }
 
@@ -191,9 +201,9 @@ export async function runFullscreenSelfTest(): Promise<FullscreenTestResult> {
       selection: null,
     }
 
-    const mount = (selection: FullscreenTestResult extends never ? never : Parameters<
-      typeof PdfEngineFullscreen
-    >[0]["selection"]) => root.render(createElement(PdfEngineFullscreen, {
+    const mount = (selection: WorkspaceTestResult extends never ? never : Parameters<
+      typeof PdfEngineWorkspace
+    >[0]["selection"]) => root.render(createElement(PdfEngineWorkspace, {
       doc,
       documentName: "REFIN_CATALOGO",
       onExit: () => {},
@@ -206,7 +216,7 @@ export async function runFullscreenSelfTest(): Promise<FullscreenTestResult> {
     mount(null)
     await wait(500)
 
-    const overlay = document.querySelector<HTMLElement>("[data-pdf-fullscreen]")
+    const overlay = document.querySelector<HTMLElement>("[data-pdf-workspace]")
     if (!overlay) { out.errors.push("the full-screen shell did not mount"); return out }
     const overlayRect = overlay.getBoundingClientRect()
     out.overlayCoversViewport =
@@ -261,9 +271,41 @@ export async function runFullscreenSelfTest(): Promise<FullscreenTestResult> {
 
     out.toolsWhenNothingSelected = document.querySelectorAll("[data-pdf-toolbar] button").length
     out.addToolsPresentWhenNothingSelected = addToolsPresent()
+    // Measured before and after selecting, because the toolbar's height is
+    // what the page area's height is computed from: a toolbar that grows on
+    // selection shunts the whole document down a notch, and clicking away
+    // shunts it back. Picking something up must not move what you picked it
+    // up from.
+    const toolbarEl2 = document.querySelector<HTMLElement>("[data-pdf-toolbar]")
+    const pageAreaEl = document.querySelector<HTMLElement>("[data-pdf-workspace] .overflow-auto")
+    const heightBefore = toolbarEl2?.getBoundingClientRect().height ?? 0
+    const pageTopBefore = document
+      .querySelector<HTMLElement>("[data-engine-page-index]")?.getBoundingClientRect().top ?? 0
 
     mount({ pageIndex: 0, kind: "text", index: 0 })
     await wait(300)
+    out.toolbarHeightBefore = Math.round(heightBefore)
+    out.toolbarHeightAfter = Math.round(toolbarEl2?.getBoundingClientRect().height ?? 0)
+    out.pageShiftOnSelect = Math.round(Math.abs(
+      (document.querySelector<HTMLElement>("[data-engine-page-index]")
+        ?.getBoundingClientRect().top ?? 0) - pageTopBefore,
+    ))
+    // A second row would also show up as the toolbar being taller than one
+    // row of controls; this records it so a failure says which it was.
+    // Clustered by vertical CENTRE, not by top edge: the toolbar mixes
+    // button sizes, so on a single line their tops legitimately differ by a
+    // few pixels while their centres line up. Counting tops reported three
+    // rows for a toolbar that had one.
+    const centres = toolbarEl2
+      ? Array.from(toolbarEl2.querySelectorAll("button"))
+        .map((b) => { const r = b.getBoundingClientRect(); return (r.top + r.bottom) / 2 })
+      : []
+    const rows: number[] = []
+    for (const c of centres) {
+      if (!rows.some((r) => Math.abs(r - c) <= 6)) rows.push(c)
+    }
+    out.toolbarRowCount = rows.length
+    void pageAreaEl
     out.toolsWhenTextSelected = document.querySelectorAll("[data-pdf-toolbar] button").length
     out.addToolsPresentWhenTextSelected = addToolsPresent()
     out.selectionToolsAppear = !!document.querySelector("[data-pdf-toolbar-selection]")
@@ -275,6 +317,19 @@ export async function runFullscreenSelfTest(): Promise<FullscreenTestResult> {
     await wait(300)
     out.addToolsPresentWhenImageSelected = addToolsPresent()
 
+    if (out.toolbarHeightAfter !== out.toolbarHeightBefore) {
+      out.errors.push(
+        `the toolbar changed height on selection (${out.toolbarHeightBefore}px ->`
+        + ` ${out.toolbarHeightAfter}px), which moves the document`)
+    }
+    if (out.pageShiftOnSelect > 2) {
+      out.errors.push(
+        `the page moved ${out.pageShiftOnSelect}px when something was selected`)
+    }
+    if (out.toolbarRowCount > 1) {
+      out.errors.push(
+        `the toolbar is ${out.toolbarRowCount} rows tall — every tool must sit on one line`)
+    }
     if (!out.addToolsPresentWhenNothingSelected) {
       out.errors.push("Add text / Add image are missing with nothing selected")
     }

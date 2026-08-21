@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { useLocation, useNavigate, useParams } from "@tanstack/react-router"
+import { useNavigate, useParams } from "@tanstack/react-router"
 import { useTranslation } from "react-i18next"
-import { ArrowLeftIcon, DownloadIcon, Loader2Icon, MaximizeIcon } from "lucide-react"
 import { toast } from "sonner"
 
 import { usePdfTemplateQuery } from "@/features/pdfTemplates/api"
@@ -15,35 +14,36 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import type { EngineTextLine, PagePlanRequest } from "@/lib/pdf-engine"
 
-import { PdfEditorRail, type PdfContentMode, type PdfOrganizerMode } from "../PdfEditorRail"
+import type { PdfContentMode, PdfOrganizerMode } from "../pdfEditorTypes"
 import { PdfPageOrganizer, type OrganizerPage } from "../PdfPageOrganizer"
 import { usePdfEngineDocument } from "./usePdfEngineDocument"
 import { useCrossPageDrag, type CrossPageDrop } from "./useCrossPageDrag"
 import { dropToPagePoints, textMoveDelta, textPlacementOnPage, imagePlacement } from "./dropGeometry"
 import { CrossPageDragGhost } from "./CrossPageDragGhost"
 import { findFreeSpot, newImageSize, type Box } from "./placement"
-import { PdfEnginePageColumn } from "./PdfEnginePageColumn"
-import { PdfEngineFullscreen } from "./PdfEngineFullscreen"
-import { fullscreenPath, isFullscreenPath, windowedPath } from "./fullscreenRoute"
+import { PdfEngineWorkspace } from "./PdfEngineWorkspace"
+import { PdfEditorLoadingScreen } from "../PdfEditorLoadingScreen"
 
 /**
  * PDF Master editor, rebuilt on the PDFium engine.
  *
- * This is now THE editor for uploaded PDFs — PdfCustomizerPage dispatches
- * pdf_master templates here. It was developed at a parallel route first;
- * the previous implementation (PdfMasterCustomizer) is still present and
- * still reachable at ROUTES.CREATE_PDF_CUSTOMIZE_LEGACY as the rollback
- * path, and retires with the Python edit service it depends on.
+ * This is THE editor for uploaded PDFs — PdfCustomizerPage dispatches
+ * pdf_master templates here, and it fills the whole page.
  *
- * Nothing here calls that service: the PDF is fetched from the API, edited
- * in the browser, and saved by the same engine that rendered it — so what
- * is on screen and what is written to the file are one engine's output by
- * construction, rather than three engines that have to agree.
+ * It did not start that way. For a while it was a windowed view with a
+ * floating tool rail and an "Expand" button that opened a full-screen shell
+ * on top; the expanded one was the demonstration, it was the one that got
+ * approved, and it is now simply the editor. The windowed view, its rail and
+ * the Expand button are gone rather than kept as a second way of doing the
+ * same thing — two layouts over one document is two sets of interaction bugs.
  *
- * The tool rail and page-organizer dialog are the EXISTING components,
- * reused as-is. They are presentational and callback-driven, so this
- * editor inherits the interaction design rather than growing a second,
- * subtly different version of it.
+ * The PDF is fetched from the API, edited in the browser, and saved by the
+ * same engine that rendered it, so what is on screen and what is written to
+ * the file are one engine's output by construction.
+ *
+ * This component owns the DOCUMENT and every dialog; PdfEngineWorkspace owns
+ * the layout. Nothing is written anywhere until Download, which is why
+ * leaving is guarded — see useUnsavedGuard.
  */
 
 /**
@@ -56,20 +56,6 @@ import { fullscreenPath, isFullscreenPath, windowedPath } from "./fullscreenRout
  * floor if the panel is ever reported as absurdly narrow.
  */
 const FALLBACK_PAGE_DISPLAY_WIDTH = 820
-const MIN_PAGE_DISPLAY_WIDTH = 320
-
-/**
- * Breathing room between the paper and the tool rail, on top of whatever
- * the rail actually covers.
- *
- * The reservation itself is MEASURED, not assumed — see the effect below.
- * A fixed gutter was wrong in both directions: the rail is fixed to the
- * VIEWPORT while the pages sit in a centred, max-width panel, so on a wide
- * window the rail floats clear of the panel entirely and any reservation is
- * just dead space, while on a narrow one it genuinely covers the trailing
- * edge. Only the live geometry knows which.
- */
-const RAIL_CLEARANCE_PX = 12
 
 /**
  * How far a box must actually travel before a drag counts as a move, in CSS
@@ -90,12 +76,7 @@ const NEW_TEXT_WIDTH_PTS = 220
 const NEW_TEXT_SIZE_PTS = 18
 const NEW_IMAGE_WIDTH_PTS = 180
 
-/** Height of the app's own sticky top bar, below which this editor's
- * header sits. A constant because the bar is part of AdminLayout's chrome
- * and measuring it from here would couple the two. */
-const APP_HEADER_HEIGHT_PX = 57
 /** Floor for the tool rail, so it can never slide above the app bar. */
-const MIN_RAIL_TOP_PX = APP_HEADER_HEIGHT_PX + 12
 
 interface SelectedLine {
   pageIndex: number
@@ -105,7 +86,6 @@ interface SelectedLine {
 export function PdfEngineEditorPage() {
   const { t } = useTranslation()
   const navigate = useNavigate()
-  const location = useLocation()
   const { templateId } = useParams({ strict: false }) as { templateId?: string }
   const templateQuery = usePdfTemplateQuery(templateId ?? "")
   const template = templateQuery.data
@@ -118,16 +98,10 @@ export function PdfEngineEditorPage() {
   const [selected, setSelected] = useState<SelectedLine | null>(null)
   const [draft, setDraft] = useState("")
   const [downloading, setDownloading] = useState(false)
-  const [railTop, setRailTop] = useState<number | null>(null)
-  /** Measured width of the column the pages sit in, less any part of it the
-   * tool rail actually covers. */
+  /** The width the workspace is drawing pages at, reported by it. Kept so
+   * work prepared for a drag — the patch that erases the slot's old place —
+   * is rendered at the size the pages are actually on screen. */
   const [pageDisplayWidth, setPageDisplayWidth] = useState(FALLBACK_PAGE_DISPLAY_WIDTH)
-  /** How much of the column's trailing edge the rail covers right now. */
-  const [railGutter, setRailGutter] = useState(0)
-  /** What the EXPANDED view is drawing pages at, reported by it. Null while
-   * windowed. Kept so work prepared for a drag (the erase patch) is rendered
-   * at the size the pages are actually on screen. */
-  const [expandedWidth, setExpandedWidth] = useState<number | null>(null)
   /**
    * A picture of the SELECTED slot's area with the slot left out, ready in
    * advance so the moment a drag starts the place it came from can look
@@ -151,19 +125,6 @@ export function PdfEngineEditorPage() {
     { pageIndex: number; index: number; url: string } | null
   >(null)
 
-  /**
-   * Full screen: the pages get the whole display and the tools move into a
-   * toolbar across the top. A separate shell over the same document — the
-   * windowed view is untouched by it.
-   *
-   * Read from the URL rather than held as its own `useState`: full screen
-   * is a distinct route (see fullscreenRoute.ts), so which shell renders is
-   * exactly the same question as which page matched, and keeping a second,
-   * separate flag in sync with that would only be a second place for the
-   * two to disagree.
-   */
-  const fullscreen = isFullscreenPath(location.pathname)
-
   const [organizerMode, setOrganizerMode] = useState<PdfOrganizerMode | null>(null)
   const [thumbnails, setThumbnails] = useState<Record<string, string>>({})
 
@@ -175,8 +136,6 @@ export function PdfEngineEditorPage() {
     { pageIndex: number; kind: "text" | "image" | "vector"; index: number } | null
   >(null)
 
-  const headerRef = useRef<HTMLElement>(null)
-  const pagesColumnRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   /** Which slot a pending file-picker result belongs to. A ref, not state:
    * the picker resolves outside React's flow and re-rendering in between
@@ -188,80 +147,6 @@ export function PdfEngineEditorPage() {
     | null
   >(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
-
-  /**
-   * Keeps the floating tool rail pinned below this editor's own header.
-   *
-   * The app scrolls the WINDOW (its <main> sets no height, so the page
-   * grows instead of scrolling internally). This editor's header is
-   * therefore sticky, and the rail follows its resting position — before
-   * that, both scrolled away and the page tools became unreachable
-   * anywhere past the first page.
-   */
-  useEffect(() => {
-    const measure = () => {
-      const rect = headerRef.current?.getBoundingClientRect()
-      if (!rect) return
-      // Clamped: even mid-scroll, before the sticky offset settles, the
-      // rail must never ride up under the app's own header bar.
-      setRailTop(Math.max(rect.bottom + 12, MIN_RAIL_TOP_PX))
-    }
-    measure()
-    window.addEventListener("resize", measure)
-    window.addEventListener("scroll", measure, true)
-    return () => {
-      window.removeEventListener("resize", measure)
-      window.removeEventListener("scroll", measure, true)
-    }
-  }, [])
-
-  /**
-   * Keeps the paper as wide as the space allows.
-   *
-   * Measured from the pages column itself rather than computed from the
-   * window: this screen sits inside the admin shell's sidebar and padding,
-   * so the only honest source for "how much room is there" is the element
-   * the pages are actually laid out in. A ResizeObserver rather than a
-   * window resize listener, because the sidebar can collapse without the
-   * window changing size at all.
-   */
-  useEffect(() => {
-    const el = pagesColumnRef.current
-    if (!el) return
-
-    const measure = () => {
-      const column = el.getBoundingClientRect()
-      // How far the rail reaches INTO this column, if at all. Measured from
-      // the rail's own box rather than its styling constants, so moving or
-      // resizing it cannot silently leave the paper underneath it.
-      const rail = document.querySelector("[data-pdf-tool-rail]")
-      const railRect = rail?.getBoundingClientRect()
-      const overlap = railRect ? column.right - railRect.left : 0
-      const gutter = overlap > 0 ? Math.ceil(overlap) + RAIL_CLEARANCE_PX : 0
-
-      setRailGutter(gutter)
-      setPageDisplayWidth(
-        Math.max(MIN_PAGE_DISPLAY_WIDTH, Math.floor(el.clientWidth - gutter)),
-      )
-    }
-    measure()
-
-    // Both are needed. The observer catches the panel changing size without
-    // the window doing so (the sidebar collapsing); the resize listener
-    // catches the reverse — the panel is width-capped and centred, so a
-    // wider window moves the viewport-fixed rail without changing the
-    // column at all, which the observer would never see.
-    const observer = new ResizeObserver(measure)
-    observer.observe(el)
-    window.addEventListener("resize", measure)
-    return () => {
-      observer.disconnect()
-      window.removeEventListener("resize", measure)
-    }
-    // Re-runs when the document becomes ready AND when leaving the expanded
-    // view, which is when this column is mounted again and there is
-    // something to measure.
-  }, [doc.phase, fullscreen])
 
   useEffect(() => {
     // A stale patch is never CLEARED here, only replaced. Clearing would be
@@ -279,8 +164,7 @@ export function PdfEngineEditorPage() {
     // At the size the pages are actually drawn — windowed or expanded — so
     // the patch that fills the hole is not a low-resolution one stretched to
     // fit once the page is zoomed in.
-    const shownWidth = fullscreen && expandedWidth ? expandedWidth : pageDisplayWidth
-    const scale = (shownWidth / page.widthPts) * Math.min(window.devicePixelRatio || 1, 2)
+    const scale = (pageDisplayWidth / page.widthPts) * Math.min(window.devicePixelRatio || 1, 2)
     void doc.renderCleanPatch(pageIndex, kind, index, scale)
       .then((url) => {
         if (cancelled || !url) return
@@ -297,33 +181,21 @@ export function PdfEngineEditorPage() {
         .catch(() => { /* falls back to the plain outline */ })
     }
     return () => { cancelled = true }
-  }, [selection, doc, pageDisplayWidth, fullscreen, expandedWidth])
+  }, [selection, doc, pageDisplayWidth])
 
   /**
-   * Expand the editor to fill the browser window.
+   * Back to the template list.
    *
-   * Deliberately NOT the browser's own full-screen mode. That takes over the
-   * whole display and hides the tabs, the address bar and the taskbar, which
-   * is more than was wanted — the point is to give the PAGE the window, not
-   * to take the machine over. This is an overlay pinned to the viewport, the
-   * same shape as the page-organizer dialog, so everything outside the
-   * browser stays exactly where it was.
-   *
-   * A navigation to a distinct URL, not a local toggle — so Expand behaves
-   * like following a link (Back returns to the windowed view, refreshing
-   * while expanded reopens straight into it) rather than like opening a
-   * dialog. The document itself does not travel with it: the new page is a
-   * fresh mount of this same component, so it opens its own Web Worker and
-   * re-reads the template rather than inheriting the one being edited.
+   * No confirmation, deliberately. An earlier version asked "leave without
+   * downloading?" whenever there were changes; it was removed because a
+   * dialog in front of a button someone pressed on purpose is friction
+   * every time, to guard against a mistake made rarely. The cost is real
+   * and worth stating plainly: nothing is written anywhere until Download,
+   * so leaving discards the edits with no way back.
    */
-  const enterFullscreen = useCallback(() => {
-    if (!templateId) return
-    void navigate({ to: fullscreenPath(templateId) })
-  }, [navigate, templateId])
-  const exitFullscreen = useCallback(() => {
-    if (!templateId) return
-    void navigate({ to: windowedPath(templateId) })
-  }, [navigate, templateId])
+  const leaveEditor = useCallback(() => {
+    void navigate({ to: ROUTES.CREATE_PDF })
+  }, [navigate])
 
   /** The selected line, when the selection is text. */
   const selectedLine = selection?.kind === "text"
@@ -516,26 +388,27 @@ export function PdfEngineEditorPage() {
   const { drag, start: startDrag } = useCrossPageDrag((drop) => void handleDrop(drop))
 
   /**
-   * Escape means "cancel what I am doing", and a drag is more immediate than
-   * the whole view — so while something is in flight the drag cancels and
-   * full screen stays. useCrossPageDrag handles the drag half; this only
-   * acts when nothing is being dragged.
+   * Escape means "cancel what I am doing", one layer at a time.
+   *
+   * It deliberately stops there. While the editor was a shell over a
+   * windowed view, Escape's last step was to close that shell — harmless,
+   * because the document was still open underneath. Now that this IS the
+   * page, the same step would leave the editor entirely and take every
+   * unsaved edit with it. A key pressed to dismiss a selection must not be
+   * able to throw away an afternoon's work, so leaving is only ever
+   * deliberate: the Templates button, which asks first.
+   *
+   * The drag half is handled by useCrossPageDrag; this only acts when
+   * nothing is being dragged.
    */
   useEffect(() => {
-    if (!fullscreen) return
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape" || drag) return
-      // One layer at a time. A drag is cancelled by useCrossPageDrag; then a
-      // selection is cleared; only with nothing held does Escape close the
-      // expanded view. Jumping straight out would throw away the view
-      // because someone wanted to drop a selection.
-      if (selection) { setSelection(null); return }
-      exitFullscreen()
+      if (selection) setSelection(null)
     }
     window.addEventListener("keydown", onKey)
     return () => window.removeEventListener("keydown", onKey)
-  }, [fullscreen, drag, selection, exitFullscreen])
-
+  }, [drag, selection])
 
   /** Resizing text re-draws the same words at a new size and wrap width —
    * there is no box to stretch, so the line is rebuilt rather than scaled. */
@@ -798,17 +671,18 @@ export function PdfEngineEditorPage() {
       void handleResizeText(pageIndex, lineIndex, fontSize, maxWidth),
   }
 
-  const editableCount = useMemo(() => {
-    const images = Object.values(doc.pageImages).reduce((n, p) => n + (p?.images.length ?? 0), 0)
-    const vectors = Object.values(doc.pageVectors).reduce((n, p) => n + (p?.groups.length ?? 0), 0)
-    const text = contentMode === "text"
-      ? Object.values(doc.pageText).reduce((n, p) => n + (p?.lines.length ?? 0), 0)
-      : 0
-    return images + vectors + text
-  }, [contentMode, doc.pageText, doc.pageImages, doc.pageVectors])
-
+  // Reached only on a cold load — opening a template from the list hands the
+  // record over before navigating, so this is already answered by then.
   if (templateQuery.isLoading) {
-    return <CenteredMessage><Loader2Icon className="size-5 animate-spin" /></CenteredMessage>
+    return (
+      <PdfEditorLoadingScreen
+        documentName=""
+        phase="downloading"
+        downloadPercent={null}
+        error={null}
+        onBack={leaveEditor}
+      />
+    )
   }
   if (templateQuery.isError || !template) {
     return <CenteredMessage>{t("pdfTemplates.notFound", "Template not found")}</CenteredMessage>
@@ -817,178 +691,82 @@ export function PdfEngineEditorPage() {
     return <CenteredMessage>{t("pdfTemplates.engineEditorOnlyMaster", "This editor only supports uploaded PDF templates.")}</CenteredMessage>
   }
 
-  return (
-    // data-pdf-editor names the implementation actually on screen. Uploaded
-    // PDFs can be opened by either editor during the switchover, and "which
-    // one am I looking at?" is otherwise only answerable by eye.
-    <div className="flex min-h-0 flex-1 flex-col" data-pdf-editor="engine">
-      {/* Sticky: the window is what scrolls in this app, so without this
-          the toolbar (and the tool rail pinned under it) disappeared as
-          soon as the user scrolled past the first page. */}
-      <header
-        ref={headerRef}
-        className="sticky z-30 flex flex-wrap items-center gap-3 border-b bg-background px-4 py-3"
-        style={{ top: APP_HEADER_HEIGHT_PX }}
-      >
-        <Button variant="ghost" size="sm" onClick={() => navigate({ to: ROUTES.CREATE_PDF })} className="gap-1.5">
-          <ArrowLeftIcon className="size-4" />
-          {t("common.back", "Back")}
-        </Button>
-
-        <span className="min-w-0 truncate text-sm font-medium">{template.name}</span>
-
-        {doc.phase === "ready" && (
-          // The text-boxes on/off switch used to sit here too. It now lives
-          // ONLY in the tool rail, with the rest of the editing tools —
-          // having it in both places meant two controls for one setting.
-          <span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
-            {t("pdfTemplates.engineEditableSlots", "{{count}} editable slots", { count: editableCount })}
-          </span>
-        )}
-
-        <div className="ms-auto flex items-center gap-2">
-          {doc.busy && <Loader2Icon className="size-4 animate-spin text-muted-foreground" />}
-          {doc.phase === "ready" && (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={enterFullscreen}
-              className="gap-1.5"
-              title={t(
-                "pdfTemplates.engineFullscreenHint",
-                "Fill the window with the page, so it can be zoomed enough to read small text",
-              )}
-            >
-              <MaximizeIcon className="size-4" />
-              {t("pdfTemplates.engineFullscreen", "Expand")}
-            </Button>
-          )}
-          <Button
-            size="sm"
-            onClick={handleDownload}
-            disabled={doc.phase !== "ready" || downloading || doc.busy}
-            className="gap-1.5"
-          >
-            {downloading ? <Loader2Icon className="size-4 animate-spin" /> : <DownloadIcon className="size-4" />}
-            {t("pdfTemplates.masterDownload", "Download PDF")}
-          </Button>
-        </div>
-      </header>
-
-      <div className="min-h-0 flex-1 overflow-auto bg-muted/40 p-6">
-        {doc.phase === "downloading" && (
-          <CenteredMessage>
-            <Loader2Icon className="size-5 animate-spin" />
-            <span>
-              {t("pdfTemplates.engineDownloading", "Loading PDF")}
-              {doc.downloadPercent !== null ? ` ${doc.downloadPercent}%` : ""}
-            </span>
-          </CenteredMessage>
-        )}
-        {doc.phase === "opening" && (
-          <CenteredMessage>
-            <Loader2Icon className="size-5 animate-spin" />
-            <span>{t("pdfTemplates.engineOpening", "Preparing editor")}</span>
-          </CenteredMessage>
-        )}
-        {doc.phase === "error" && (
-          <CenteredMessage><span className="text-destructive">{doc.error}</span></CenteredMessage>
-        )}
-
-        {/* Not rendered while expanded. The expanded view draws its own copy
-            of these pages ON TOP, and leaving this one mounted underneath
-            put TWO elements in the document claiming to be page N — so
-            "where is page 3?" answered with the hidden windowed one, and
-            every drag measured a page the user could not see, at the wrong
-            size and position. It also rendered every page twice, two full
-            sets of canvases for one visible document. */}
-        {doc.phase === "ready" && !fullscreen && (
-          <PdfEnginePageColumn
-            {...pageColumnProps}
-            doc={doc}
-            columnRef={pagesColumnRef}
-            displayWidth={pageDisplayWidth}
-            gutter={railGutter}
-          />
-        )}
-      </div>
-
-      {doc.phase === "ready" && (
-        <PdfEditorRail
-          top={railTop}
-          contentMode={contentMode}
-          onToggleContentMode={() => setContentMode((m) => (m === "text" ? "images" : "text"))}
-          onOpenOrganizer={(mode) => void openOrganizer(mode)}
-          // The switch belongs here rather than in the header: it is an
-          // editing tool, and this editor's text layer stacks above its
-          // image layer, so turning the boxes off is how a photo sitting
-          // under a caption gets clicked.
-          showContentModeToggle
-          // Page rotation is deliberately not offered in this editor.
-          showRotate={false}
-          onAddText={() => setNewTextDraft({ pageIndex: visiblePageIndex(), text: "" })}
-          onAddImage={() => openFilePicker({ kind: "overlay", pageIndex: visiblePageIndex() })}
-        />
-      )}
-
-      {fullscreen && doc.phase === "ready" && (
-        <PdfEngineFullscreen
-          doc={doc}
+  // Nothing is on screen until the document is, so the state before that has
+  // to be a whole page too — see PdfEditorLoadingScreen.
+  if (doc.phase !== "ready") {
+    return (
+      <>
+        <PdfEditorLoadingScreen
           documentName={template.name}
-          onExit={exitFullscreen}
-          onDisplayWidthChange={setExpandedWidth}
-          selection={selection}
-          column={pageColumnProps}
-          toolbar={{
-            contentMode,
-            onToggleContentMode: () => setContentMode((m) => (m === "text" ? "images" : "text")),
-            onAddText: () => setNewTextDraft({ pageIndex: visiblePageIndex(), text: "" }),
-            onAddImage: () => openFilePicker({ kind: "overlay", pageIndex: visiblePageIndex() }),
-            onOpenOrganizer: (mode) => void openOrganizer(mode),
-            onEditSelectedText: () => {
-              if (selection?.kind !== "text") return
-              const line = doc.pageText[selection.pageIndex]?.lines[selection.index]
-              if (line) openLine(selection.pageIndex, line)
-            },
-            onReplaceSelectedImage: () => {
-              if (selection?.kind !== "image") return
-              openFilePicker({ kind: "replace", pageIndex: selection.pageIndex, imageIndex: selection.index })
-            },
-            onReplaceSelectedVector: () => {
-              if (selection?.kind !== "vector") return
-              openFilePicker({ kind: "replaceVector", pageIndex: selection.pageIndex, vectorIndex: selection.index })
-            },
-            onDeleteSelected: deleteSelected,
-            onDeselect: () => setSelection(null),
-            textStyle: selectedLine
-              ? {
-                bold: selectedLine.bold,
-                italic: selectedLine.italic,
-                color: {
-                  r: selectedLine.color.r, g: selectedLine.color.g, b: selectedLine.color.b,
-                },
-              }
-              : null,
-            onToggleBold: () => restyle({ bold: !(selectedLine?.bold ?? false) }),
-            onToggleItalic: () => restyle({ italic: !(selectedLine?.italic ?? false) }),
-            onTextColor: (color) => restyle({ color }),
-            onScaleText: (factor) =>
-              runOnSelection("text", (p, i) => doc.scaleText(p, i, factor)),
-            onAlignText: (alignment) =>
-              runOnSelection("text", (p, i) => doc.alignText(p, i, alignment)),
-            onTransformImage: (op) =>
-              runOnSelection("image", (p, i) => doc.transformImage(p, i, op)),
-            onDownload: () => void handleDownload(),
-            downloading,
-            busy: doc.busy,
-            selection,
-          }}
+          phase={doc.phase === "error" ? "error" : doc.phase === "opening" ? "opening" : "downloading"}
+          downloadPercent={doc.downloadPercent}
+          error={doc.error}
+          onBack={leaveEditor}
         />
-      )}
+      </>
+    )
+  }
 
-      {/* Outside the full-screen shell on purpose: it is fixed to the
-          viewport, so one instance serves both views and the ghost never
-          disappears behind the overlay. */}
+  return (
+    // data-pdf-editor names the implementation actually on screen. Kept from
+    // the period when two editors could open the same template: the switchover
+    // test still asks the DOM which one it got rather than trusting the route.
+    <div data-pdf-editor="engine" className="contents">
+      <PdfEngineWorkspace
+        doc={doc}
+        documentName={template.name}
+        onExit={leaveEditor}
+        onDisplayWidthChange={setPageDisplayWidth}
+        selection={selection}
+        column={pageColumnProps}
+        toolbar={{
+          contentMode,
+          onToggleContentMode: () => setContentMode((m) => (m === "text" ? "images" : "text")),
+          onAddText: () => setNewTextDraft({ pageIndex: visiblePageIndex(), text: "" }),
+          onAddImage: () => openFilePicker({ kind: "overlay", pageIndex: visiblePageIndex() }),
+          onOpenOrganizer: (mode) => void openOrganizer(mode),
+          onEditSelectedText: () => {
+            if (selection?.kind !== "text") return
+            const line = doc.pageText[selection.pageIndex]?.lines[selection.index]
+            if (line) openLine(selection.pageIndex, line)
+          },
+          onReplaceSelectedImage: () => {
+            if (selection?.kind !== "image") return
+            openFilePicker({ kind: "replace", pageIndex: selection.pageIndex, imageIndex: selection.index })
+          },
+          onReplaceSelectedVector: () => {
+            if (selection?.kind !== "vector") return
+            openFilePicker({ kind: "replaceVector", pageIndex: selection.pageIndex, vectorIndex: selection.index })
+          },
+          onDeleteSelected: deleteSelected,
+          onDeselect: () => setSelection(null),
+          textStyle: selectedLine
+            ? {
+              bold: selectedLine.bold,
+              italic: selectedLine.italic,
+              color: {
+                r: selectedLine.color.r, g: selectedLine.color.g, b: selectedLine.color.b,
+              },
+            }
+            : null,
+          onToggleBold: () => restyle({ bold: !(selectedLine?.bold ?? false) }),
+          onToggleItalic: () => restyle({ italic: !(selectedLine?.italic ?? false) }),
+          onTextColor: (color) => restyle({ color }),
+          onScaleText: (factor) =>
+            runOnSelection("text", (p, i) => doc.scaleText(p, i, factor)),
+          onAlignText: (alignment) =>
+            runOnSelection("text", (p, i) => doc.alignText(p, i, alignment)),
+          onTransformImage: (op) =>
+            runOnSelection("image", (p, i) => doc.transformImage(p, i, op)),
+          onDownload: () => void handleDownload(),
+          downloading,
+          busy: doc.busy,
+          selection,
+        }}
+      />
+
+      {/* Outside the workspace on purpose: it is fixed to the viewport, so
+          it is never clipped by the shell it floats over. */}
       <CrossPageDragGhost drag={drag} />
 
       {/* One hidden picker serves both "replace this image" and "add an

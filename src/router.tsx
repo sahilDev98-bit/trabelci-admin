@@ -17,6 +17,7 @@ import { RequireAuth } from "@/routes/RequireAuth"
 import { RequireRole } from "@/routes/RequireRole"
 import { AdminLayout } from "@/layouts/AdminLayout"
 import { Toaster } from "@/components/ui/sonner"
+import { PdfEditorOpening } from "@/pages/create-pdf/PdfEditorOpening"
 
 const DashboardPage = lazy(() => import("@/pages/DashboardPage").then(m => ({ default: m.DashboardPage })))
 const LoginPage = lazy(() => import("@/pages/auth/LoginPage").then(m => ({ default: m.LoginPage })))
@@ -55,6 +56,25 @@ const SuspenseFallback = (
     <Loader2Icon className="size-6 animate-spin text-muted-foreground" />
   </div>
 )
+
+/**
+ * The wait shown while the PDF editor's code is still downloading.
+ *
+ * It needs its own boundary, and this is the only reason: AdminLayout wraps
+ * its Outlet in a Suspense of its own, inside the padded, width-capped
+ * <main>. React uses the NEAREST boundary, so a route that suspends without
+ * one gets that framed spinner — sidebar, breadcrumbs and all — for as long
+ * as the download takes, and only on a first visit, because afterwards the
+ * bundle is cached and nothing suspends. Placed at the route component so it
+ * sits INSIDE AdminLayout's Outlet and therefore catches first.
+ *
+ * Shows the editor's OWN loading screen rather than a plain spinner, so the
+ * bundle wait and the PDF wait that follows it are one continuous screen
+ * instead of two that replace each other. Imported eagerly, which is safe:
+ * it is a heading and a spinner, and everything it uses is in the main
+ * bundle already.
+ */
+const EditorSuspenseFallback = <PdfEditorOpening />
 
 const rootRoute = createRootRoute({
   component: () => (
@@ -345,7 +365,11 @@ const pdfTemplateEditRoute = createRoute({
 const pdfCustomizerRoute = createRoute({
   getParentRoute: () => appLayoutRoute,
   path: "/create-pdf/customize/$templateId",
-  component: PdfCustomizerPage,
+  component: () => (
+    <Suspense fallback={EditorSuspenseFallback}>
+      <PdfCustomizerPage />
+    </Suspense>
+  ),
 })
 
 // Alias from the period when the engine editor ran beside the old one.
@@ -354,17 +378,11 @@ const pdfCustomizerRoute = createRoute({
 const pdfEngineEditorRoute = createRoute({
   getParentRoute: () => appLayoutRoute,
   path: "/create-pdf/customize-v2/$templateId",
-  component: PdfEngineEditorPage,
-})
-
-// Same component as pdfEngineEditorRoute: PdfEngineEditorPage reads its
-// mode from the URL (see fullscreenRoute.ts), not from a prop, so a real
-// navigation between the two routes is what takes the editor in and out of
-// full screen, in place of the overlay toggle it used to be.
-const pdfEngineEditorFullscreenRoute = createRoute({
-  getParentRoute: () => appLayoutRoute,
-  path: "/create-pdf/customize-v2/$templateId/fullscreen",
-  component: PdfEngineEditorPage,
+  component: () => (
+    <Suspense fallback={EditorSuspenseFallback}>
+      <PdfEngineEditorPage />
+    </Suspense>
+  ),
 })
 
 const aiImagesRoute = createRoute({
@@ -412,7 +430,6 @@ const routeTree = rootRoute.addChildren([
     pdfTemplateEditRoute,
     pdfCustomizerRoute,
     pdfEngineEditorRoute,
-    pdfEngineEditorFullscreenRoute,
     aiImagesRoute,
     extractProductPdfRoute,
   ]),

@@ -3,7 +3,7 @@ import { CopyIcon, RotateCwIcon, Trash2Icon, Undo2Icon, XIcon } from "lucide-rea
 import { useTranslation } from "react-i18next"
 
 import { Button } from "@/components/ui/button"
-import type { PdfOrganizerMode } from "./PdfEditorRail"
+import type { PdfOrganizerMode } from "./pdfEditorTypes"
 
 /**
  * One page as the organizer sees it. Deliberately a light descriptor rather

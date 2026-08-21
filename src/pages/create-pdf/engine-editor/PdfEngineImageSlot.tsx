@@ -25,11 +25,24 @@ interface PdfEngineImageSlotProps {
   onMoveStart: (e: React.PointerEvent, rect: DOMRect) => void
 }
 
+/**
+ * Corner grips, placed with PHYSICAL left/right rather than start/end.
+ *
+ * They used to use the logical properties, which is normally the right
+ * instinct in this app — but these four are named for compass directions and
+ * the arithmetic behind them is physical: "ne" means the east edge follows
+ * the pointer, and east is east whatever language the interface is in. Under
+ * Hebrew the logical version put the grip named "nw" on the box's top-RIGHT
+ * corner while the maths still moved the west edge, so dragging a corner
+ * resized the box backwards. Nothing threw; it just behaved inside out.
+ *
+ * A page is a physical sheet of paper. Its coordinates do not flip.
+ */
 const HANDLES: { key: ResizeHandle; className: string; cursor: string }[] = [
-  { key: "nw", className: "-start-1.5 -top-1.5", cursor: "nwse-resize" },
-  { key: "ne", className: "-end-1.5 -top-1.5", cursor: "nesw-resize" },
-  { key: "sw", className: "-start-1.5 -bottom-1.5", cursor: "nesw-resize" },
-  { key: "se", className: "-end-1.5 -bottom-1.5", cursor: "nwse-resize" },
+  { key: "nw", className: "-left-1.5 -top-1.5", cursor: "nwse-resize" },
+  { key: "ne", className: "-right-1.5 -top-1.5", cursor: "nesw-resize" },
+  { key: "sw", className: "-left-1.5 -bottom-1.5", cursor: "nesw-resize" },
+  { key: "se", className: "-right-1.5 -bottom-1.5", cursor: "nwse-resize" },
 ]
 
 /**
@@ -79,6 +92,11 @@ export function PdfEngineImageSlot({
             ? "ring-2 ring-sky-500"
             : "ring-1 ring-amber-500/40 hover:ring-2 hover:ring-amber-500/80"
       } ${selected ? "cursor-move" : "cursor-pointer"}`}
+      data-pdf-image-slot
+      // The area around it is pinned to physical left-to-right for its
+      // scroll maths; "auto" lets this slot's tooltip take its direction
+      // from the words in it, so a Hebrew hint still reads as Hebrew.
+      dir="auto"
       style={{ left: live.left, top: live.top, width: live.width, height: live.height }}
       onPointerDown={(e) => {
         // Stopped unconditionally: the page below clears the selection on
@@ -117,6 +135,7 @@ export function PdfEngineImageSlot({
         <span
           key={handle.key}
           role="presentation"
+          data-resize-handle={handle.key}
           onPointerDown={(e) => transform.startResize(e, handle.key)}
           className={`absolute size-3 rounded-full border-2 border-white bg-sky-500 shadow ${handle.className}`}
           style={{ cursor: handle.cursor }}

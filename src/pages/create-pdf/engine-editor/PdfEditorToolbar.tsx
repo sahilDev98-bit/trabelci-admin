@@ -1,7 +1,7 @@
 import {
   AlignCenterIcon, AlignLeftIcon, AlignRightIcon, ArrowUpDownIcon,
   BoldIcon, CopyIcon, DownloadIcon, FlipHorizontalIcon, FlipVerticalIcon,
-  ImageIcon, ImagePlusIcon, ItalicIcon, Loader2Icon, MinimizeIcon,
+  ArrowLeftIcon, ImageIcon, ImagePlusIcon, ItalicIcon, Loader2Icon,
   MinusIcon, PlusIcon, RotateCcwIcon, RotateCwIcon, ScanSearchIcon,
   Trash2Icon, TypeIcon, TypeOutlineIcon, XIcon,
 } from "lucide-react"
@@ -9,7 +9,7 @@ import { useTranslation } from "react-i18next"
 
 import { Button } from "@/components/ui/button"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
-import type { PdfContentMode, PdfOrganizerMode } from "../PdfEditorRail"
+import type { PdfContentMode, PdfOrganizerMode } from "../pdfEditorTypes"
 import type { SlotSelection } from "./PdfEnginePageColumn"
 
 /**
@@ -115,14 +115,25 @@ export function PdfEditorToolbar({
 
   return (
     <TooltipProvider delayDuration={400}>
-      <div data-pdf-toolbar className="flex shrink-0 flex-col border-b bg-background">
-        {/* ── Row one: the document's own tools. NEVER changes.
-            Everything here stays put whatever is selected, so a tool can
-            never disappear at the moment you reach for it. ── */}
-        <div className="flex flex-wrap items-center gap-1 px-3 py-2">
+      {/*  ONE row, and its height never changes.
+           flex-nowrap rather than wrap: wrapping is the same fault as a
+           second row by another name — a toolbar one item too long for the
+           window would silently become two lines tall and push the document
+           down. When it runs out of room it scrolls sideways instead, which
+           costs a gesture and never moves the page. */}
+      <div
+        data-pdf-toolbar
+        // h-14 rather than padding around whatever is inside: the selected
+        // item's tools sit in a bordered group that is a few pixels taller
+        // than a bare button, which was enough to grow the row from 55px to
+        // 61px the moment anything was clicked — and the page area is sized
+        // from what the toolbar leaves, so the document twitched down and
+        // back. A fixed height cannot do that whatever goes in it.
+        className="themed-scrollbar flex h-14 shrink-0 flex-nowrap items-center gap-1 overflow-x-auto border-b bg-background px-3"
+      >
           <ToolButton
-            label={t("pdfTemplates.engineExitFullscreen", "Exit")}
-            icon={MinimizeIcon}
+            label={t("pdfTemplates.engineBackToTemplates", "Templates")}
+            icon={ArrowLeftIcon}
             onClick={onExit}
           />
           <span className="ms-1 max-w-56 shrink truncate text-sm font-medium">{documentName}</span>
@@ -179,6 +190,124 @@ export function PdfEditorToolbar({
           <ToolButton label={t("pdfTemplates.railMovePage", "Reorder pages")} icon={ArrowUpDownIcon} onClick={() => onOpenOrganizer("move")} />
           <ToolButton label={t("pdfTemplates.railDeletePages", "Delete pages")} icon={Trash2Icon} onClick={() => onOpenOrganizer("delete")} danger />
 
+          {/* ── The selected item's own tools, ADDED to this same row. ──
+              Never a second row. A row that appears on selection changes the
+              toolbar's height, and the page area below it is sized from
+              what is left — so clicking a caption shunted the whole document
+              down a notch, and clicking away shunted it back. The editor
+              twitching every time you pick something up is worse than a long
+              row, and the row scrolls sideways if it ever runs out of
+              space. ── */}
+          {selection && (
+            <>
+            <ToolButton
+              label={t("pdfTemplates.engineZoomToSelection", "Zoom to selection")}
+              icon={ScanSearchIcon}
+              onClick={onZoomToSelection}
+            />
+
+            <Divider />
+
+            {/* ── The selected item's own tools. ──
+                Visually grouped so it is obvious they belong to the selection
+                and not to the document, whose tools are in the row above and
+                stay put whatever is going on down here. */}
+            <div
+                data-pdf-toolbar-selection
+                className="ms-1 flex h-10 shrink-0 items-center gap-1 rounded-md bg-muted/70 px-1.5"
+              >
+                {selection.kind === "text" && (
+                  <>
+                    <Button type="button" size="sm" variant="secondary" className="h-8 shrink-0 gap-1.5" onClick={onEditSelectedText}>
+                      <TypeIcon className="size-4" />
+                      {t("pdfTemplates.masterEditTextTitle", "Edit text")}
+                    </Button>
+                    {/* Formatting. Applied to the text ALREADY in the document
+                        rather than redrawing it, so the page keeps its own
+                        typeface — see textStyle.ts. */}
+                    <ToolButton
+                      label={t("pdfTemplates.engineBold", "Bold")}
+                      icon={BoldIcon}
+                      onClick={onToggleBold}
+                      active={textStyle?.bold}
+                    />
+                    <ToolButton
+                      label={t("pdfTemplates.engineItalic", "Italic")}
+                      icon={ItalicIcon}
+                      onClick={onToggleItalic}
+                      active={textStyle?.italic}
+                    />
+                    <ToolButton
+                      label={t("pdfTemplates.engineSmaller", "Smaller")}
+                      icon={MinusIcon}
+                      onClick={() => onScaleText(1 / 1.15)}
+                    />
+                    <ToolButton
+                      label={t("pdfTemplates.engineBigger", "Bigger")}
+                      icon={PlusIcon}
+                      onClick={() => onScaleText(1.15)}
+                    />
+                    <ToolButton label={t("pdfTemplates.engineAlignLeft", "Align left")} icon={AlignLeftIcon} onClick={() => onAlignText("left")} />
+                    <ToolButton label={t("pdfTemplates.engineAlignCenter", "Centre")} icon={AlignCenterIcon} onClick={() => onAlignText("center")} />
+                    <ToolButton label={t("pdfTemplates.engineAlignRight", "Align right")} icon={AlignRightIcon} onClick={() => onAlignText("right")} />
+                    <label
+                      className="flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-md border"
+                      title={t("pdfTemplates.engineTextColor", "Text colour")}
+                    >
+                      <input
+                        type="color"
+                        aria-label={t("pdfTemplates.engineTextColor", "Text colour")}
+                        className="size-5 cursor-pointer border-0 bg-transparent p-0"
+                        value={textStyle
+                          ? `#${[textStyle.color.r, textStyle.color.g, textStyle.color.b]
+                            .map((n) => n.toString(16).padStart(2, "0")).join("")}`
+                          : "#000000"}
+                        onChange={(e) => {
+                          const hex = e.target.value
+                          onTextColor({
+                            r: parseInt(hex.slice(1, 3), 16),
+                            g: parseInt(hex.slice(3, 5), 16),
+                            b: parseInt(hex.slice(5, 7), 16),
+                          })
+                        }}
+                      />
+                    </label>
+                  </>
+                )}
+                {selection.kind === "image" && (
+                  <>
+                    <Button type="button" size="sm" variant="secondary" className="h-8 shrink-0 gap-1.5" onClick={onReplaceSelectedImage}>
+                      <ImageIcon className="size-4" />
+                      {t("pdfTemplates.engineReplaceImage", "Replace image")}
+                    </Button>
+                    {/* Turning and flipping are matrix changes, so the picture is
+                        never re-encoded and loses no quality. */}
+                    <ToolButton label={t("pdfTemplates.engineRotateLeft", "Rotate left")} icon={RotateCcwIcon} onClick={() => onTransformImage("rotate-left")} />
+                    <ToolButton label={t("pdfTemplates.engineRotateRight", "Rotate right")} icon={RotateCwIcon} onClick={() => onTransformImage("rotate-right")} />
+                    <ToolButton label={t("pdfTemplates.engineFlipH", "Flip horizontally")} icon={FlipHorizontalIcon} onClick={() => onTransformImage("flip-horizontal")} />
+                    <ToolButton label={t("pdfTemplates.engineFlipV", "Flip vertically")} icon={FlipVerticalIcon} onClick={() => onTransformImage("flip-vertical")} />
+                  </>
+                )}
+                {selection.kind === "vector" && (
+                  <Button type="button" size="sm" variant="secondary" className="h-8 shrink-0 gap-1.5" onClick={onReplaceSelectedVector}>
+                    <ImageIcon className="size-4" />
+                    {t("pdfTemplates.engineReplaceArtwork", "Replace with image")}
+                  </Button>
+                )}
+                {/* No delete here on purpose. A "Delete" sitting a few pixels
+                    from "Delete pages" is a genuinely dangerous confusion — one
+                    removes a caption, the other removes whole pages. Deleting a
+                    selected item is the Delete key, which is where it is in
+                    every other canvas editor. */}
+                <ToolButton
+                  label={t("pdfTemplates.engineDeselect", "Deselect")}
+                  icon={XIcon}
+                  onClick={onDeselect}
+                />
+            </div>
+            </>
+          )}
+
           <div className="ms-auto flex shrink-0 items-center gap-2">
             {busy && <Loader2Icon className="size-4 animate-spin text-muted-foreground" />}
             <Button size="sm" onClick={onDownload} disabled={downloading || busy} className="gap-1.5">
@@ -186,134 +315,6 @@ export function PdfEditorToolbar({
               {t("pdfTemplates.masterDownload", "Download PDF")}
             </Button>
           </div>
-        </div>
-
-        {/* ── Row two: how the document is being LOOKED at, and whatever is
-            selected. Split off from the row above because these two answer
-            different questions — "what can I do to this document" against
-            "what am I looking at, and what have I got hold of" — and mixing
-            them left one long row where neither was easy to find. ── */}
-        {/* Only when something is selected. With zoom moved onto the wheel
-            and the floating bar, an always-present second row had nothing
-            left in it but a page number the floating bar already shows —
-            a full strip of chrome carrying one redundant label. */}
-        {selection && (
-        <div
-          data-pdf-toolbar-view
-          className="flex flex-wrap items-center gap-1 border-t px-3 py-1.5"
-        >
-          {/* Zoom is NOT here. Ctrl with the wheel does it, pinned to the
-              pointer, and the floating bar over the page carries the buttons
-              for anyone who would rather press something — putting a third
-              copy in the toolbar only made this row long enough to hide the
-              tools that have nowhere else to live. */}
-          <ToolButton
-            label={t("pdfTemplates.engineZoomToSelection", "Zoom to selection")}
-            icon={ScanSearchIcon}
-            onClick={onZoomToSelection}
-          />
-
-          <Divider />
-
-          {/* ── The selected item's own tools. ──
-              Visually grouped so it is obvious they belong to the selection
-              and not to the document, whose tools are in the row above and
-              stay put whatever is going on down here. */}
-          <div
-              data-pdf-toolbar-selection
-              className="ms-1 flex shrink-0 items-center gap-1 rounded-md bg-muted/70 px-1.5 py-1"
-            >
-              {selection.kind === "text" && (
-                <>
-                  <Button type="button" size="sm" variant="secondary" className="h-8 shrink-0 gap-1.5" onClick={onEditSelectedText}>
-                    <TypeIcon className="size-4" />
-                    {t("pdfTemplates.masterEditTextTitle", "Edit text")}
-                  </Button>
-                  {/* Formatting. Applied to the text ALREADY in the document
-                      rather than redrawing it, so the page keeps its own
-                      typeface — see textStyle.ts. */}
-                  <ToolButton
-                    label={t("pdfTemplates.engineBold", "Bold")}
-                    icon={BoldIcon}
-                    onClick={onToggleBold}
-                    active={textStyle?.bold}
-                  />
-                  <ToolButton
-                    label={t("pdfTemplates.engineItalic", "Italic")}
-                    icon={ItalicIcon}
-                    onClick={onToggleItalic}
-                    active={textStyle?.italic}
-                  />
-                  <ToolButton
-                    label={t("pdfTemplates.engineSmaller", "Smaller")}
-                    icon={MinusIcon}
-                    onClick={() => onScaleText(1 / 1.15)}
-                  />
-                  <ToolButton
-                    label={t("pdfTemplates.engineBigger", "Bigger")}
-                    icon={PlusIcon}
-                    onClick={() => onScaleText(1.15)}
-                  />
-                  <ToolButton label={t("pdfTemplates.engineAlignLeft", "Align left")} icon={AlignLeftIcon} onClick={() => onAlignText("left")} />
-                  <ToolButton label={t("pdfTemplates.engineAlignCenter", "Centre")} icon={AlignCenterIcon} onClick={() => onAlignText("center")} />
-                  <ToolButton label={t("pdfTemplates.engineAlignRight", "Align right")} icon={AlignRightIcon} onClick={() => onAlignText("right")} />
-                  <label
-                    className="flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-md border"
-                    title={t("pdfTemplates.engineTextColor", "Text colour")}
-                  >
-                    <input
-                      type="color"
-                      aria-label={t("pdfTemplates.engineTextColor", "Text colour")}
-                      className="size-5 cursor-pointer border-0 bg-transparent p-0"
-                      value={textStyle
-                        ? `#${[textStyle.color.r, textStyle.color.g, textStyle.color.b]
-                          .map((n) => n.toString(16).padStart(2, "0")).join("")}`
-                        : "#000000"}
-                      onChange={(e) => {
-                        const hex = e.target.value
-                        onTextColor({
-                          r: parseInt(hex.slice(1, 3), 16),
-                          g: parseInt(hex.slice(3, 5), 16),
-                          b: parseInt(hex.slice(5, 7), 16),
-                        })
-                      }}
-                    />
-                  </label>
-                </>
-              )}
-              {selection.kind === "image" && (
-                <>
-                  <Button type="button" size="sm" variant="secondary" className="h-8 shrink-0 gap-1.5" onClick={onReplaceSelectedImage}>
-                    <ImageIcon className="size-4" />
-                    {t("pdfTemplates.engineReplaceImage", "Replace image")}
-                  </Button>
-                  {/* Turning and flipping are matrix changes, so the picture is
-                      never re-encoded and loses no quality. */}
-                  <ToolButton label={t("pdfTemplates.engineRotateLeft", "Rotate left")} icon={RotateCcwIcon} onClick={() => onTransformImage("rotate-left")} />
-                  <ToolButton label={t("pdfTemplates.engineRotateRight", "Rotate right")} icon={RotateCwIcon} onClick={() => onTransformImage("rotate-right")} />
-                  <ToolButton label={t("pdfTemplates.engineFlipH", "Flip horizontally")} icon={FlipHorizontalIcon} onClick={() => onTransformImage("flip-horizontal")} />
-                  <ToolButton label={t("pdfTemplates.engineFlipV", "Flip vertically")} icon={FlipVerticalIcon} onClick={() => onTransformImage("flip-vertical")} />
-                </>
-              )}
-              {selection.kind === "vector" && (
-                <Button type="button" size="sm" variant="secondary" className="h-8 shrink-0 gap-1.5" onClick={onReplaceSelectedVector}>
-                  <ImageIcon className="size-4" />
-                  {t("pdfTemplates.engineReplaceArtwork", "Replace with image")}
-                </Button>
-              )}
-              {/* No delete here on purpose. A "Delete" sitting a few pixels
-                  from "Delete pages" is a genuinely dangerous confusion — one
-                  removes a caption, the other removes whole pages. Deleting a
-                  selected item is the Delete key, which is where it is in
-                  every other canvas editor. */}
-              <ToolButton
-                label={t("pdfTemplates.engineDeselect", "Deselect")}
-                icon={XIcon}
-                onClick={onDeselect}
-              />
-          </div>
-        </div>
-        )}
       </div>
     </TooltipProvider>
   )

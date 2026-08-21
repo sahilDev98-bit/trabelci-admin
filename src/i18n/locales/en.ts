@@ -1067,6 +1067,7 @@ const en = {
     engineZoomToSelection: "Zoom to selection",
     enginePageOf: "Page {{current}} of {{total}}",
     engineThumbnails: "Pages",
+    engineBackToTemplates: "Templates",
     engineGoToPage: "Go to page {{n}}",
     enginePageLabel: "Page",
     enginePreviousPage: "Previous page",

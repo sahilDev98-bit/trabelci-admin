@@ -76,7 +76,10 @@ export function PdfEngineViewportBar({
         >
           <ChevronUpIcon className="size-4" />
         </BarButton>
-        <span className="min-w-11 text-center tabular-nums">
+        {/* dir="ltr": "3 / 14" is a pair of numbers, not a sentence, and
+            under Hebrew the bidi algorithm reorders it on screen to read
+            "14 / 3" — the page you are on and the page count swapped. */}
+        <span data-pdf-page-counter dir="ltr" className="min-w-11 text-center tabular-nums">
           {currentPage} / {pageCount}
         </span>
         <BarButton
@@ -92,7 +95,7 @@ export function PdfEngineViewportBar({
         <BarButton label={t("pdfTemplates.engineZoomOut", "Zoom out")} onClick={onZoomOut}>
           <ZoomOutIcon className="size-4" />
         </BarButton>
-        <span className="min-w-11 text-center tabular-nums text-white/80">
+        <span dir="ltr" className="min-w-11 text-center tabular-nums text-white/80">
           {Math.round(zoomLevel * 100)}%
         </span>
         <BarButton label={t("pdfTemplates.engineZoomIn", "Zoom in")} onClick={onZoomIn}>

@@ -14,7 +14,7 @@
 import { createElement } from "react"
 import { createRoot } from "react-dom/client"
 
-import { PdfEngineFullscreen } from "./PdfEngineFullscreen"
+import { PdfEngineWorkspace } from "./PdfEngineWorkspace"
 import type { UsePdfEngineDocumentResult } from "./usePdfEngineDocument"
 
 export interface ViewerChromeTestResult {
@@ -126,7 +126,7 @@ export async function runViewerChromeSelfTest(): Promise<ViewerChromeTestResult>
   }
 
   const render = (doc: UsePdfEngineDocumentResult) => root.render(
-    createElement(PdfEngineFullscreen, {
+    createElement(PdfEngineWorkspace, {
       doc, documentName: "test.pdf", onExit: () => {}, onDisplayWidthChange: () => {},
       column: column as never, toolbar: toolbar as never, selection: null,
     }))
@@ -137,7 +137,7 @@ export async function runViewerChromeSelfTest(): Promise<ViewerChromeTestResult>
 
     const rail = host.querySelector<HTMLElement>("[data-pdf-thumbnail-rail]")
     const bar = host.querySelector<HTMLElement>("[data-pdf-viewport-bar]")
-    const scroller = host.querySelector<HTMLElement>("[data-pdf-fullscreen] .overflow-auto")
+    const scroller = host.querySelector<HTMLElement>("[data-pdf-workspace] .overflow-auto")
     if (!rail || !bar || !scroller) {
       out.errors.push(
         `missing chrome: rail=${!!rail} bar=${!!bar} pages=${!!scroller}`)

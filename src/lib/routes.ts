@@ -35,11 +35,6 @@ export const ROUTES = {
    * beside the old one. Same screen as CREATE_PDF_CUSTOMIZE now — it exists
    * only so links shared while it was being built still resolve. */
   CREATE_PDF_CUSTOMIZE_V2: "/create-pdf/customize-v2/$templateId",
-  /** The same engine editor, filling the whole page instead of a windowed
-   * column. A distinct route rather than an in-place overlay, so Expand
-   * gets a real URL: Back returns to the windowed view, and refreshing
-   * here reopens straight into full screen. */
-  CREATE_PDF_CUSTOMIZE_V2_FULLSCREEN: "/create-pdf/customize-v2/$templateId/fullscreen",
   AI_IMAGES: "/ai-images",
   EXTRACT_PRODUCT_PDF: "/extract-product-pdf",
 } as const
