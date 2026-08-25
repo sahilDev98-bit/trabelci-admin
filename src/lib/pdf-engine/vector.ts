@@ -127,6 +127,77 @@ export function listVectorGroups(
 }
 
 /** Delete a whole piece of artwork — every path that makes it up. */
+/**
+ * Move and/or resize a piece of vector artwork.
+ *
+ * Artwork made of paths — a logo, a QR code, a drawn mark — used to be the
+ * one thing on a page that could only be REPLACED, never nudged or scaled.
+ * That is not a limitation of the format: paths transform exactly like
+ * anything else, and a group is simply several of them that belong together.
+ * It only looked different because the editor treated it differently.
+ *
+ * Every path in the group gets the SAME transform, worked out once from the
+ * group's overall box, so the pieces keep their spacing and proportions
+ * relative to each other — transforming each to fit the target box on its
+ * own would pull a logo apart into overlapping fragments.
+ *
+ * The clip path travels too. Artwork is often drawn inside a clip, and
+ * moving the strokes out from under one that stays put is what turns a mark
+ * into a sliver of itself.
+ */
+export function setVectorGroupRect(
+  pdfium: WrappedPdfiumModule,
+  page: number,
+  handles: number[],
+  bbox: { left: number; bottom: number; right: number; top: number },
+  rect: { x: number; y: number; width: number; height: number },
+): { ok: boolean; error?: string } {
+  if (handles.length === 0) return { ok: false, error: "the artwork has no paths to move" }
+  const oldWidth = bbox.right - bbox.left
+  const oldHeight = bbox.top - bbox.bottom
+  // Guarded: a zero-sized box would scale by Infinity and lose the artwork.
+  const sx = Math.abs(oldWidth) > 1e-6 ? rect.width / oldWidth : 1
+  const sy = Math.abs(oldHeight) > 1e-6 ? rect.height / oldHeight : 1
+  const tx = rect.x - sx * bbox.left
+  const ty = rect.y - sy * bbox.bottom
+  for (const handle of handles) {
+    pdfium.FPDFPageObj_TransformClipPath(handle, sx, 0, 0, sy, tx, ty)
+    pdfium.FPDFPageObj_Transform(handle, sx, 0, 0, sy, tx, ty)
+  }
+  return { ok: pdfium.FPDFPage_GenerateContent(page) }
+}
+
+/**
+ * Turn or mirror a piece of artwork about its own centre.
+ *
+ * The same four operations an image offers, and the same arithmetic: the
+ * matrix is built about the origin and then shifted so the centre of the
+ * GROUP stays where it is. Every path gets that one matrix, so the pieces of
+ * a logo turn together instead of each spinning about its own middle.
+ */
+export function transformVectorGroup(
+  pdfium: WrappedPdfiumModule,
+  page: number,
+  handles: number[],
+  bbox: { left: number; bottom: number; right: number; top: number },
+  op: "rotate-left" | "rotate-right" | "flip-horizontal" | "flip-vertical",
+): { ok: boolean; error?: string } {
+  if (handles.length === 0) return { ok: false, error: "the artwork has no paths to turn" }
+  const cx = (bbox.left + bbox.right) / 2
+  const cy = (bbox.bottom + bbox.top) / 2
+  const m = op === "rotate-left" ? { a: 0, b: 1, c: -1, d: 0 }
+    : op === "rotate-right" ? { a: 0, b: -1, c: 1, d: 0 }
+      : op === "flip-horizontal" ? { a: -1, b: 0, c: 0, d: 1 }
+        : { a: 1, b: 0, c: 0, d: -1 }
+  const e = cx - (m.a * cx + m.c * cy)
+  const f = cy - (m.b * cx + m.d * cy)
+  for (const handle of handles) {
+    pdfium.FPDFPageObj_TransformClipPath(handle, m.a, m.b, m.c, m.d, e, f)
+    pdfium.FPDFPageObj_Transform(handle, m.a, m.b, m.c, m.d, e, f)
+  }
+  return { ok: pdfium.FPDFPage_GenerateContent(page) }
+}
+
 export function removeVectorGroup(
   pdfium: WrappedPdfiumModule, page: number, handles: number[],
 ): { ok: boolean; error?: string } {

@@ -61,6 +61,9 @@ interface PdfEditorToolbarProps {
   onTransformImage: (
     op: "rotate-left" | "rotate-right" | "flip-horizontal" | "flip-vertical",
   ) => void
+  onTransformVector: (
+    op: "rotate-left" | "rotate-right" | "flip-horizontal" | "flip-vertical",
+  ) => void
   /** Clears the selection, so the selection tools fold away again. */
   onDeselect: () => void
   onExit: () => void
@@ -108,7 +111,7 @@ export function PdfEditorToolbar({
   onAddText, onAddImage, onOpenOrganizer,
   onEditSelectedText, onReplaceSelectedImage, onReplaceSelectedVector,
   textStyle, onToggleBold, onToggleItalic, onTextColor, onScaleText, onAlignText,
-  onTransformImage,
+  onTransformImage, onTransformVector,
   onDeselect, onExit, onDownload, downloading, busy,
 }: PdfEditorToolbarProps) {
   const { t } = useTranslation()
@@ -288,11 +291,21 @@ export function PdfEditorToolbar({
                     <ToolButton label={t("pdfTemplates.engineFlipV", "Flip vertically")} icon={FlipVerticalIcon} onClick={() => onTransformImage("flip-vertical")} />
                   </>
                 )}
+                {/* Artwork offers exactly what an image offers. It used to
+                    offer only "replace", which made a logo a visibly weaker
+                    kind of picture for no reason a user could see — paths
+                    turn and scale at least as well as pixels do. */}
                 {selection.kind === "vector" && (
-                  <Button type="button" size="sm" variant="secondary" className="h-8 shrink-0 gap-1.5" onClick={onReplaceSelectedVector}>
-                    <ImageIcon className="size-4" />
-                    {t("pdfTemplates.engineReplaceArtwork", "Replace with image")}
-                  </Button>
+                  <>
+                    <Button type="button" size="sm" variant="secondary" className="h-8 shrink-0 gap-1.5" onClick={onReplaceSelectedVector}>
+                      <ImageIcon className="size-4" />
+                      {t("pdfTemplates.engineReplaceArtwork", "Replace with image")}
+                    </Button>
+                    <ToolButton label={t("pdfTemplates.engineRotateLeft", "Rotate left")} icon={RotateCcwIcon} onClick={() => onTransformVector("rotate-left")} />
+                    <ToolButton label={t("pdfTemplates.engineRotateRight", "Rotate right")} icon={RotateCwIcon} onClick={() => onTransformVector("rotate-right")} />
+                    <ToolButton label={t("pdfTemplates.engineFlipH", "Flip horizontally")} icon={FlipHorizontalIcon} onClick={() => onTransformVector("flip-horizontal")} />
+                    <ToolButton label={t("pdfTemplates.engineFlipV", "Flip vertically")} icon={FlipVerticalIcon} onClick={() => onTransformVector("flip-vertical")} />
+                  </>
                 )}
                 {/* No delete here on purpose. A "Delete" sitting a few pixels
                     from "Delete pages" is a genuinely dangerous confusion — one

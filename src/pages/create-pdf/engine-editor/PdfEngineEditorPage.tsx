@@ -230,7 +230,8 @@ export function PdfEngineEditorPage() {
   /** Anything that keeps the selection on the same item after the engine
    * renumbers it. */
   const runOnSelection = useCallback((
-    kind: "text" | "image", run: (pageIndex: number, index: number) => Promise<number>,
+    kind: "text" | "image" | "vector",
+    run: (pageIndex: number, index: number) => Promise<number>,
   ) => {
     if (!selection || selection.kind !== kind) return
     const { pageIndex, index } = selection
@@ -487,6 +488,21 @@ export function PdfEngineEditorPage() {
     }
   }
 
+  /** Artwork moves and resizes exactly as an image does — the engine
+   * transforms every path in the group by one transform, so a logo keeps its
+   * proportions and its pieces stay together. */
+  const handleTransformVector = async (
+    pageIndex: number, vectorIndex: number,
+    rect: { x: number; y: number; width: number; height: number },
+  ) => {
+    try {
+      const next = await doc.setVectorRect(pageIndex, vectorIndex, rect)
+      if (next >= 0) setSelection({ pageIndex, kind: "vector", index: next })
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : String(err))
+    }
+  }
+
   /** Dropped straight onto an existing photo — same as picking a file for
    * it, so it keeps that slot's position, size and shape. */
   const handleDropOnImage = async (pageIndex: number, imageIndex: number, file: File) => {
@@ -667,6 +683,10 @@ export function PdfEngineEditorPage() {
       pageIndex: number, imageIndex: number,
       rect: { x: number; y: number; width: number; height: number },
     ) => void handleTransformImage(pageIndex, imageIndex, rect),
+    onTransformVector: (
+      pageIndex: number, vectorIndex: number,
+      rect: { x: number; y: number; width: number; height: number },
+    ) => void handleTransformVector(pageIndex, vectorIndex, rect),
     onResizeText: (pageIndex: number, lineIndex: number, fontSize: number, maxWidth: number) =>
       void handleResizeText(pageIndex, lineIndex, fontSize, maxWidth),
   }
@@ -758,6 +778,8 @@ export function PdfEngineEditorPage() {
             runOnSelection("text", (p, i) => doc.alignText(p, i, alignment)),
           onTransformImage: (op) =>
             runOnSelection("image", (p, i) => doc.transformImage(p, i, op)),
+          onTransformVector: (op) =>
+            runOnSelection("vector", (p, i) => doc.transformVector(p, i, op)),
           onDownload: () => void handleDownload(),
           downloading,
           busy: doc.busy,

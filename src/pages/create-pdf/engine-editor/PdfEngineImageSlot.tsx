@@ -90,7 +90,7 @@ export function PdfEngineImageSlot({
           ? "bg-emerald-500/25 ring-2 ring-emerald-500"
           : selected
             ? "ring-2 ring-sky-500"
-            : "ring-1 ring-amber-500/40 hover:ring-2 hover:ring-amber-500/80"
+            : "ring-1 ring-amber-500/70 hover:ring-2 hover:ring-amber-600"
       } ${selected ? "cursor-move" : "cursor-pointer"}`}
       data-pdf-image-slot
       // The area around it is pinned to physical left-to-right for its

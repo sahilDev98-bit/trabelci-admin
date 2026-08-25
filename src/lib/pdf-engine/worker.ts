@@ -17,14 +17,18 @@ import { Scratch, type PdfRect, type WrappedPdfiumModule } from "./core"
 import { getPdfium, getFallbackFont, type FallbackFontKey } from "./loader"
 import {
   openDocument, listTextObjects, rebuildGroupWithWrappedText, renderPageToRGBA,
+  type TextObjectInfo,
   saveDocument, translateTextGroup, removeTextGroup, moveTextGroupToPage, DocumentFonts,
 } from "./text"
 import { groupIntoLines, effectiveFontSize, isRtlText } from "./grouping"
+import { flattenFormsIfLossless } from "./flatten"
 import {
   listImageObjects, replaceImageBytes, removeImageObject, setImageRect,
   moveImageObjectToPage, renderImageObject, transformImageObject,
 } from "./image"
-import { listVectorGroups, removeVectorGroup } from "./vector"
+import {
+  listVectorGroups, removeVectorGroup, setVectorGroupRect, transformVectorGroup,
+} from "./vector"
 import { renderRegion, renderRegionWithout } from "./patch"
 import { applyTextStyle, readTextStyle, scaleTextSize, alignTextGroup } from "./textStyle"
 import { listPages, buildDocumentFromPlan } from "./pages"
@@ -119,7 +123,7 @@ function withTwoPages<T>(
 function textLineIndexOfHandle(
   pdfium: WrappedPdfiumModule, page: number, scratch: Scratch, handle: number,
 ): number {
-  const objs = listTextObjects(pdfium, page, scratch).filter((o) => o.text.trim() !== "")
+  const objs = listTextObjects(pdfium, page, scratch).filter(isEditableText)
   return groupIntoLines(objs).findIndex((g) => g.objects.some((o) => o.handle === handle))
 }
 
@@ -142,6 +146,25 @@ function imageIndexOfHandle(
  * the exact box can leave a faint edge of the old drawing behind.
  */
 const CHANGED_RECT_PAD_PTS = 3
+
+/**
+ * Which text objects this editor will offer as editable lines.
+ *
+ * Blank pieces are dropped because there is nothing to edit in them, and so
+ * is anything still inside a Form XObject. Text in a form is normally lifted
+ * onto the page when the document is opened — but that is only done when it
+ * provably changes nothing on screen, and on files where it would have, the
+ * form stays. PDFium cannot rewrite a form's instructions, so an edit to
+ * text inside one is discarded when the file is saved.
+ *
+ * Offering a box for it anyway would be the worst of the options: it would
+ * look editable, accept the edit, and lose it silently at the moment the
+ * customer downloads their catalogue. Better to leave it plainly not
+ * editable, as it was.
+ */
+function isEditableText(o: TextObjectInfo): boolean {
+  return o.text.trim() !== "" && o.parentForm === null
+}
 
 function unionRect(
   a: PdfRect | null | undefined, b: PdfRect | null | undefined,
@@ -170,7 +193,7 @@ function padRect(r: PdfRect | undefined): PdfRect | undefined {
 function textLineRect(
   pdfium: WrappedPdfiumModule, page: number, scratch: Scratch, index: number,
 ): PdfRect | undefined {
-  const objs = listTextObjects(pdfium, page, scratch).filter((o) => o.text.trim() !== "")
+  const objs = listTextObjects(pdfium, page, scratch).filter(isEditableText)
   const line = groupIntoLines(objs)[index]
   if (!line) return undefined
   const bounds = line.objects.map((o) => o.bounds).filter((b): b is NonNullable<typeof b> => b !== null)
@@ -196,9 +219,30 @@ const handlers: {
   ) => Promise<EngineMethods[M]["result"]> | EngineMethods[M]["result"]
 } = {
   open: ({ bytes }, { pdfium }) => {
-    const scratch = new Scratch(pdfium)
-    const handle = openDocument(pdfium, new Uint8Array(bytes), scratch)
+    const firstScratch = new Scratch(pdfium)
+    const firstAttempt = openDocument(pdfium, new Uint8Array(bytes), firstScratch)
     const docId = `doc${nextDocId++}`
+
+    // Text inside a Form XObject is drawn on the page but is not a child of
+    // it, so nothing downstream could see it: it had no edit box and could
+    // not be selected, while identical text beside it worked. Editing it
+    // where it sits is not possible either — PDFium never rewrites a form's
+    // instructions, so the change is silently lost on save.
+    //
+    // Done once here, at the door, so no code past this point has to know
+    // that forms exist. It is only kept when it provably changes nothing on
+    // screen; when it does not, the document is thrown away and reopened
+    // untouched, and that text stays uneditable rather than the design being
+    // damaged to make it editable.
+    let handle = firstAttempt
+    let scratch = firstScratch
+    if (!flattenFormsIfLossless(pdfium, handle, scratch)) {
+      pdfium.FPDF_CloseDocument(handle)
+      scratch.free()
+      scratch = new Scratch(pdfium)
+      handle = openDocument(pdfium, new Uint8Array(bytes), scratch)
+    }
+
     docs.set(docId, { handle, scratch, fonts: new DocumentFonts(pdfium, handle) })
     return { docId, pages: toEnginePages(pdfium, handle) }
   },
@@ -230,7 +274,7 @@ const handlers: {
   listTextLines: ({ docId, pageIndex }, { pdfium }) => {
     const doc = requireDoc(docId)
     return withPage(pdfium, doc.handle, pageIndex, (page) => {
-      const objs = listTextObjects(pdfium, page, doc.scratch).filter((o) => o.text.trim() !== "")
+      const objs = listTextObjects(pdfium, page, doc.scratch).filter(isEditableText)
       const lines: EngineTextLine[] = groupIntoLines(objs).map((line, lineIndex) => {
         const left = Math.min(...line.objects.map((o) => o.bounds?.left ?? o.matrix.e))
         const right = Math.max(...line.objects.map((o) => o.bounds?.right ?? o.matrix.e))
@@ -260,7 +304,7 @@ const handlers: {
     const doc = requireDoc(docId)
     const { bytes, metrics } = await font(options?.font ?? (isRtlText(newText) ? "hebrew" : "regular"))
     return withPage(pdfium, doc.handle, pageIndex, (page) => {
-      const objs = listTextObjects(pdfium, page, doc.scratch).filter((o) => o.text.trim() !== "")
+      const objs = listTextObjects(pdfium, page, doc.scratch).filter(isEditableText)
       const line = groupIntoLines(objs)[lineIndex]
       if (!line) throw new Error(`No text line at index ${lineIndex} on page ${pageIndex}`)
       const r = rebuildGroupWithWrappedText(
@@ -375,7 +419,7 @@ const handlers: {
       let rect: { left: number; bottom: number; right: number; top: number } | null = null
 
       if (kind === "text") {
-        const objs = listTextObjects(pdfium, page, doc.scratch).filter((o) => o.text.trim() !== "")
+        const objs = listTextObjects(pdfium, page, doc.scratch).filter(isEditableText)
         const line = groupIntoLines(objs)[index]
         if (!line) return empty
         objects = line.objects.map((o) => ({ index: o.index, handle: o.handle }))
@@ -415,6 +459,44 @@ const handlers: {
         pathCount: g.pathCount,
       })),
     }))
+  },
+
+  setVectorGroupRect: ({ docId, pageIndex, vectorIndex, rect }, { pdfium }) => {
+    const doc = requireDoc(docId)
+    return withPage(pdfium, doc.handle, pageIndex, (page) => {
+      const target = listVectorGroups(pdfium, page, doc.scratch)[vectorIndex]
+      if (!target) throw new Error(`No artwork at index ${vectorIndex} on page ${pageIndex}`)
+      const beforeRect = target.bbox
+      const r = setVectorGroupRect(pdfium, page, target.handles, target.bbox, rect)
+      if (!r.ok) throw new Error(r.error ?? "could not move the artwork")
+      // Re-found by position rather than by index: moving artwork can change
+      // where it sorts among the other groups on the page.
+      const after = listVectorGroups(pdfium, page, doc.scratch)
+      const newIndex = after.findIndex((g) => g.handles[0] === target.handles[0])
+      return {
+        ok: true,
+        newIndex: newIndex >= 0 ? newIndex : vectorIndex,
+        changedRect: padRect(unionRect(beforeRect, after[newIndex]?.bbox)),
+      }
+    })
+  },
+
+  transformVectorGroup: ({ docId, pageIndex, vectorIndex, op }, { pdfium }) => {
+    const doc = requireDoc(docId)
+    return withPage(pdfium, doc.handle, pageIndex, (page) => {
+      const target = listVectorGroups(pdfium, page, doc.scratch)[vectorIndex]
+      if (!target) throw new Error(`No artwork at index ${vectorIndex} on page ${pageIndex}`)
+      const beforeRect = target.bbox
+      const r = transformVectorGroup(pdfium, page, target.handles, target.bbox, op)
+      if (!r.ok) throw new Error(r.error ?? "could not turn the artwork")
+      const after = listVectorGroups(pdfium, page, doc.scratch)
+      const newIndex = after.findIndex((g) => g.handles[0] === target.handles[0])
+      return {
+        ok: true,
+        newIndex: newIndex >= 0 ? newIndex : vectorIndex,
+        changedRect: padRect(unionRect(beforeRect, after[newIndex]?.bbox)),
+      }
+    })
   },
 
   removeVectorGroup: ({ docId, pageIndex, vectorIndex }, { pdfium }) => {
@@ -458,7 +540,7 @@ const handlers: {
   removeTextLine: ({ docId, pageIndex, lineIndex }, { pdfium }) => {
     const doc = requireDoc(docId)
     return withPage(pdfium, doc.handle, pageIndex, (page) => {
-      const objs = listTextObjects(pdfium, page, doc.scratch).filter((o) => o.text.trim() !== "")
+      const objs = listTextObjects(pdfium, page, doc.scratch).filter(isEditableText)
       const line = groupIntoLines(objs)[lineIndex]
       if (!line) throw new Error(`No text line at index ${lineIndex} on page ${pageIndex}`)
       const r = removeTextGroup(pdfium, page, line.objects)
@@ -471,7 +553,7 @@ const handlers: {
     const doc = requireDoc(docId)
     if (sourcePageIndex === targetPageIndex) throw new Error("source and target page are the same")
     return withTwoPages(pdfium, doc.handle, sourcePageIndex, targetPageIndex, (src, dst) => {
-      const objs = listTextObjects(pdfium, src, doc.scratch).filter((o) => o.text.trim() !== "")
+      const objs = listTextObjects(pdfium, src, doc.scratch).filter(isEditableText)
       const line = groupIntoLines(objs)[lineIndex]
       if (!line) throw new Error(`No text line at index ${lineIndex} on page ${sourcePageIndex}`)
       const anchorHandle = line.anchor.handle
@@ -496,7 +578,7 @@ const handlers: {
   styleTextLine: ({ docId, pageIndex, lineIndex, style }, { pdfium }) => {
     const doc = requireDoc(docId)
     return withPage(pdfium, doc.handle, pageIndex, (page) => {
-      const objs = listTextObjects(pdfium, page, doc.scratch).filter((o) => o.text.trim() !== "")
+      const objs = listTextObjects(pdfium, page, doc.scratch).filter(isEditableText)
       const line = groupIntoLines(objs)[lineIndex]
       if (!line) throw new Error(`No text line at index ${lineIndex} on page ${pageIndex}`)
       const anchorHandle = line.anchor.handle
@@ -514,7 +596,7 @@ const handlers: {
   scaleTextLine: ({ docId, pageIndex, lineIndex, factor }, { pdfium }) => {
     const doc = requireDoc(docId)
     return withPage(pdfium, doc.handle, pageIndex, (page) => {
-      const objs = listTextObjects(pdfium, page, doc.scratch).filter((o) => o.text.trim() !== "")
+      const objs = listTextObjects(pdfium, page, doc.scratch).filter(isEditableText)
       const line = groupIntoLines(objs)[lineIndex]
       if (!line) throw new Error(`No text line at index ${lineIndex} on page ${pageIndex}`)
       const anchorHandle = line.anchor.handle
@@ -532,7 +614,7 @@ const handlers: {
   alignTextLine: ({ docId, pageIndex, lineIndex, alignment }, { pdfium }) => {
     const doc = requireDoc(docId)
     return withPage(pdfium, doc.handle, pageIndex, (page) => {
-      const objs = listTextObjects(pdfium, page, doc.scratch).filter((o) => o.text.trim() !== "")
+      const objs = listTextObjects(pdfium, page, doc.scratch).filter(isEditableText)
       const line = groupIntoLines(objs)[lineIndex]
       if (!line) throw new Error(`No text line at index ${lineIndex} on page ${pageIndex}`)
       const anchorHandle = line.anchor.handle
@@ -568,7 +650,7 @@ const handlers: {
   moveTextLine: ({ docId, pageIndex, lineIndex, dx, dy }, { pdfium }) => {
     const doc = requireDoc(docId)
     return withPage(pdfium, doc.handle, pageIndex, (page) => {
-      const objs = listTextObjects(pdfium, page, doc.scratch).filter((o) => o.text.trim() !== "")
+      const objs = listTextObjects(pdfium, page, doc.scratch).filter(isEditableText)
       const line = groupIntoLines(objs)[lineIndex]
       if (!line) throw new Error(`No text line at index ${lineIndex} on page ${pageIndex}`)
       const anchorHandle = line.anchor.handle

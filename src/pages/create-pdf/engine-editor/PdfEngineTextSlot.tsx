@@ -84,7 +84,14 @@ export function PdfEngineTextSlot({
       className={`absolute rounded-[2px] transition-shadow ${
         selected
           ? "cursor-move bg-blue-500/5 ring-2 ring-blue-600"
-          : "cursor-text ring-1 ring-blue-500/30 hover:bg-blue-500/10 hover:ring-2 hover:ring-blue-500/70"
+          // Visible at rest, not just on hover. At 30% opacity a one-pixel
+          // ring around 8pt text is invisible on white paper at ordinary
+          // zoom — which made perfectly editable lines look like plain
+          // artwork, and was reported as "this text cannot be edited". The
+          // page below is the customer's design and should stay readable, so
+          // this is the lightest outline that can actually be SEEN rather
+          // than the lightest that can be drawn.
+          : "cursor-text ring-1 ring-blue-500/70 hover:bg-blue-500/10 hover:ring-2 hover:ring-blue-600"
       }`}
       data-pdf-text-slot
       // The area around it is pinned to physical left-to-right for its

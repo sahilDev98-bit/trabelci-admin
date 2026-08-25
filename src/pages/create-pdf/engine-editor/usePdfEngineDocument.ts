@@ -27,6 +27,13 @@ import { fetchPdfMasterTemplateSource } from "@/features/pdfTemplates/api"
  * document in WASM memory for the life of the tab.
  */
 
+/** How many times a page's "what is on it" request is attempted before it
+ * is given up on. Three covers a transient failure without making a real
+ * one take noticeably long to report. */
+const LOAD_ATTEMPTS = 3
+/** Base wait between those attempts; it lengthens with each one. */
+const LOAD_RETRY_MS = 150
+
 export type LoadPhase = "idle" | "downloading" | "opening" | "ready" | "error"
 
 export interface PageTextState {
@@ -79,6 +86,16 @@ export interface UsePdfEngineDocumentResult {
   lastChange: { pageIndex: number; rect: PdfRect; revision: number } | null
   loadPageVectors: (pageIndex: number) => Promise<void>
   removeVector: (pageIndex: number, vectorIndex: number) => Promise<void>
+  /** Turn or mirror artwork, exactly as an image turns. */
+  transformVector: (
+    pageIndex: number, vectorIndex: number,
+    op: "rotate-left" | "rotate-right" | "flip-horizontal" | "flip-vertical",
+  ) => Promise<number>
+  /** Move/resize a piece of artwork, exactly as an image moves. */
+  setVectorRect: (
+    pageIndex: number, vectorIndex: number,
+    rect: { x: number; y: number; width: number; height: number },
+  ) => Promise<number>
   styleText: (
     pageIndex: number, lineIndex: number,
     style: { bold: boolean; italic: boolean; color: { r: number; g: number; b: number } },
@@ -234,26 +251,73 @@ export function usePdfEngineDocument(templateId: string | null | undefined): Use
     return () => { cancelled = true }
   }, [templateId, getEngine])
 
+  /**
+   * Runs one page's "what is on it" request, and does not give up quietly.
+   *
+   * These three are what make a page editable at all. The component asks for
+   * each one ONCE — when the page scrolls into view — and never asks again,
+   * because the thing that would trigger a second attempt (the page becoming
+   * visible) has already happened and does not repeat. So a request that
+   * failed used to leave that page with no editable anything for the rest of
+   * the session, with nothing thrown to the console, nothing on screen, and
+   * no way for the user to recover except reloading. It looked exactly like
+   * "the text on this page cannot be edited".
+   *
+   * A few short retries turn the failures that are worth surviving — a
+   * moment of contention, a request that lost a race with a page reorder —
+   * into a hesitation instead of a dead page. If it still cannot be done,
+   * the page is left UNLOADED rather than marked empty: an unloaded page is
+   * honest about knowing nothing, while an empty one silently claims the
+   * page has nothing on it.
+   */
+  const loadWithRetry = useCallback(async <T,>(
+    what: string,
+    pageIndex: number,
+    run: (docId: string) => Promise<T>,
+    store: (value: T) => void,
+  ) => {
+    for (let attempt = 0; attempt < LOAD_ATTEMPTS; attempt++) {
+      const id = docIdRef.current
+      if (!id) return
+      try {
+        store(await run(id))
+        return
+      } catch (err) {
+        // The last attempt is the one worth reporting: the earlier ones are
+        // expected to fail occasionally and recover, and logging each would
+        // turn a hesitation into a wall of noise.
+        if (attempt === LOAD_ATTEMPTS - 1) {
+          console.error(`could not load ${what} for page ${pageIndex + 1}`, err)
+          return
+        }
+        await new Promise((resolve) => setTimeout(resolve, LOAD_RETRY_MS * (attempt + 1)))
+      }
+    }
+  }, [])
+
   const loadPageText = useCallback(async (pageIndex: number) => {
-    const id = docIdRef.current
-    if (!id) return
-    const { lines } = await getEngine().listTextLines(id, pageIndex)
-    setPageText((prev) => ({ ...prev, [pageIndex]: { lines, loaded: true } }))
-  }, [getEngine])
+    await loadWithRetry(
+      "the editable text", pageIndex,
+      (id) => getEngine().listTextLines(id, pageIndex),
+      ({ lines }) => setPageText((prev) => ({ ...prev, [pageIndex]: { lines, loaded: true } })),
+    )
+  }, [getEngine, loadWithRetry])
 
   const loadPageVectors = useCallback(async (pageIndex: number) => {
-    const id = docIdRef.current
-    if (!id) return
-    const { groups } = await getEngine().listVectorGroups(id, pageIndex)
-    setPageVectors((prev) => ({ ...prev, [pageIndex]: { groups, loaded: true } }))
-  }, [getEngine])
+    await loadWithRetry(
+      "the artwork", pageIndex,
+      (id) => getEngine().listVectorGroups(id, pageIndex),
+      ({ groups }) => setPageVectors((prev) => ({ ...prev, [pageIndex]: { groups, loaded: true } })),
+    )
+  }, [getEngine, loadWithRetry])
 
   const loadPageImages = useCallback(async (pageIndex: number) => {
-    const id = docIdRef.current
-    if (!id) return
-    const { images } = await getEngine().listImages(id, pageIndex)
-    setPageImages((prev) => ({ ...prev, [pageIndex]: { images, loaded: true } }))
-  }, [getEngine])
+    await loadWithRetry(
+      "the images", pageIndex,
+      (id) => getEngine().listImages(id, pageIndex),
+      ({ images }) => setPageImages((prev) => ({ ...prev, [pageIndex]: { images, loaded: true } })),
+    )
+  }, [getEngine, loadWithRetry])
 
   /**
    * A picture of a slot's area with the slot itself left out, as a data URL.
@@ -408,6 +472,24 @@ export function usePdfEngineDocument(templateId: string | null | undefined): Use
     return r?.newIndex ?? -1
   }, [getEngine, mutate])
 
+  const setVectorRect = useCallback(async (
+    pageIndex: number, vectorIndex: number,
+    rect: { x: number; y: number; width: number; height: number },
+  ) => {
+    const r = await mutate(pageIndex, (id) =>
+      getEngine().setVectorGroupRect(id, pageIndex, vectorIndex, rect))
+    return r?.newIndex ?? -1
+  }, [mutate, getEngine])
+
+  const transformVector = useCallback(async (
+    pageIndex: number, vectorIndex: number,
+    op: "rotate-left" | "rotate-right" | "flip-horizontal" | "flip-vertical",
+  ) => {
+    const r = await mutate(pageIndex, (id) =>
+      getEngine().transformVectorGroup(id, pageIndex, vectorIndex, op))
+    return r?.newIndex ?? -1
+  }, [mutate, getEngine])
+
   const removeVector = useCallback(async (pageIndex: number, vectorIndex: number) => {
     await mutate(pageIndex, (id) => getEngine().removeVectorGroup(id, pageIndex, vectorIndex).then(() => undefined))
   }, [getEngine, mutate])
@@ -527,14 +609,14 @@ export function usePdfEngineDocument(templateId: string | null | undefined): Use
     phase, error, downloadPercent, pages, docId, pageText, pageImages,
     loadPageText, loadPageImages, loadPageVectors, pageVectors,
     renderCleanPatch, renderImagePreview, renderPageRegion, lastChange,
-    removeVector, replaceVector, styleText, scaleText, alignText, transformImage, renderPage, editText, moveText, moveTextToPage, moveImageToPage, removeText,
+    removeVector, replaceVector, setVectorRect, transformVector, styleText, scaleText, alignText, transformImage, renderPage, editText, moveText, moveTextToPage, moveImageToPage, removeText,
     replaceImage, removeImage, setImageRect, addTextOverlay, addImageOverlay, applyPagePlan,
     save, busy, revision,
   }), [
     phase, error, downloadPercent, pages, docId, pageText, pageImages,
     loadPageText, loadPageImages, loadPageVectors, pageVectors,
     renderCleanPatch, renderImagePreview, renderPageRegion, lastChange,
-    removeVector, replaceVector, styleText, scaleText, alignText, transformImage,
+    removeVector, replaceVector, setVectorRect, transformVector, styleText, scaleText, alignText, transformImage,
     renderPage, editText, moveText, moveTextToPage, moveImageToPage, removeText,
     replaceImage, removeImage, setImageRect, addTextOverlay, addImageOverlay,
     applyPagePlan, save, busy, revision,

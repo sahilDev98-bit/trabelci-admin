@@ -18,6 +18,9 @@ import { useCallback, useEffect, useRef, useState } from "react"
 
 export type ResizeHandle = "nw" | "ne" | "sw" | "se"
 
+/** A whole-box drag, as opposed to one of its corners. */
+type GestureKind = ResizeHandle | "move"
+
 export interface BoxRectPx {
   left: number
   top: number
@@ -46,6 +49,8 @@ export interface UseBoxTransformResult {
   rect: BoxRectPx
   dragging: boolean
   startResize: (e: React.PointerEvent, handle: ResizeHandle) => void
+  /** Drag the whole box, keeping its size. */
+  startMove: (e: React.PointerEvent) => void
 }
 
 export function useBoxTransform({
@@ -56,7 +61,7 @@ export function useBoxTransform({
    * reaching for it inside a state updater — see finish(). */
   const liveRef = useRef<BoxRectPx | null>(null)
   const gesture = useRef<{
-    kind: ResizeHandle
+    kind: GestureKind
     startX: number
     startY: number
     origin: BoxRectPx
@@ -91,6 +96,18 @@ export function useBoxTransform({
       const dx = e.clientX - g.startX
       const dy = e.clientY - g.startY
       const o = g.origin
+
+      // A whole-box drag keeps its size and only changes where it starts;
+      // the clamping below then keeps it on the paper.
+      if (g.kind === "move") {
+        applyLive({
+          left: Math.min(Math.max(0, o.left + dx), pageWidth - o.width),
+          top: Math.min(Math.max(0, o.top + dy), pageHeight - o.height),
+          width: o.width,
+          height: o.height,
+        })
+        return
+      }
 
       // Each corner moves its own two edges; the opposite corner stays
       // pinned, which is what makes a resize feel like dragging a corner
@@ -131,7 +148,7 @@ export function useBoxTransform({
     }
   }, [live, pageWidth, pageHeight, finish, applyLive])
 
-  const begin = (e: React.PointerEvent, kind: ResizeHandle) => {
+  const begin = (e: React.PointerEvent, kind: GestureKind) => {
     if (disabled) return
     e.preventDefault()
     e.stopPropagation()
@@ -145,5 +162,6 @@ export function useBoxTransform({
     rect: committed,
     dragging: live !== null,
     startResize: (e, handle) => begin(e, handle),
+    startMove: (e) => begin(e, "move"),
   }
 }

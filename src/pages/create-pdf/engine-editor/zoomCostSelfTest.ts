@@ -96,6 +96,7 @@ export async function runZoomCostSelfTest(pdfUrl: string): Promise<ZoomCostTestR
       onDropOnImage: () => {},
       onDropOnPage: () => {},
       onTransformImage: () => {},
+      onTransformVector: () => {},
       onResizeText: () => {},
     }))
 

@@ -175,6 +175,7 @@ export async function runWorkspaceSelfTest(): Promise<WorkspaceTestResult> {
       onDropOnImage: () => {},
       onDropOnPage: () => {},
       onTransformImage: () => {},
+      onTransformVector: () => {},
       onResizeText: () => {},
     }
     const toolbar = {
@@ -195,6 +196,7 @@ export async function runWorkspaceSelfTest(): Promise<WorkspaceTestResult> {
       onScaleText: () => {},
       onAlignText: () => {},
       onTransformImage: () => {},
+      onTransformVector: () => {},
       onDownload: () => {},
       downloading: false,
       busy: false,

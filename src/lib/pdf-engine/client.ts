@@ -127,6 +127,22 @@ export class PdfEngineClient {
     return this.call("listVectorGroups", { docId, pageIndex })
   }
 
+  /** Move/resize a piece of vector artwork, exactly as an image moves. */
+  setVectorGroupRect(
+    docId: string, pageIndex: number, vectorIndex: number,
+    rect: { x: number; y: number; width: number; height: number },
+  ): Promise<EngineMethods["setVectorGroupRect"]["result"]> {
+    return this.call("setVectorGroupRect", { docId, pageIndex, vectorIndex, rect })
+  }
+
+  /** Turn or mirror artwork, exactly as an image turns. */
+  transformVectorGroup(
+    docId: string, pageIndex: number, vectorIndex: number,
+    op: "rotate-left" | "rotate-right" | "flip-horizontal" | "flip-vertical",
+  ): Promise<EngineMethods["transformVectorGroup"]["result"]> {
+    return this.call("transformVectorGroup", { docId, pageIndex, vectorIndex, op })
+  }
+
   removeVectorGroup(docId: string, pageIndex: number, vectorIndex: number): Promise<{ ok: boolean }> {
     return this.call("removeVectorGroup", { docId, pageIndex, vectorIndex })
   }

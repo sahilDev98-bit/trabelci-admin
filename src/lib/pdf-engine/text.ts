@@ -8,7 +8,7 @@ import type { WrappedPdfiumModule } from "@embedpdf/pdfium"
 // Imports the environment-agnostic core, NOT the Node entry point — this
 // module must stay loadable in the browser, so it can never pull in
 // node:fs transitively.
-import { FONT_TYPE, PAGEOBJ_TYPE, Scratch } from "./core"
+import { FONT_TYPE, PAGEOBJ_TYPE, Scratch, type PdfMatrix } from "./core"
 import { effectiveFontSize } from "./grouping"
 import {
   layoutText, measureTextWidth, lineX, defaultAlignFor,
@@ -29,6 +29,23 @@ export interface TextObjectInfo {
   fontDataLength: number
   /** Fill colour, 0-255 each. */
   fill: { r: number; g: number; b: number; a: number }
+  /**
+   * The Form XObject this text lives inside, or null when it sits directly
+   * on the page.
+   *
+   * A form is a reusable container of drawing instructions — designers get
+   * them from grouped or placed artwork, and the text inside one is drawn on
+   * the page exactly like any other text. It is NOT reachable through the
+   * page's own object list, so text in a form was invisible to this editor:
+   * it appeared on screen, could not be selected, and had no edit box, while
+   * identical-looking text beside it worked. That is what "some text is not
+   * editable" turned out to be.
+   *
+   * Recorded rather than hidden, because the operations that can be applied
+   * differ: an object inside a form is not a child of the page, so it cannot
+   * be removed from the page or re-inserted into it by the usual calls.
+   */
+  parentForm: number | null
 }
 
 export function openDocument(pdfium: WrappedPdfiumModule, bytes: Uint8Array, scratch: Scratch): number {
@@ -43,14 +60,77 @@ export function openDocument(pdfium: WrappedPdfiumModule, bytes: Uint8Array, scr
 
 /** All TEXT-type objects on one page, with their real PDFium-reported
  * properties — never a reconstructed/guessed hotspot. */
+/** m applied after n — the child's own transform, then its container's. */
+function concatMatrix(child: PdfMatrix, parent: PdfMatrix): PdfMatrix {
+  return {
+    a: child.a * parent.a + child.b * parent.c,
+    b: child.a * parent.b + child.b * parent.d,
+    c: child.c * parent.a + child.d * parent.c,
+    d: child.c * parent.b + child.d * parent.d,
+    e: child.e * parent.a + child.f * parent.c + parent.e,
+    f: child.e * parent.b + child.f * parent.d + parent.f,
+  }
+}
+
+const IDENTITY: PdfMatrix = { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 }
+
+/** A box through a matrix: all four corners, then the box around them.
+ * Only the corners can be transformed — a rotated or mirrored container
+ * turns a rectangle into a quadrilateral, and the upright box around it is
+ * what a hotspot needs. */
+function transformBounds(
+  b: { left: number; bottom: number; right: number; top: number },
+  m: PdfMatrix,
+): { left: number; bottom: number; right: number; top: number } {
+  const xs: number[] = []
+  const ys: number[] = []
+  for (const [x, y] of [
+    [b.left, b.bottom], [b.right, b.bottom], [b.right, b.top], [b.left, b.top],
+  ] as const) {
+    xs.push(x * m.a + y * m.c + m.e)
+    ys.push(x * m.b + y * m.d + m.f)
+  }
+  return {
+    left: Math.min(...xs), right: Math.max(...xs),
+    bottom: Math.min(...ys), top: Math.max(...ys),
+  }
+}
+
 export function listTextObjects(pdfium: WrappedPdfiumModule, page: number, scratch: Scratch): TextObjectInfo[] {
   const textPage = pdfium.FPDFText_LoadPage(page)
-  const count = pdfium.FPDFPage_CountObjects(page)
   const out: TextObjectInfo[] = []
 
+  /**
+   * Walks one level of objects, stepping INTO any Form XObject it meets.
+   *
+   * Forms nest, so this recurses; `parentMatrix` carries the containers'
+   * combined transform down, because a child's own matrix is expressed in
+   * its container's space and would otherwise place the hotspot wherever
+   * the form happened to be defined rather than where it is drawn.
+   */
+  const walk = (
+    count: number,
+    get: (i: number) => number,
+    form: number | null,
+    parentMatrix: PdfMatrix,
+  ) => {
   for (let i = 0; i < count; i++) {
-    const obj = pdfium.FPDFPage_GetObject(page, i)
-    if (pdfium.FPDFPageObj_GetType(obj) !== PAGEOBJ_TYPE.TEXT) continue
+    const obj = get(i)
+    const type = pdfium.FPDFPageObj_GetType(obj)
+    if (type === PAGEOBJ_TYPE.FORM) {
+      const formMatrixPtr = scratch.malloc(24)
+      const own = pdfium.FPDFPageObj_GetMatrix(obj, formMatrixPtr)
+        ? scratch.readMatrix(formMatrixPtr)
+        : IDENTITY
+      walk(
+        pdfium.FPDFFormObj_CountObjects(obj),
+        (j) => pdfium.FPDFFormObj_GetObject(obj, j),
+        obj,
+        concatMatrix(own, parentMatrix),
+      )
+      continue
+    }
+    if (type !== PAGEOBJ_TYPE.TEXT) continue
 
     // Text: fixed generous buffer (short catalogue headings/labels), read
     // back as a NUL-terminated UTF-16LE string.
@@ -71,10 +151,13 @@ export function listTextObjects(pdfium: WrappedPdfiumModule, page: number, scrat
     const lPtr = scratch.malloc(4), bPtr = scratch.malloc(4), rPtr = scratch.malloc(4), tPtr = scratch.malloc(4)
     const gotBounds = pdfium.FPDFPageObj_GetBounds(obj, lPtr, bPtr, rPtr, tPtr)
     if (gotBounds) {
-      bounds = {
+      const own = {
         left: scratch.readFloat(lPtr), bottom: scratch.readFloat(bPtr),
         right: scratch.readFloat(rPtr), top: scratch.readFloat(tPtr),
       }
+      // Reported in the container's space, so it has to come back out to
+      // the page's before it can be drawn over the page.
+      bounds = form === null ? own : transformBounds(own, parentMatrix)
     }
 
     const fontHandle = pdfium.FPDFTextObj_GetFont(obj)
@@ -92,8 +175,23 @@ export function listTextObjects(pdfium: WrappedPdfiumModule, page: number, scrat
       ? { r: scratch.readInt(fr), g: scratch.readInt(fg), b: scratch.readInt(fb), a: scratch.readInt(fa) }
       : { r: 0, g: 0, b: 0, a: 255 }
 
-    out.push({ index: i, handle: obj, text, fontSize, matrix, bounds, fontHandle, fontBaseName, isEmbedded, fontFlags, fontDataLength, fill })
+    out.push({
+      index: i, handle: obj, text, fontSize,
+      // Reported in the page's own space, so a hotspot lands where the text
+      // is DRAWN rather than where its container defines it.
+      matrix: concatMatrix(matrix, parentMatrix),
+      bounds, fontHandle, fontBaseName, isEmbedded, fontFlags, fontDataLength,
+      fill, parentForm: form,
+    })
   }
+  }
+
+  walk(
+    pdfium.FPDFPage_CountObjects(page),
+    (i) => pdfium.FPDFPage_GetObject(page, i),
+    null,
+    IDENTITY,
+  )
 
   pdfium.FPDFText_ClosePage(textPage)
   return out

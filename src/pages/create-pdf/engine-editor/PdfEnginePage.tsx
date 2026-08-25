@@ -60,6 +60,12 @@ interface PdfEnginePageProps {
     pageIndex: number, imageIndex: number,
     rect: { x: number; y: number; width: number; height: number },
   ) => void
+  /** The same for vector artwork, which moves and resizes exactly as an
+   * image does. */
+  onTransformVector: (
+    pageIndex: number, vectorIndex: number,
+    rect: { x: number; y: number; width: number; height: number },
+  ) => void
   /** The one selected slot in the WHOLE document, or null. Lifted out of
    * this component so selecting on page 2 clears page 1 — with per-page
    * state, two pages could each show handles at once, and a keyboard
@@ -142,7 +148,7 @@ export function PdfEnginePage({
   page, pageIndex, displayWidth, text, images, vectors, contentMode, revision,
   renderPage, renderPageRegion, lastChange, loadPageText, loadPageImages, loadPageVectors,
   onSelectLine, onReplaceImage, onReplaceVector,
-  onDropOnImage, onDropOnPage, onTransformImage, onResizeText,
+  onDropOnImage, onDropOnPage, onTransformImage, onTransformVector, onResizeText,
   selection, onSelect, onMoveStart, draggingSlot, dropTargetPage, originPatchUrl, imagePreviewUrl,
 }: PdfEnginePageProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -189,6 +195,39 @@ export function PdfEnginePage({
   // paint effect reads this ref, and must see the change belonging to the
   // revision it is about to paint, not the previous one.
   useEffect(() => { lastChangeRef.current = lastChange })
+
+  /**
+   * What is on the page — the editable text, images and artwork — asked for
+   * BEFORE the picture of it.
+   *
+   * The engine is a single worker serving one request at a time in the order
+   * they arrive. Measured on a real catalogue, drawing one page costs
+   * 252-590ms while listing everything editable on it costs 0-8ms, so the
+   * order these are asked in decides whether a page is clickable the moment
+   * it appears or a second later.
+   *
+   * It already came out this way before these effects were moved, but only
+   * by accident: the paint effect below awaits a promise before it asks for
+   * anything, which pushed its request behind these into a later microtask.
+   * That is not a guarantee — deleting one await down there would silently
+   * put half a second in front of every page's hotspots. Declaring them in
+   * the order they must run makes it a property of the code rather than of
+   * one statement in a different effect.
+   */
+  useEffect(() => {
+    if (!visible || text?.loaded) return
+    void loadPageText(pageIndex)
+  }, [visible, text?.loaded, pageIndex, loadPageText])
+
+  useEffect(() => {
+    if (!visible || images?.loaded) return
+    void loadPageImages(pageIndex)
+  }, [visible, images?.loaded, pageIndex, loadPageImages])
+
+  useEffect(() => {
+    if (!visible || vectors?.loaded) return
+    void loadPageVectors(pageIndex)
+  }, [visible, vectors?.loaded, pageIndex, loadPageVectors])
 
   useEffect(() => {
     if (!visible || displayWidth <= 0) return
@@ -292,21 +331,6 @@ export function PdfEnginePage({
     revision, renderPage, renderPageRegion,
   ])
 
-  useEffect(() => {
-    if (!visible || text?.loaded) return
-    void loadPageText(pageIndex)
-  }, [visible, text?.loaded, pageIndex, loadPageText])
-
-  useEffect(() => {
-    if (!visible || images?.loaded) return
-    void loadPageImages(pageIndex)
-  }, [visible, images?.loaded, pageIndex, loadPageImages])
-
-  useEffect(() => {
-    if (!visible || vectors?.loaded) return
-    void loadPageVectors(pageIndex)
-  }, [visible, vectors?.loaded, pageIndex, loadPageVectors])
-
   /** PDF's y axis grows upward from the bottom; CSS grows downward from the
    * top, so a box's top edge is measured from the page height. */
   const boxStyle = (bbox: { left: number; right: number; top: number; bottom: number }) => ({
@@ -358,7 +382,19 @@ export function PdfEnginePage({
         setDropPage(false)
       }}
       onDrop={handlePageDrop}
-      onPointerDown={() => onSelect(null)}
+      onPointerDown={() => {
+        onSelect(null)
+        // Clicking bare paper on a page that never got its contents is the
+        // one moment we know someone is trying to use it, so it is the right
+        // moment to ask again. Everything is normally loaded the instant a
+        // page scrolls into view and retried a few times if that fails; this
+        // is the last resort, so that a page can never be permanently dead
+        // with no way back but a reload — which is exactly what "this text
+        // cannot be edited" looked like.
+        if (!text?.loaded) void loadPageText(pageIndex)
+        if (!images?.loaded) void loadPageImages(pageIndex)
+        if (!vectors?.loaded) void loadPageVectors(pageIndex)
+      }}
     >
       <canvas
         ref={canvasRef}
@@ -446,9 +482,14 @@ export function PdfEnginePage({
         <PdfEngineVectorSlot
           key={`v-${pageIndex}-${group.vectorIndex}`}
           rect={boxStyle(group.bbox)}
+          pageWidthPx={displayWidth}
+          pageHeightPx={displayHeight}
+          scale={scale}
+          pageHeightPts={page.heightPts}
           selected={selectedVector === group.vectorIndex}
           onSelect={() => onSelect({ pageIndex, kind: "vector", index: group.vectorIndex })}
           onReplace={() => onReplaceVector(pageIndex, group.vectorIndex)}
+          onTransform={(rect) => onTransformVector(pageIndex, group.vectorIndex, rect)}
         />
       ))}
 

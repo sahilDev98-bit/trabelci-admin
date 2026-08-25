@@ -156,6 +156,20 @@ export interface EngineMethods {
     params: { docId: string; pageIndex: number }
     result: { groups: EngineVectorGroup[] }
   }
+  setVectorGroupRect: {
+    params: {
+      docId: string; pageIndex: number; vectorIndex: number
+      rect: { x: number; y: number; width: number; height: number }
+    }
+    result: { ok: boolean; newIndex: number; changedRect?: PdfRect }
+  }
+  transformVectorGroup: {
+    params: {
+      docId: string; pageIndex: number; vectorIndex: number
+      op: "rotate-left" | "rotate-right" | "flip-horizontal" | "flip-vertical"
+    }
+    result: { ok: boolean; newIndex: number; changedRect?: PdfRect }
+  }
   removeVectorGroup: {
     params: { docId: string; pageIndex: number; vectorIndex: number }
     result: { ok: boolean }

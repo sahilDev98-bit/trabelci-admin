@@ -155,6 +155,7 @@ export async function runZoomGestureSelfTest(): Promise<ZoomGestureTestResult> {
       onDropOnImage: () => {},
       onDropOnPage: () => {},
       onTransformImage: () => {},
+      onTransformVector: () => {},
       onResizeText: () => {},
     }
     const toolbar = {

@@ -147,7 +147,46 @@ const result = await page.evaluate(async (pdfUrl) => {
   return out
 }, PDF)
 
+// ---- artwork moves, resizes and turns exactly as an image does ----
+// It used to be replace-only, in its own colour, with no grips: a logo was a
+// visibly weaker kind of picture for no reason a user could see. Paths scale
+// at least as well as pixels, so the distinction only produced two things on
+// one page that looked different and answered differently to the same drag.
+const parity = await page.evaluate(async (pdfUrl) => {
+  const { PdfEngineClient } = await import("/src/lib/pdf-engine/index.ts")
+  const engine = new PdfEngineClient()
+  const bytes = new Uint8Array(await (await fetch(pdfUrl)).arrayBuffer())
+  const { docId, pages } = await engine.open(bytes.slice().buffer)
+  let found = null
+  for (let i = 0; i < pages.length && !found; i++) {
+    const { groups } = await engine.listVectorGroups(docId, i)
+    if (groups.length) found = { page: i, bbox: groups[0].bbox }
+  }
+  if (!found) { engine.terminate(); return { error: "no artwork to test with" } }
+
+  const w = found.bbox.right - found.bbox.left
+  const h = found.bbox.top - found.bbox.bottom
+  const moved = await engine.setVectorGroupRect(docId, found.page, 0, {
+    x: found.bbox.left + 30, y: found.bbox.bottom + 20, width: w * 1.5, height: h * 1.5,
+  })
+  const turned = await engine.transformVectorGroup(docId, found.page, moved.newIndex, "rotate-left")
+
+  // Saved and reopened, because a change the engine reports but does not
+  // write is the failure that matters.
+  const { bytes: savedBuf } = await engine.save(docId)
+  const again = await engine.open(new Uint8Array(savedBuf).slice().buffer)
+  const { groups: after } = await engine.listVectorGroups(again.docId, found.page)
+  engine.terminate()
+  return {
+    moveOk: moved.ok, turnOk: turned.ok,
+    groupsAfter: after.length,
+    before: found.bbox, after: after[0]?.bbox ?? null,
+    expectedWidth: h * 1.5, expectedHeight: w * 1.5,
+  }
+}, PDF)
+
 console.log(JSON.stringify(result, null, 2))
+console.log("parity:", JSON.stringify(parity, null, 2))
 if (pageErrors.length) console.log("\nPAGE ERRORS:", pageErrors)
 await browser.close()
 
@@ -163,6 +202,16 @@ const checks = {
   "the replacement lands in the logo's box": result.placedInLogoBox === true,
   "the swap survives save and reopen": result.imagesAfterReopen === result.imagesAfter
     && result.artworkAfterReopen === result.artworkAfterReplace,
+
+  // ---- and artwork is not a second-class picture ----
+  "artwork can be moved and resized": parity.moveOk === true,
+  "artwork can be turned": parity.turnOk === true,
+  "it is still one piece afterwards": parity.groupsAfter === 1,
+  "the move and resize survive saving":
+    parity.after != null
+    // Rotated a quarter turn, so the box's sides swap.
+    && Math.abs((parity.after.right - parity.after.left) - parity.expectedWidth) < 2
+    && Math.abs((parity.after.top - parity.after.bottom) - parity.expectedHeight) < 2,
 }
 
 console.log("\n=========== VECTOR ARTWORK CHECKS ===========")

@@ -42,6 +42,10 @@ interface PdfEnginePageColumnProps {
     pageIndex: number, imageIndex: number,
     rect: { x: number; y: number; width: number; height: number },
   ) => void
+  onTransformVector: (
+    pageIndex: number, vectorIndex: number,
+    rect: { x: number; y: number; width: number; height: number },
+  ) => void
   onResizeText: (pageIndex: number, lineIndex: number, fontSize: number, maxWidth: number) => void
 }
 
@@ -64,7 +68,7 @@ export function PdfEnginePageColumn({
   doc, displayWidth, gutter, columnRef, contentMode, selection, onSelect,
   drag, onMoveStart, originPatch, imagePreview,
   onEditLine, onReplaceImage, onReplaceVector,
-  onDropOnImage, onDropOnPage, onTransformImage, onResizeText,
+  onDropOnImage, onDropOnPage, onTransformImage, onTransformVector, onResizeText,
 }: PdfEnginePageColumnProps) {
   return (
     <div
@@ -102,6 +106,7 @@ export function PdfEnginePageColumn({
             onDropOnImage={onDropOnImage}
             onDropOnPage={onDropOnPage}
             onTransformImage={onTransformImage}
+            onTransformVector={onTransformVector}
             onResizeText={onResizeText}
             onMoveStart={onMoveStart}
             draggingSlot={drag ? { ...drag.item } : null}

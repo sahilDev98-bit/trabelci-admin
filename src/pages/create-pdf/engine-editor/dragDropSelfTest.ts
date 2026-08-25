@@ -180,6 +180,7 @@ export async function runDragDropSelfTest(): Promise<DragDropTestResult> {
         captured.onImage = { pageIndex, imageIndex, fileName: file.name }
       },
       onTransformImage: (_pageIndex, _imageIndex, rect) => { captured.transforms.push(rect) },
+      onTransformVector: () => {},
       selection,
       onSelect: (next: typeof selection) => { selection = next; renderPage() },
       onMoveStart: () => {},
@@ -389,6 +390,7 @@ export async function runCrossPageDragSelfTest(): Promise<CrossPageTestResult> {
                   onDropOnImage: () => {},
             onDropOnPage: () => {},
             onTransformImage: () => {},
+            onTransformVector: () => {},
             onResizeText: () => {},
             selection,
             onSelect: setSelection,
@@ -421,8 +423,10 @@ export async function runCrossPageDragSelfTest(): Promise<CrossPageTestResult> {
     }
 
     // ---- select the text line on page 0, then drag it down to page 1 ----
-    const textEl = Array.from(host.querySelectorAll<HTMLElement>("div"))
-      .find((el) => el.className.includes("ring-blue-500/30"))
+    // Found by its marker, not by the colour it happens to be outlined in:
+    // this used to look for "ring-blue-500/30", so simply making that outline
+    // strong enough to see broke the whole cross-page suite.
+    const textEl = host.querySelector<HTMLElement>("[data-pdf-text-slot]")
     if (!textEl) { out.errors.push("text slot not rendered on page 0"); return out }
 
     textEl.dispatchEvent(pointerEvent("pointerdown", 0, 0))
