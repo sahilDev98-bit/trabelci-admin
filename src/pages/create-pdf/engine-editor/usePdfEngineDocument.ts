@@ -13,6 +13,7 @@ import {
   type PagePlanRequest,
 } from "@/lib/pdf-engine"
 import { fetchPdfMasterTemplateSource } from "@/features/pdfTemplates/api"
+import { addedLineIndex } from "./placement"
 
 /**
  * Owns one PDF editing session: the worker, the open document, and the
@@ -123,7 +124,8 @@ export interface UsePdfEngineDocumentResult {
     pageIndex: number, imageIndex: number,
     rect: { x: number; y: number; width: number; height: number },
   ) => Promise<number>
-  addTextOverlay: (pageIndex: number, overlay: TextOverlayRequest) => Promise<void>
+  /** Resolves to the new line's index, or -1 if it could not be identified. */
+  addTextOverlay: (pageIndex: number, overlay: TextOverlayRequest) => Promise<number>
   addImageOverlay: (
     pageIndex: number, overlay: ImageOverlayRequest, file: File,
   ) => Promise<number>
@@ -548,8 +550,25 @@ export function usePdfEngineDocument(templateId: string | null | undefined): Use
     return r?.newIndex ?? -1
   }, [getEngine, mutate])
 
+  /**
+   * Resolves to the new line's index, so the caller can select it — the same
+   * courtesy addImageOverlay already does.
+   *
+   * The engine does not report one, so the page's text is listed before and
+   * after and the line that appeared is taken — see addedLineIndex, which is
+   * where that rule lives and is checked against a real document.
+   */
   const addTextOverlay = useCallback(async (pageIndex: number, overlay: TextOverlayRequest) => {
-    await mutate(pageIndex, (id) => getEngine().addTextOverlay(id, pageIndex, overlay).then(() => undefined))
+    const r = await mutate(pageIndex, async (id) => {
+      // Listed on BOTH sides, because the new line is identified by what
+      // changed rather than by where it landed — see addedLineIndex for the
+      // two ways guessing from position measured wrong.
+      const { lines: before } = await getEngine().listTextLines(id, pageIndex)
+      await getEngine().addTextOverlay(id, pageIndex, overlay)
+      const { lines: after } = await getEngine().listTextLines(id, pageIndex)
+      return addedLineIndex(before, after, overlay.text)
+    })
+    return r ?? -1
   }, [getEngine, mutate])
 
   /** Resolves to the new image's index, so the caller can select it. */

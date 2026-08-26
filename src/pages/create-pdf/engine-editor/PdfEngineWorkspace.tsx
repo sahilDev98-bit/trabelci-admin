@@ -53,10 +53,19 @@ interface PdfEngineWorkspaceProps {
     "documentName" | "onZoomToSelection" | "onExit"
   >
   selection: SlotSelection
+  /**
+   * The product panel, when it is open.
+   *
+   * Passed in as an element rather than built here because it is bound to the
+   * DOCUMENT — which product is chosen, which box gets filled — and this
+   * component deliberately knows nothing about either. It takes its place in
+   * the layout beside the page area and nothing more.
+   */
+  panel?: React.ReactNode
 }
 
 export function PdfEngineWorkspace({
-  doc, documentName, onExit, onDisplayWidthChange, column, toolbar, selection,
+  doc, documentName, onExit, onDisplayWidthChange, column, toolbar, selection, panel,
 }: PdfEngineWorkspaceProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
   /** Sized to the SCALED content during a gesture, so the scrollbars match
@@ -362,13 +371,18 @@ export function PdfEngineWorkspace({
         onExit={onExit}
       />
 
-      <div className="relative flex min-h-0 flex-1">
+      <div className="flex min-h-0 flex-1">
         <PdfEngineThumbnailRail
           doc={doc}
           currentPage={currentPage}
           onSelectPage={goToPage}
         />
 
+      {/* The page area and its floating bar, in their own positioning
+          context. The bar centres itself across whatever it is anchored to,
+          so anchoring it to the whole row would push it off-centre by half
+          the panel's width the moment the panel opened. */}
+      <div className="relative flex min-h-0 min-w-0 flex-1">
       <div
         ref={scrollRef}
         onScroll={onScroll}
@@ -426,6 +440,12 @@ export function PdfEngineWorkspace({
           onZoomOut={() => setZoom({ kind: "level", level: stepZoom(level, -1) })}
           onFitPage={() => setZoom({ kind: "fit-page" })}
         />
+      </div>
+
+        {/* Beside the page area, not over it. A panel floating on top would
+            cover the right-hand edge of the paper — which is exactly where a
+            catalogue keeps the details being filled in. */}
+        {panel}
       </div>
     </div>
   )

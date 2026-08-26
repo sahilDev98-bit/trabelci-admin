@@ -183,6 +183,10 @@ export async function runWorkspaceSelfTest(): Promise<WorkspaceTestResult> {
       onToggleContentMode: () => {},
       onAddText: () => {},
       onAddImage: () => {},
+      // Closed for this measurement: the panel takes width from the page area,
+      // and what is being measured here is the page area at its full size.
+      productPanelOpen: false,
+      onToggleProductPanel: () => {},
       onOpenOrganizer: () => {},
       onEditSelectedText: () => {},
       onReplaceSelectedImage: () => {},

@@ -13,6 +13,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import type { EngineTextLine, PagePlanRequest } from "@/lib/pdf-engine"
+import type { CatalogProduct } from "@/features/catalogProducts/types"
 
 import type { PdfContentMode, PdfOrganizerMode } from "../pdfEditorTypes"
 import { PdfPageOrganizer, type OrganizerPage } from "../PdfPageOrganizer"
@@ -22,6 +23,7 @@ import { dropToPagePoints, textMoveDelta, textPlacementOnPage, imagePlacement } 
 import { CrossPageDragGhost } from "./CrossPageDragGhost"
 import { findFreeSpot, newImageSize, type Box } from "./placement"
 import { PdfEngineWorkspace } from "./PdfEngineWorkspace"
+import { PdfProductPanel } from "./PdfProductPanel"
 import { PdfEditorLoadingScreen } from "../PdfEditorLoadingScreen"
 
 /**
@@ -74,6 +76,17 @@ const DRAG_COMMIT_THRESHOLD_PX = 3
 const NEW_OVERLAY_INSET_PTS = 48
 const NEW_TEXT_WIDTH_PTS = 220
 const NEW_TEXT_SIZE_PTS = 18
+
+/**
+ * Vertical gap between details added one after another from the product
+ * panel, in PDF points.
+ *
+ * Comfortably more than a line: PDFium groups text objects that share a
+ * baseline into one line, so two details placed too close would fuse into a
+ * single object that cannot be moved or edited apart. Measured on a real
+ * catalogue page, where a smaller step did exactly that.
+ */
+const PRODUCT_STACK_STEP_PTS = NEW_TEXT_SIZE_PTS * 1.8
 const NEW_IMAGE_WIDTH_PTS = 180
 
 /** Floor for the tool rail, so it can never slide above the app bar. */
@@ -128,6 +141,27 @@ export function PdfEngineEditorPage() {
   const [organizerMode, setOrganizerMode] = useState<PdfOrganizerMode | null>(null)
   const [thumbnails, setThumbnails] = useState<Record<string, string>>({})
 
+  /**
+   * The product whose details are being poured into the page, and whether its
+   * panel is showing.
+   *
+   * Both live HERE rather than inside the panel so that closing the panel does
+   * not forget which product you were working on — a catalogue page is about
+   * one product, and having to search for it again after glancing at the full
+   * width of the page would make the panel not worth opening.
+   */
+  const [productPanelOpen, setProductPanelOpen] = useState(false)
+  const [product, setProduct] = useState<CatalogProduct | null>(null)
+  /**
+   * Where the last detail added from the panel went, so the next one can go
+   * directly beneath it instead of being placed on its own.
+   *
+   * A ref, not state: nothing on screen is derived from it, and re-rendering
+   * the page column after every add — 144ms on a real catalogue — to store a
+   * number nobody looks at would be a waste.
+   */
+  const productRunAnchor = useRef<{ pageIndex: number; x: number; baselineY: number } | null>(null)
+
   const [newTextDraft, setNewTextDraft] = useState<{ pageIndex: number; text: string } | null>(null)
   /** The one selected slot across the whole document. Held here rather
    * than per page so selecting on one page clears every other, and so a
@@ -135,6 +169,17 @@ export function PdfEngineEditorPage() {
   const [selection, setSelection] = useState<
     { pageIndex: number; kind: "text" | "image" | "vector"; index: number } | null
   >(null)
+
+  /**
+   * A run of added details ends the moment the user does anything else —
+   * clicks a box, picks a different product — so the next detail is placed
+   * fresh rather than continuing a column they have stopped building.
+   *
+   * Without this, selecting a caption to read it and then deselecting would
+   * still drop the next detail under a stack from ten minutes ago, possibly
+   * off the bottom of whatever they are now looking at.
+   */
+  useEffect(() => { productRunAnchor.current = null }, [selection, product])
 
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   /** Which slot a pending file-picker result belongs to. A ref, not state:
@@ -562,7 +607,7 @@ export function PdfEngineEditorPage() {
     const page = doc.pages[pageIndex]
     if (!page) return
     try {
-      await doc.addTextOverlay(pageIndex, {
+      const newIndex = await doc.addTextOverlay(pageIndex, {
         text: trimmed,
         x: NEW_OVERLAY_INSET_PTS,
         y: page.heightPts - NEW_OVERLAY_INSET_PTS,
@@ -571,9 +616,135 @@ export function PdfEngineEditorPage() {
         color: { r: 17, g: 17, b: 17 },
       })
       setContentMode("text")
+      // Selected on arrival, exactly as a new image is — so its handles are
+      // showing and it is obvious both that something was added and where.
+      if (newIndex >= 0) setSelection({ pageIndex, kind: "text", index: newIndex })
     } catch (err) {
       toast.error(err instanceof Error ? err.message : String(err))
     }
+  }
+
+  // ── Product details ───────────────────────────────────────────────────────
+
+  /**
+   * The two things a product detail can do to a page, and which one happens.
+   *
+   * With a text box selected the detail REPLACES what is in it; with nothing
+   * selected it arrives as a new text box. That is one gesture doing two jobs,
+   * which is normally a smell — but it is the gesture the work actually has:
+   * a catalogue page is part template (boxes already drawn, waiting for this
+   * product's values) and part blank (a detail this layout never planned for).
+   * Making the user pick a mode first would put a step in front of both.
+   *
+   * The panel is not left to infer this. It is told which of the two will
+   * happen and says so above the list, so the mode is visible before the
+   * click rather than discovered after it.
+   */
+  const productFieldMode: "replace" | "add" = selection?.kind === "text" ? "replace" : "add"
+
+  /**
+   * Replace the selected box's text with a product detail.
+   *
+   * The box's text is REPLACED, not appended to. In a designed catalogue the
+   * label and the value are separate objects — "Size" is its own box and the
+   * measurement is another — so the box being filled is the value.
+   *
+   * Routed through the same doc.editText the Edit text dialog uses, with no
+   * options, so filling a box behaves exactly as typing the same words in.
+   *
+   * Worth knowing, because it surprises people: that call is not width-free.
+   * With no maxWidth the engine wraps to the line's OWN current width (see
+   * text.ts, `opts.maxWidth ?? right - left`). So a long product name dropped
+   * into a short placeholder wraps into a narrow stack rather than running off
+   * the page. Keeping the text inside the box is the right default for a
+   * catalogue, and the box can be widened with the handles as usual — but it
+   * is the engine's behaviour, not something chosen here, and overriding it
+   * would make auto-fill differ from typing.
+   */
+  const replaceSelectedTextWith = (value: string) => {
+    if (selection?.kind !== "text") return
+    const { pageIndex, index } = selection
+    const line = doc.pageText[pageIndex]?.lines[index]
+    if (!line) return
+    // The selection is left where it is, so the box stays ringed and you can
+    // see what landed in it.
+    if (line.text === value) return
+    void doc.editText(pageIndex, index, value)
+      .catch((err: unknown) => toast.error(err instanceof Error ? err.message : String(err)))
+  }
+
+  /**
+   * Put a product detail on the page as a NEW text box.
+   *
+   * Details are added in RUNS — SKU, then name, then series, then size — so
+   * where the second one goes matters as much as the first. Two things were
+   * measured on a real catalogue page and both drove this:
+   *
+   *   - Asking findFreeSpot each time does not work. On a designed page every
+   *     candidate spot overlaps something, so it returns the least-bad one —
+   *     and the least-bad one for the second detail sat on the SAME BASELINE
+   *     as the first. PDFium groups text by baseline, so the two fused into
+   *     one object reading "911120  Carnaby White", which cannot then be
+   *     moved or edited apart.
+   *
+   *   - So only the FIRST detail of a run is placed by search. The rest stack
+   *     beneath it, a clear line apart, which is both safe from grouping and
+   *     what someone laying out a product block actually wants: a tidy column
+   *     they can drag into position, not details scattered into whatever gaps
+   *     the page happened to have.
+   *
+   * The run resets when the page changes or the stack reaches the bottom
+   * margin, and any other edit ends it — see productRunAnchor.
+   */
+  const addTextFromProduct = async (value: string) => {
+    const pageIndex = visiblePageIndex()
+    const page = doc.pages[pageIndex]
+    if (!page) return
+    const width = Math.min(NEW_TEXT_WIDTH_PTS, page.widthPts - NEW_OVERLAY_INSET_PTS * 2)
+    // Roughly what the finished box occupies, which is all findFreeSpot needs
+    // to keep it clear of what is already there. A single line of text is
+    // about its font size tall, with a little room for descenders.
+    const height = NEW_TEXT_SIZE_PTS * 1.4
+
+    const run = productRunAnchor.current
+    const continuing = run !== null
+      && run.pageIndex === pageIndex
+      && run.baselineY - PRODUCT_STACK_STEP_PTS > NEW_OVERLAY_INSET_PTS
+    const placement = continuing
+      ? { x: run.x, baselineY: run.baselineY - PRODUCT_STACK_STEP_PTS }
+      : (() => {
+        const spot = findFreeSpot(page, occupiedBoxes(pageIndex), { width, height })
+        // findFreeSpot describes a BOX and reports its bottom edge; the
+        // overlay wants the first line's BASELINE, a font size up from there.
+        return { x: spot.x, baselineY: spot.y + height - NEW_TEXT_SIZE_PTS }
+      })()
+
+    try {
+      await doc.addTextOverlay(pageIndex, {
+        text: value,
+        x: placement.x,
+        y: placement.baselineY,
+        width,
+        fontSize: NEW_TEXT_SIZE_PTS,
+        color: { r: 17, g: 17, b: 17 },
+      })
+      productRunAnchor.current = { pageIndex, x: placement.x, baselineY: placement.baselineY }
+      // Text boxes are only shown in text mode, so a detail added while
+      // looking at the images layer would otherwise land invisibly.
+      setContentMode("text")
+      // Deliberately NOT selected, and this is the one place where selecting
+      // what you just made is wrong. Selecting a text box switches the panel
+      // to "replace", so auto-selecting here would mean the next detail
+      // clicked overwrote the one just added instead of joining it. Adding a
+      // run of details is the whole workflow; it must not break itself.
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : String(err))
+    }
+  }
+
+  const applyProductField = (value: string) => {
+    if (productFieldMode === "replace") replaceSelectedTextWith(value)
+    else void addTextFromProduct(value)
   }
 
   // ── Page organizer ────────────────────────────────────────────────────────
@@ -744,6 +915,8 @@ export function PdfEngineEditorPage() {
           onToggleContentMode: () => setContentMode((m) => (m === "text" ? "images" : "text")),
           onAddText: () => setNewTextDraft({ pageIndex: visiblePageIndex(), text: "" }),
           onAddImage: () => openFilePicker({ kind: "overlay", pageIndex: visiblePageIndex() }),
+          productPanelOpen,
+          onToggleProductPanel: () => setProductPanelOpen((open) => !open),
           onOpenOrganizer: (mode) => void openOrganizer(mode),
           onEditSelectedText: () => {
             if (selection?.kind !== "text") return
@@ -785,6 +958,15 @@ export function PdfEngineEditorPage() {
           busy: doc.busy,
           selection,
         }}
+        panel={productPanelOpen ? (
+          <PdfProductPanel
+            product={product}
+            onPickProduct={setProduct}
+            mode={productFieldMode}
+            onApply={applyProductField}
+            onClose={() => setProductPanelOpen(false)}
+          />
+        ) : undefined}
       />
 
       {/* Outside the workspace on purpose: it is fixed to the viewport, so

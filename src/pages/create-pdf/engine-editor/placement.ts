@@ -117,3 +117,67 @@ export function newImageSize(
   const width = Math.min(preferredWidth, page.widthPts * 0.8)
   return { width, height: width * ratio }
 }
+
+/**
+ * Which of a page's text lines is the one that was just added.
+ *
+ * Found by DIFFING the page's text before and after, not by geometry. The
+ * geometric version of this — "the line starting nearest where the text was
+ * asked to go" — was written first and measured wrong on a real catalogue
+ * page, in two separate ways:
+ *
+ *   - Right-to-left text is right-ALIGNED inside its box, so a short Hebrew
+ *     word landed most of the box's width away from the point it was asked
+ *     for, and no sane tolerance could tell that from a miss.
+ *   - New text that lands on an existing line's baseline is GROUPED with it,
+ *     so the page gains no line at all and there is no new box to be near.
+ *
+ * A diff handles both without a tolerance to tune. A merged line still counts
+ * as new, because its text changed — and selecting it is right: it is the
+ * line that now holds what was added.
+ *
+ * Returns -1 when the answer is ambiguous rather than guessing, since
+ * selecting the wrong box would be worse than selecting none.
+ */
+export function addedLineIndex(
+  before: readonly { text: string; bbox: Box }[],
+  after: readonly { text: string; bbox: Box }[],
+  insertedText: string,
+): number {
+  // Rounded, because a line that was not touched is re-listed with exactly
+  // the same geometry; this only has to survive float formatting.
+  const key = (l: { text: string; bbox: Box }) =>
+    `${l.text}@${Math.round(l.bbox.left)},${Math.round(l.bbox.bottom)}`
+
+  // A multiset: two identical captions in different places are different
+  // lines, and consuming one must not consume the other.
+  const remaining = new Map<string, number>()
+  for (const line of before) {
+    const k = key(line)
+    remaining.set(k, (remaining.get(k) ?? 0) + 1)
+  }
+
+  const candidates: number[] = []
+  for (let i = 0; i < after.length; i++) {
+    const k = key(after[i])
+    const count = remaining.get(k) ?? 0
+    if (count > 0) remaining.set(k, count - 1)
+    else candidates.push(i)
+  }
+
+  if (candidates.length === 0) return -1
+  if (candidates.length === 1) return candidates[0]
+
+  // Several lines changed — text long enough to wrap produces one line per
+  // wrapped row. Prefer the one that actually contains what was inserted, and
+  // failing that the FIRST, which is the top of the block that was added.
+  const wanted = insertedText.trim()
+  const reversed = [...wanted].reverse().join("")
+  const holding = candidates.filter((i) => {
+    const text = after[i].text
+    // PDFium extracts right-to-left runs in visual order, so a Hebrew value
+    // comes back reversed. Both readings count as holding it.
+    return text.includes(wanted) || text.includes(reversed)
+  })
+  return holding.length > 0 ? holding[0] : candidates[0]
+}

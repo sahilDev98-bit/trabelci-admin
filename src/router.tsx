@@ -344,31 +344,52 @@ const skuTemplatesRoute = createRoute({
   ),
 })
 
+// Create PDF is ADMIN ONLY.
+//
+// Every route below is guarded, not just the entry page: a merchant who kept
+// a link to a template, or simply typed the path, would otherwise land
+// straight in the editor. The sidebar entry is hidden too (adminOnly in
+// AdminLayout's nav), but a hidden link is decoration — the guard is what
+// actually decides.
 const createPdfRoute = createRoute({
   getParentRoute: () => appLayoutRoute,
   path: "/create-pdf",
-  component: CreatePdfPage,
+  component: () => (
+    <RequireRole allowedRoles={[USER_ROLES.ADMIN]}>
+      <CreatePdfPage />
+    </RequireRole>
+  ),
 })
 
 const pdfTemplateNewRoute = createRoute({
   getParentRoute: () => appLayoutRoute,
   path: "/create-pdf/templates/new",
-  component: PdfTemplateEditorPage,
+  component: () => (
+    <RequireRole allowedRoles={[USER_ROLES.ADMIN]}>
+      <PdfTemplateEditorPage />
+    </RequireRole>
+  ),
 })
 
 const pdfTemplateEditRoute = createRoute({
   getParentRoute: () => appLayoutRoute,
   path: "/create-pdf/templates/$templateId",
-  component: PdfTemplateEditorPage,
+  component: () => (
+    <RequireRole allowedRoles={[USER_ROLES.ADMIN]}>
+      <PdfTemplateEditorPage />
+    </RequireRole>
+  ),
 })
 
 const pdfCustomizerRoute = createRoute({
   getParentRoute: () => appLayoutRoute,
   path: "/create-pdf/customize/$templateId",
   component: () => (
-    <Suspense fallback={EditorSuspenseFallback}>
-      <PdfCustomizerPage />
-    </Suspense>
+    <RequireRole allowedRoles={[USER_ROLES.ADMIN]}>
+      <Suspense fallback={EditorSuspenseFallback}>
+        <PdfCustomizerPage />
+      </Suspense>
+    </RequireRole>
   ),
 })
 
@@ -379,9 +400,11 @@ const pdfEngineEditorRoute = createRoute({
   getParentRoute: () => appLayoutRoute,
   path: "/create-pdf/customize-v2/$templateId",
   component: () => (
-    <Suspense fallback={EditorSuspenseFallback}>
-      <PdfEngineEditorPage />
-    </Suspense>
+    <RequireRole allowedRoles={[USER_ROLES.ADMIN]}>
+      <Suspense fallback={EditorSuspenseFallback}>
+        <PdfEngineEditorPage />
+      </Suspense>
+    </RequireRole>
   ),
 })
 

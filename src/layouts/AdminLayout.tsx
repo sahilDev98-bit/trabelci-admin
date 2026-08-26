@@ -142,7 +142,7 @@ const navEntries: NavEntry[] = [
       { type: "link", to: ROUTES.SKU_MANAGEMENT_TEMPLATES, icon: SettingsIcon, labelKey: "nav.skuTemplates", adminOnly: true },
     ],
   },
-  { type: "link", to: ROUTES.CREATE_PDF, icon: FileTextIcon, labelKey: "nav.createPdf" },
+  { type: "link", to: ROUTES.CREATE_PDF, icon: FileTextIcon, labelKey: "nav.createPdf", adminOnly: true },
   { type: "link", to: ROUTES.AI_IMAGES, icon: SparklesIcon, labelKey: "nav.generateAiImages" },
   { type: "link", to: ROUTES.EXTRACT_PRODUCT_PDF, icon: ImagesIcon, labelKey: "nav.extractProductPdf" },
   { type: "link", to: ROUTES.SETTINGS, icon: SettingsIcon, labelKey: "nav.settings" },
