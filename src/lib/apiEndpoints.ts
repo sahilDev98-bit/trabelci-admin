@@ -9,6 +9,12 @@ export const API_ENDPOINTS = {
   PRODUCTS_SAP_PREVIEW: "/admin/products/sap-preview",
   PRODUCTS_SAP_SEARCH: "/admin/products/sap-search",
   PRODUCTS_IMPORT_FROM_SAP: "/admin/products/import-from-sap",
+  // Base path for the rich, live-SAP-joined product detail (GET
+  // /products/:sku) and its /telegram-images sub-route — NOT the same as
+  // PRODUCTS above (that's the Supabase-mirror admin CRUD endpoint, keyed
+  // on the internal numeric id, and doesn't carry Finish/Showroom/Warehouse
+  // Bins/Quantity per Carton at all since those aren't synced columns).
+  PRODUCT_SAP_DETAIL: "/products",
   PRODUCT_IMAGES: "/admin/product-images",
   PRODUCT_GROUPS: "/admin/product-groups",
   BUSINESS_PARTNER_ASSIGNMENTS: "/admin/merchants",

@@ -3,7 +3,12 @@ import { useTranslation } from "react-i18next"
 import { ArrowLeft, RefreshCw, Sparkles } from "lucide-react"
 import { toast } from "sonner"
 
-import { useProductByIdQuery, useRefreshProductFromSapMutation } from "@/features/products/api"
+import {
+  useProductByIdQuery,
+  useProductSapDetailQuery,
+  useRefreshProductFromSapMutation,
+  useTelegramImagesQuery,
+} from "@/features/products/api"
 import { useProductImagesQuery } from "@/features/productImages/api"
 import { useAnalyzeSingleProductMutation } from "@/features/similarity/api"
 import { QueryStateWrapper } from "@/components/QueryStateWrapper"
@@ -33,6 +38,12 @@ export function ProductDetailPage() {
     data: images,
     refetch: refetchImages,
   } = useProductImagesQuery(product?.sku ?? null)
+
+  // BUG-021: Finish/Showroom/Warehouse Bins/Quantity per Carton aren't
+  // synced Supabase columns — only available live from SAP, via the same
+  // rich endpoint the mobile app's product page already reads.
+  const { data: sapDetail } = useProductSapDetailQuery(product?.sku ?? null)
+  const { data: telegramImages } = useTelegramImagesQuery(product?.sku ?? null)
 
   const refreshFromSap = useRefreshProductFromSapMutation()
   const analyzeSimilarity = useAnalyzeSingleProductMutation()
@@ -138,7 +149,7 @@ export function ProductDetailPage() {
 
           <ProductDetailsForm product={product} />
 
-          <ProductInfoCard product={product} />
+          <ProductInfoCard product={product} sapDetail={sapDetail} telegramImages={telegramImages} />
 
           <SimilarProductsSection productId={product.id} />
         </>

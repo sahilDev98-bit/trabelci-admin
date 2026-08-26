@@ -53,6 +53,37 @@ async function fetchUserProfile(userId: string): Promise<UserProfile> {
   }
 }
 
+// Records this login on user_profile.metadata (lastLogin/loginCount) —
+// what powers the dashboard's "Active Accounts" chart (BUG-019). Before
+// this, admin-web logins never wrote this field at all (only read it for
+// display), and the mobile app's own writer was dead-locked behind a
+// `loginCount > 0` guard that could never become true for anyone's first
+// login — together, every account in production had lastLogin: null,
+// loginCount: 0 regardless of actual usage. Best-effort: a failure here
+// must never block a successful login.
+async function recordLastLogin(userId: string): Promise<void> {
+  try {
+    const { data } = await supabaseClient
+      .from("user_profile")
+      .select("metadata")
+      .eq("user_id", userId)
+      .maybeSingle()
+
+    const currentLoginCount = (data?.metadata as { loginCount?: number } | null)?.loginCount ?? 0
+    const metadata = {
+      ...(data?.metadata ?? {}),
+      loginCount: currentLoginCount + 1,
+      lastLogin: new Date().toISOString(),
+    }
+
+    await supabaseClient.from("user_profile").update({ metadata }).eq("user_id", userId)
+  } catch (error) {
+    if (import.meta.env.DEV) {
+      console.error("Failed to record last login", error)
+    }
+  }
+}
+
 export const loadCurrentUser = createAsyncThunk(
   "auth/loadCurrentUser",
   async (_, { rejectWithValue }) => {
@@ -105,6 +136,8 @@ export const loginWithEmailPassword = createAsyncThunk(
         await supabaseClient.auth.signOut()
         return rejectWithValue("Your account does not have a valid role.")
       }
+
+      recordLastLogin(data.user.id)
 
       return { user: data.user, profile }
     } catch (error) {

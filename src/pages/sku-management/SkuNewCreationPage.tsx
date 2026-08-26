@@ -213,6 +213,7 @@ function CreationSheet({
   const [pdfExtractOpen, setPdfExtractOpen] = useState(false)
   const sheetRef = useRef<SkuSheetCeramicHandle>(null)
   const [selectedCount, setSelectedCount] = useState(0)
+  const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set())
   const [pageFullySelected, setPageFullySelected] = useState(false)
   const [selectAllMode, setSelectAllMode] = useState(false)
 
@@ -302,16 +303,38 @@ function CreationSheet({
     )
   }, [])
 
+  // Row identity for selection scoping — must match SkuSheetCeramic's own
+  // getRowKey exactly (row._clientId ?? row.sku), since selectedKeys is
+  // keyed that way.
+  const getRowKey = useCallback((row: SkuMetadataRow) => row._clientId ?? row.sku ?? "", [])
+
+  // Scopes a candidate list down to the checked rows when the user has
+  // actually checked something (BUG-014/017: Approve and Submit to SAP were
+  // acting on every eligible row in the sheet regardless of which checkboxes
+  // were ticked). No selection falls back to "every eligible row" — the
+  // original one-click-approve-all behavior for the common case where
+  // nobody's used the checkboxes at all.
+  const scopeToSelection = useCallback(
+    <T extends SkuMetadataRow>(candidates: T[]): T[] => {
+      if (selectedKeys.size === 0) return candidates
+      return candidates.filter((r) => selectedKeys.has(getRowKey(r)))
+    },
+    [selectedKeys, getRowKey]
+  )
+
   // Single-flow gate (spec points 4/13/17/27/30): one click runs validation
   // AND duplicate detection on every pending row in the sheet, surfaces the
   // results, then approves the rows that passed (yellow allowed with warning,
   // red blocked). Approving saves rows with status 'approved' (audit-logged),
-  // which transforms this button into Submit to SAP — the second, conscious
-  // click that actually creates items. Nothing reaches SAP in one click.
+  // after which they become eligible for Submit to SAP — the second,
+  // conscious click that actually creates items. Nothing reaches SAP in one
+  // click. Both actions are scoped to the current checkbox selection
+  // (scopeToSelection) when one exists.
   const handleApprove = useCallback(async () => {
-    const candidates = rows.filter(
+    const eligible = rows.filter(
       (r) => r.sku?.trim() && r.status !== "approved" && r.status !== "created_in_sap"
     )
+    const candidates = scopeToSelection(eligible)
     if (!candidates.length) {
       toast.info(t("sku.grid.noRowsToApprove"))
       return
@@ -384,12 +407,11 @@ function CreationSheet({
     } finally {
       setActiveAction(null)
     }
-  }, [rows, validate, checkDuplicates, bulkUpsert, t])
+  }, [rows, scopeToSelection, validate, checkDuplicates, bulkUpsert, t])
 
   const handleSubmitToSap = useCallback(async () => {
-    const approvedSkus = rows
-      .filter((r) => r.status === "approved" && r.sku?.trim())
-      .map((r) => r.sku)
+    const eligible = rows.filter((r) => r.status === "approved" && r.sku?.trim())
+    const approvedSkus = scopeToSelection(eligible).map((r) => r.sku)
 
     if (!approvedSkus.length) {
       toast.info(t("sku.grid.selectApproved"))
@@ -433,7 +455,7 @@ function CreationSheet({
     } catch (err) {
       toast.error(errorMessage(err) ?? t("sku.grid.sapFailed"))
     }
-  }, [rows, submitToSap, t])
+  }, [rows, scopeToSelection, submitToSap, t])
 
   const handlePdfApprove = useCallback((extracted: Partial<SkuMetadataRow>[]) => {
     if (!extracted.length) return
@@ -456,18 +478,20 @@ function CreationSheet({
   const greenCount = filledRows.filter((r) => r._validationStatus === "green").length
   const unsavedCount = filledRows.filter((r) => r._isDirty).length
 
-  // One transforming button: while any pending row exists the sheet must be
-  // approved first; once everything pending is approved it becomes Submit.
-  const approvableCount = rows.filter(
-    (r) => r.sku?.trim() && r.status !== "approved" && r.status !== "created_in_sap"
+  // Approve and Submit to SAP are two independent actions, each scoped to
+  // the checkbox selection (falling back to "every eligible row" when
+  // nothing's checked) — previously a single button toggled between the two
+  // based on whether *any* pending row existed anywhere in the sheet, which
+  // meant adding one new unapproved row hid Submit to SAP entirely even
+  // though already-approved rows were sitting there ready to go (BUG-015).
+  // These counts drive both the button labels and what the handlers above
+  // actually act on, so the label always matches the real effect (BUG-017).
+  const approvableCount = scopeToSelection(
+    rows.filter((r) => r.sku?.trim() && r.status !== "approved" && r.status !== "created_in_sap")
   ).length
-  const submittableCount = rows.filter(
-    (r) => r.status === "approved" && r.sku?.trim()
+  const submittableCount = scopeToSelection(
+    rows.filter((r) => r.status === "approved" && r.sku?.trim())
   ).length
-  // Submit only when approved rows are actually waiting and nothing pending
-  // remains — otherwise (including an empty sheet) the action is Approve.
-  const flowMode: "approve" | "submit" =
-    submittableCount > 0 && approvableCount === 0 ? "submit" : "approve"
   const saveBusy = activeAction === "save"
   const approveBusy = activeAction === "approve"
 
@@ -554,11 +578,14 @@ function CreationSheet({
             )}
             {t("sku.grid.saveDraft")}
           </Button>
-          {flowMode === "approve" ? (
+          {/* Independent actions (not a single toggling button) — a newly
+              added unapproved row no longer hides Submit to SAP for
+              already-approved rows sitting alongside it. */}
+          {approvableCount > 0 && (
             <Button
               size="sm"
               onClick={handleApprove}
-              disabled={activeAction !== null || approvableCount === 0}
+              disabled={activeAction !== null}
             >
               {approveBusy ? (
                 <Loader2 className="mr-1 h-4 w-4 animate-spin" />
@@ -567,11 +594,12 @@ function CreationSheet({
               )}
               {t("sku.grid.approveCount", { count: approvableCount })}
             </Button>
-          ) : (
+          )}
+          {submittableCount > 0 && (
             <Button
               size="sm"
               onClick={handleSubmitToSap}
-              disabled={submitToSap.isPending || submittableCount === 0}
+              disabled={submitToSap.isPending}
             >
               {submitToSap.isPending ? (
                 <Loader2 className="mr-1 h-4 w-4 animate-spin" />
@@ -632,8 +660,9 @@ function CreationSheet({
             showCheckbox
             isMeaningfulRow={(row) => !isRowEmpty(row)}
             totalCount={filledRows.length}
-            onSelectionChange={({ count, pageFullySelected: pfs }) => {
+            onSelectionChange={({ count, pageFullySelected: pfs, selectedKeys: keys }) => {
               setSelectedCount(count)
+              setSelectedKeys(keys)
               setPageFullySelected(pfs)
               if (!pfs) setSelectAllMode(false)
             }}
@@ -694,11 +723,11 @@ function CreationSheet({
               )}
               {t("sku.grid.saveDraft")}
             </Button>
-            {flowMode === "approve" ? (
+            {approvableCount > 0 && (
               <Button
                 size="sm"
                 onClick={handleApprove}
-                disabled={activeAction !== null || approvableCount === 0}
+                disabled={activeAction !== null}
               >
                 {activeAction === "approve" ? (
                   <Loader2 className="mr-1 h-4 w-4 animate-spin" />
@@ -707,11 +736,12 @@ function CreationSheet({
                 )}
                 {t("sku.grid.approveCount", { count: approvableCount })}
               </Button>
-            ) : (
+            )}
+            {submittableCount > 0 && (
               <Button
                 size="sm"
                 onClick={handleSubmitToSap}
-                disabled={submitToSap.isPending || submittableCount === 0}
+                disabled={submitToSap.isPending}
               >
                 {submitToSap.isPending ? (
                   <Loader2 className="mr-1 h-4 w-4 animate-spin" />

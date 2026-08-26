@@ -4,12 +4,20 @@ import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { formatDate } from "@/lib/formatDate"
 import type { Product } from "@/features/products/types"
+import type { ProductSapDetail, TelegramImage } from "@/features/products/api"
 
 interface ProductInfoCardProps {
   product: Product
+  // Both undefined while their own queries are still loading — rendered
+  // as "—" rather than blocking this whole card on them (BUG-021: these
+  // fields only existed on Mobile before, fetched here from the same rich
+  // SAP-joined endpoint mobile already uses, since none of them are synced
+  // Supabase columns).
+  sapDetail?: ProductSapDetail
+  telegramImages?: TelegramImage[]
 }
 
-export function ProductInfoCard({ product }: ProductInfoCardProps) {
+export function ProductInfoCard({ product, sapDetail, telegramImages }: ProductInfoCardProps) {
   const { t } = useTranslation()
 
   const infoItems = [
@@ -38,6 +46,45 @@ export function ProductInfoCard({ product }: ProductInfoCardProps) {
       value: product.isCommitted != null ? String(product.isCommitted) : "—",
     },
     {
+      label: t("products.quantityPerCarton"),
+      value: sapDetail?.quantityPerCarton != null ? String(sapDetail.quantityPerCarton) : "—",
+    },
+    {
+      label: t("products.warehousePrice"),
+      value:
+        sapDetail?.latestWarehouseInventoryPrice != null
+          ? String(sapDetail.latestWarehouseInventoryPrice)
+          : "—",
+    },
+    {
+      label: t("products.supplierName"),
+      value: sapDetail?.supplierName || "—",
+    },
+    {
+      label: t("products.countryOfOrigin"),
+      value: sapDetail?.countryOfOrigin || "—",
+    },
+    {
+      label: t("products.finish"),
+      value: sapDetail?.finish || "—",
+    },
+    {
+      label: t("products.warehouseBins"),
+      value: sapDetail?.warehouseBins?.length ? sapDetail.warehouseBins.join(", ") : "—",
+    },
+    {
+      label: t("products.showroom1"),
+      value: sapDetail?.showroom1 || "—",
+    },
+    {
+      label: t("products.showroom2"),
+      value: sapDetail?.showroom2 || "—",
+    },
+    {
+      label: t("products.showroom3"),
+      value: sapDetail?.showroom3 || "—",
+    },
+    {
       label: t("products.stockSyncedAt"),
       value: product.stockSyncedAt ? formatDate(product.stockSyncedAt) : "—",
     },
@@ -64,7 +111,7 @@ export function ProductInfoCard({ product }: ProductInfoCardProps) {
       <CardHeader>
         <CardTitle>{t("productDetail.productInfo")}</CardTitle>
       </CardHeader>
-      <CardContent>
+      <CardContent className="grid gap-6">
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
           {infoItems.map((item) => (
             <div key={item.label} className="grid gap-1">
@@ -73,6 +120,34 @@ export function ProductInfoCard({ product }: ProductInfoCardProps) {
             </div>
           ))}
         </div>
+
+        {/* Telegram-sourced photos — a separate pipeline from the Cover/
+            Gallery Image system above (CoverImageSection/GallerySection),
+            same distinction the mobile app's "Telegram Photos" button
+            makes (BUG-022). Simple thumbnail-links-out rather than a full
+            lightbox — admin only needs to see what's there, not manage it
+            here. */}
+        {telegramImages && telegramImages.length > 0 && (
+          <div className="grid gap-2 border-t pt-4">
+            <span className="text-sm text-muted-foreground">
+              {t("products.telegramPhotos")} ({telegramImages.length})
+            </span>
+            <div className="flex flex-wrap gap-2">
+              {telegramImages.map((img) => (
+                <a
+                  key={img.url}
+                  href={img.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  title={img.caption ?? undefined}
+                  className="block overflow-hidden rounded-md border"
+                >
+                  <img src={img.url} alt={img.caption ?? ""} className="h-20 w-20 object-cover" />
+                </a>
+              ))}
+            </div>
+          </div>
+        )}
       </CardContent>
     </Card>
   )

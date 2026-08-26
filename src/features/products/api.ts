@@ -119,6 +119,65 @@ async function fetchProductById(id: string): Promise<Product> {
   return mapProductRow(res.product)
 }
 
+// Supplemental fields the Supabase-mirror endpoint above never carries
+// (Finish, Showroom1-3, Quantity per Carton, Warehouse Bins aren't synced
+// columns — they only exist live in SAP). Fetched separately, keyed on sku,
+// from the same rich endpoint the mobile app's product page already uses.
+// BUG-021: these were only ever visible on Mobile, never on Web.
+export type ProductSapDetail = {
+  supplierName: string | null
+  countryOfOrigin: string | null
+  finish: string | null
+  quantityPerCarton: number | null
+  latestWarehouseInventoryPrice: number | null
+  warehouseBins: string[]
+  showroom1: string | null
+  showroom2: string | null
+  showroom3: string | null
+}
+
+async function fetchProductSapDetail(sku: string): Promise<ProductSapDetail> {
+  const res = await apiFetch<{
+    SupplierName?: string | null
+    CountryOfOrigin?: string | null
+    actualFinish?: string | null
+    Finish?: string | null
+    QuantityPerCarton?: number | null
+    latestWarehouseTInventoryPrice?: number | null
+    warehouseTBinsAvailableNow?: string[] | null
+    Showroom1?: string | null
+    Showroom2?: string | null
+    Showroom3?: string | null
+  }>(`${API_ENDPOINTS.PRODUCT_SAP_DETAIL}/${sku}`, { method: "GET" })
+
+  return {
+    supplierName: res.SupplierName ?? null,
+    countryOfOrigin: res.CountryOfOrigin ?? null,
+    finish: res.actualFinish ?? res.Finish ?? null,
+    quantityPerCarton: res.QuantityPerCarton ?? null,
+    latestWarehouseInventoryPrice: res.latestWarehouseTInventoryPrice ?? null,
+    warehouseBins: res.warehouseTBinsAvailableNow ?? [],
+    showroom1: res.Showroom1 ?? null,
+    showroom2: res.Showroom2 ?? null,
+    showroom3: res.Showroom3 ?? null,
+  }
+}
+
+export type TelegramImage = {
+  url: string
+  caption: string | null
+  telegramDate: string | null
+  category: string | null
+}
+
+async function fetchTelegramImages(sku: string): Promise<TelegramImage[]> {
+  const res = await apiFetch<{ sku: string; images: TelegramImage[] }>(
+    `${API_ENDPOINTS.PRODUCT_SAP_DETAIL}/${sku}/telegram-images`,
+    { method: "GET" },
+  )
+  return res.images ?? []
+}
+
 async function createProductFromSap(input: CreateProductFromSapInput): Promise<Product> {
   const res = await apiFetch<{ success: true; product: ProductRow }>(API_ENDPOINTS.PRODUCTS_FROM_SAP, {
     method: "POST",
@@ -183,6 +242,22 @@ export function useProductByIdQuery(id: string | null) {
     queryKey: id ? productsQueryKeys.byId(id) : ["products", "byId", "null"],
     queryFn: () => fetchProductById(id!),
     enabled: Boolean(id),
+  })
+}
+
+export function useProductSapDetailQuery(sku: string | null) {
+  return useQuery({
+    queryKey: ["products", "sapDetail", sku ?? "null"],
+    queryFn: () => fetchProductSapDetail(sku!),
+    enabled: Boolean(sku),
+  })
+}
+
+export function useTelegramImagesQuery(sku: string | null) {
+  return useQuery({
+    queryKey: ["products", "telegramImages", sku ?? "null"],
+    queryFn: () => fetchTelegramImages(sku!),
+    enabled: Boolean(sku),
   })
 }
 

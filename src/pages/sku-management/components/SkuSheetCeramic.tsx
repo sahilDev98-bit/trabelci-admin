@@ -66,8 +66,11 @@ export interface SkuSheetCeramicProps {
   isMeaningfulRow?: (row: SkuMetadataRow) => boolean
   /** Total record count across all pages — used for the "Select all X" banner text */
   totalCount?: number
-  /** Called whenever the selection count or page-full-selection state changes */
-  onSelectionChange?: (info: { count: number; pageFullySelected: boolean }) => void
+  /** Called whenever the selection count or page-full-selection state changes.
+   *  `selectedKeys` is the actual set of selected row keys (row._clientId ??
+   *  row.sku) — Approve/Submit to SAP need this to scope their action to
+   *  what's actually checked, not just a count. */
+  onSelectionChange?: (info: { count: number; pageFullySelected: boolean; selectedKeys: Set<string> }) => void
 
   // ── Controlled selection (cleanup page lifts state to parent) ──────────────
   /** If provided, determines whether a row is checked (bypasses internal selectedKeys) */
@@ -1896,8 +1899,8 @@ export const SkuSheetCeramic = forwardRef<SkuSheetCeramicHandle, SkuSheetCeramic
 
   // Notify parent whenever the selection count or page-selection state changes
   useEffect(() => {
-    onSelectionChange?.({ count: selectedKeys.size, pageFullySelected })
-  }, [selectedKeys.size, pageFullySelected, onSelectionChange])
+    onSelectionChange?.({ count: selectedKeys.size, pageFullySelected, selectedKeys })
+  }, [selectedKeys, pageFullySelected, onSelectionChange])
 
   // ── Bulk delete ───────────────────────────────────────────────────────────
   const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false)
