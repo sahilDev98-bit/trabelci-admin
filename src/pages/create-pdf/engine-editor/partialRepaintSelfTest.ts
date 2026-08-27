@@ -98,6 +98,8 @@ export async function runPartialRepaintSelfTest(): Promise<PartialRepaintTestRes
       onSelectLine: () => {},
       onReplaceImage: () => {},
       onDropOnImage: () => {},
+      onDropAssetOnPage: () => {},
+      onDropAssetOnImage: () => {},
       onDropOnPage: () => {},
       onTransformImage: () => {},
       onTransformVector: () => {},

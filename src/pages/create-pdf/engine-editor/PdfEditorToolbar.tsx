@@ -1,7 +1,7 @@
 import {
   AlignCenterIcon, AlignLeftIcon, AlignRightIcon, ArrowUpDownIcon,
   BoldIcon, CopyIcon, DownloadIcon, FlipHorizontalIcon, FlipVerticalIcon,
-  ArrowLeftIcon, ImageIcon, ImagePlusIcon, ItalicIcon, Loader2Icon,
+  ArrowLeftIcon, ImageIcon, ImagePlusIcon, ItalicIcon, LibraryIcon, Loader2Icon,
   MinusIcon, PackageSearchIcon, PlusIcon, RotateCcwIcon, RotateCwIcon,
   ScanSearchIcon, Trash2Icon, TypeIcon, TypeOutlineIcon, XIcon,
 } from "lucide-react"
@@ -45,6 +45,9 @@ interface PdfEditorToolbarProps {
   onToggleContentMode: () => void
   onAddText: () => void
   onAddImage: () => void
+  /** Shows or hides the asset library. */
+  assetPanelOpen: boolean
+  onToggleAssetPanel: () => void
   /** Shows or hides the product panel. A toggle rather than a one-way open,
    * because the panel takes real width from the page and someone half way
    * through a layout needs it back. */
@@ -113,7 +116,8 @@ function ToolButton({
 export function PdfEditorToolbar({
   documentName,
   onZoomToSelection, selection, contentMode, onToggleContentMode,
-  onAddText, onAddImage, productPanelOpen, onToggleProductPanel, onOpenOrganizer,
+  onAddText, onAddImage, assetPanelOpen, onToggleAssetPanel,
+  productPanelOpen, onToggleProductPanel, onOpenOrganizer,
   onEditSelectedText, onReplaceSelectedImage, onReplaceSelectedVector,
   textStyle, onToggleBold, onToggleItalic, onTextColor, onScaleText, onAlignText,
   onTransformImage, onTransformVector,
@@ -192,12 +196,27 @@ export function PdfEditorToolbar({
               <ImagePlusIcon className="size-4" />
               <span className="text-xs">{t("pdfTemplates.engineAddImageShort", "Image")}</span>
             </Button>
-            {/* The third way of getting content onto the page, and it belongs
-                with the other two: text and pictures come from you, product
-                details come from the catalogue. Kept in the DOCUMENT tools so
-                it is visible before anything is selected — a panel nobody can
-                find until they happen to click a caption is a panel nobody
-                uses. */}
+            {/* The library of logos, icons and badges kept on the server.
+                Sits with the other ways of putting something on the page:
+                text and pictures come from you, artwork from the shelf,
+                product details from the catalogue. */}
+            <Button
+              type="button"
+              size="sm"
+              variant={assetPanelOpen ? "secondary" : "ghost"}
+              onClick={onToggleAssetPanel}
+              aria-pressed={assetPanelOpen}
+              className="h-8 shrink-0 gap-1.5 px-2"
+              aria-label={t("pdfTemplates.assetPanelTitle", "Asset library")}
+              title={t("pdfTemplates.assetPanelTitle", "Asset library")}
+            >
+              <LibraryIcon className="size-4" />
+              <span className="text-xs">{t("pdfTemplates.engineAssetsShort", "Assets")}</span>
+            </Button>
+            {/* The last way of getting content onto the page, and it belongs
+                with the others. Kept in the DOCUMENT tools so it is visible
+                before anything is selected — a panel nobody can find until
+                they happen to click a caption is a panel nobody uses. */}
             <Button
               type="button"
               size="sm"

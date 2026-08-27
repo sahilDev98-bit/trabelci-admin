@@ -14,6 +14,8 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import type { EngineTextLine, PagePlanRequest } from "@/lib/pdf-engine"
 import type { CatalogProduct } from "@/features/catalogProducts/types"
+import { fetchPdfAssetFile } from "@/features/pdfAssets/api"
+import type { PdfAsset } from "@/features/pdfAssets/types"
 
 import type { PdfContentMode, PdfOrganizerMode } from "../pdfEditorTypes"
 import { PdfPageOrganizer, type OrganizerPage } from "../PdfPageOrganizer"
@@ -23,6 +25,7 @@ import { dropToPagePoints, textMoveDelta, textPlacementOnPage, imagePlacement } 
 import { CrossPageDragGhost } from "./CrossPageDragGhost"
 import { findFreeSpot, newImageSize, type Box } from "./placement"
 import { readImageSize } from "./imageFile"
+import { PdfAssetPanel } from "./PdfAssetPanel"
 import { PdfEngineWorkspace } from "./PdfEngineWorkspace"
 import { PdfProductPanel } from "./PdfProductPanel"
 import { PdfEditorLoadingScreen } from "../PdfEditorLoadingScreen"
@@ -151,6 +154,7 @@ export function PdfEngineEditorPage() {
    * one product, and having to search for it again after glancing at the full
    * width of the page would make the panel not worth opening.
    */
+  const [assetPanelOpen, setAssetPanelOpen] = useState(false)
   const [productPanelOpen, setProductPanelOpen] = useState(false)
   const [product, setProduct] = useState<CatalogProduct | null>(null)
   /**
@@ -585,6 +589,76 @@ export function PdfEngineEditorPage() {
     }
   }
 
+  // ── Asset library ─────────────────────────────────────────────────────────
+
+  /**
+   * Artwork from the shared library, placed on a page.
+   *
+   * The bytes come through the API rather than straight from Cloudflare: R2
+   * serves these objects without CORS headers, so the browser cannot fetch
+   * them itself. Only PLACING needs this round trip — the panel's thumbnails
+   * point an <img> at R2 directly and cost nothing.
+   *
+   * Once the file is in hand there is nothing asset-specific left, so all
+   * three routes hand off to the same code that already handles an image
+   * dragged in off the desktop. An asset behaves exactly like a picture
+   * because by that point it IS one.
+   */
+  const withAssetFile = async (assetId: string, place: (file: File) => Promise<void>) => {
+    try {
+      const file = await fetchPdfAssetFile(assetId)
+      await place(file)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : String(err))
+    }
+  }
+
+  /** Dropped on bare paper — lands centred on the drop point. */
+  const handleDropAssetOnPage = (
+    pageIndex: number, assetId: string, xPts: number, yFromTopPts: number,
+  ) => {
+    void withAssetFile(assetId, (file) => handleDropOnPage(pageIndex, file, xPts, yFromTopPts))
+  }
+
+  /** Dropped straight onto an existing picture — swaps it, keeping that
+   * slot's position, size and shape. This is how a template's placeholder
+   * logo gets replaced with the real one. */
+  const handleDropAssetOnImage = (pageIndex: number, imageIndex: number, assetId: string) => {
+    void withAssetFile(assetId, (file) => handleDropOnImage(pageIndex, imageIndex, file))
+  }
+
+  /**
+   * Clicked rather than dragged.
+   *
+   * Kept alongside dragging, not instead of it: dragging chooses the exact
+   * spot, but clicking is faster when the position will be adjusted anyway,
+   * and it is the only route available from a keyboard.
+   */
+  const placeAssetOnVisiblePage = (asset: PdfAsset) => {
+    const pageIndex = visiblePageIndex()
+    const page = doc.pages[pageIndex]
+    if (!page) return
+    void withAssetFile(asset.id, async (file) => {
+      // The stored pixel size is used when we have it, so a wide logo stays
+      // wide; falling back to reading the file only when the row predates
+      // that column or the upload failed to report it.
+      const source = asset.widthPx && asset.heightPx
+        ? { width: asset.widthPx, height: asset.heightPx }
+        : await readImageSize(file)
+      const size = newImageSize(page, source.width, source.height, NEW_IMAGE_WIDTH_PTS)
+      const spot = findFreeSpot(page, occupiedBoxes(pageIndex), size)
+      const newIndex = await doc.addImageOverlay(
+        pageIndex,
+        { x: spot.x, y: spot.y, width: size.width, height: size.height },
+        file,
+      )
+      // Selected on arrival so its handles are showing — unlike a product
+      // detail, where selecting would flip that panel into replace mode,
+      // there is no such trap here and seeing what you placed is worth more.
+      if (newIndex >= 0) setSelection({ pageIndex, kind: "image", index: newIndex })
+    })
+  }
+
   // ── Overlays ──────────────────────────────────────────────────────────────
 
   /** Overlays land on the first page currently in view, so "Add text" adds
@@ -850,6 +924,8 @@ export function PdfEngineEditorPage() {
       void handleDropOnImage(pageIndex, imageIndex, file),
     onDropOnPage: (pageIndex: number, file: File, x: number, y: number) =>
       void handleDropOnPage(pageIndex, file, x, y),
+    onDropAssetOnPage: handleDropAssetOnPage,
+    onDropAssetOnImage: handleDropAssetOnImage,
     onTransformImage: (
       pageIndex: number, imageIndex: number,
       rect: { x: number; y: number; width: number; height: number },
@@ -915,6 +991,8 @@ export function PdfEngineEditorPage() {
           onToggleContentMode: () => setContentMode((m) => (m === "text" ? "images" : "text")),
           onAddText: () => setNewTextDraft({ pageIndex: visiblePageIndex(), text: "" }),
           onAddImage: () => openFilePicker({ kind: "overlay", pageIndex: visiblePageIndex() }),
+          assetPanelOpen,
+          onToggleAssetPanel: () => setAssetPanelOpen((open) => !open),
           productPanelOpen,
           onToggleProductPanel: () => setProductPanelOpen((open) => !open),
           onOpenOrganizer: (mode) => void openOrganizer(mode),
@@ -958,6 +1036,12 @@ export function PdfEngineEditorPage() {
           busy: doc.busy,
           selection,
         }}
+        leftPanel={assetPanelOpen ? (
+          <PdfAssetPanel
+            onPlaceAsset={placeAssetOnVisiblePage}
+            onClose={() => setAssetPanelOpen(false)}
+          />
+        ) : undefined}
         panel={productPanelOpen ? (
           <PdfProductPanel
             product={product}

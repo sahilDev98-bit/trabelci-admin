@@ -173,6 +173,8 @@ export async function runWorkspaceSelfTest(): Promise<WorkspaceTestResult> {
       onReplaceImage: () => {},
       onReplaceVector: () => {},
       onDropOnImage: () => {},
+      onDropAssetOnPage: () => {},
+      onDropAssetOnImage: () => {},
       onDropOnPage: () => {},
       onTransformImage: () => {},
       onTransformVector: () => {},
@@ -183,8 +185,10 @@ export async function runWorkspaceSelfTest(): Promise<WorkspaceTestResult> {
       onToggleContentMode: () => {},
       onAddText: () => {},
       onAddImage: () => {},
-      // Closed for this measurement: the panel takes width from the page area,
-      // and what is being measured here is the page area at its full size.
+      // Both closed for this measurement: a panel takes width from the page
+      // area, and what is being measured here is the page area at full size.
+      assetPanelOpen: false,
+      onToggleAssetPanel: () => {},
       productPanelOpen: false,
       onToggleProductPanel: () => {},
       onOpenOrganizer: () => {},

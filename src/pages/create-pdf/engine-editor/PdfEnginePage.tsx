@@ -9,6 +9,7 @@ import type { PageTextState, PageImageState, PageVectorState } from "./usePdfEng
 import { PdfEngineImageSlot } from "./PdfEngineImageSlot"
 import { PdfEngineTextSlot } from "./PdfEngineTextSlot"
 import { PdfEngineVectorSlot } from "./PdfEngineVectorSlot"
+import { assetIdFromDrag, dragCarriesAsset } from "./assetDrag"
 
 interface PdfEnginePageProps {
   page: EnginePage
@@ -55,6 +56,11 @@ interface PdfEnginePageProps {
    * how a human describes a position; the caller converts to PDF's
    * bottom-up space. */
   onDropOnPage: (pageIndex: number, file: File, xPts: number, yFromTopPts: number) => void
+  /** The same two drops, but for artwork dragged out of the asset library.
+   * It arrives as an id rather than a file — the bytes live on the server —
+   * so fetching them is the editor's job, not this component's. */
+  onDropAssetOnPage: (pageIndex: number, assetId: string, xPts: number, yFromTopPts: number) => void
+  onDropAssetOnImage: (pageIndex: number, imageIndex: number, assetId: string) => void
   /** Committed once a move/resize gesture ends, in PDF points. */
   onTransformImage: (
     pageIndex: number, imageIndex: number,
@@ -134,8 +140,17 @@ function imageFromDrag(dt: DataTransfer | null): File | null {
   return null
 }
 
-function dragCarriesFile(dt: DataTransfer | null): boolean {
+/**
+ * Whether a drag is carrying something this page can accept — a file from the
+ * operating system, or an asset from the library.
+ *
+ * Deliberately answers during dragover, when the drag's DATA cannot be read
+ * and only its shape is known. That is what decides whether the page lights up
+ * as a drop target, so it has to be answerable while the pointer is moving.
+ */
+function dragCarriesDroppable(dt: DataTransfer | null): boolean {
   if (!dt) return false
+  if (dragCarriesAsset(dt)) return true
   return Array.from(dt.items ?? []).some((i) => i.kind === "file")
 }
 
@@ -152,7 +167,8 @@ export function PdfEnginePage({
   page, pageIndex, displayWidth, text, images, vectors, contentMode, revision,
   renderPage, renderPageRegion, lastChange, loadPageText, loadPageImages, loadPageVectors,
   onSelectLine, onReplaceImage, onReplaceVector,
-  onDropOnImage, onDropOnPage, onTransformImage, onTransformVector, onResizeText,
+  onDropOnImage, onDropOnPage, onDropAssetOnPage, onDropAssetOnImage,
+  onTransformImage, onTransformVector, onResizeText,
   selection, onSelect, onMoveStart, draggingSlot, dropTargetPage, originPatchUrl, imagePreviewUrl,
 }: PdfEnginePageProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -350,12 +366,21 @@ export function PdfEnginePage({
     e.preventDefault()
     setDropPage(false)
     setDropSlot(null)
-    const file = imageFromDrag(e.dataTransfer)
-    if (!file) return
     const rect = e.currentTarget.getBoundingClientRect()
     // Drop point -> PDF points, measured from the page's top-left.
     const xPts = (e.clientX - rect.left) / scale
     const yFromTopPts = (e.clientY - rect.top) / scale
+
+    // An asset from the library is checked FIRST. A drag out of the panel
+    // carries no file at all, so asking for one would simply come back empty
+    // and the drop would be silently ignored.
+    const assetId = assetIdFromDrag(e.dataTransfer)
+    if (assetId) {
+      onDropAssetOnPage(pageIndex, assetId, xPts, yFromTopPts)
+      return
+    }
+    const file = imageFromDrag(e.dataTransfer)
+    if (!file) return
     onDropOnPage(pageIndex, file, xPts, yFromTopPts)
   }
 
@@ -371,9 +396,9 @@ export function PdfEnginePage({
             : "ring-black/10"
       }`}
       style={{ width: displayWidth, height: displayHeight }}
-      onDragEnter={(e) => { if (dragCarriesFile(e.dataTransfer)) { e.preventDefault(); setDropPage(true) } }}
+      onDragEnter={(e) => { if (dragCarriesDroppable(e.dataTransfer)) { e.preventDefault(); setDropPage(true) } }}
       onDragOver={(e) => {
-        if (!dragCarriesFile(e.dataTransfer)) return
+        if (!dragCarriesDroppable(e.dataTransfer)) return
         // Both preventDefault AND a copy effect are required, or the
         // browser refuses the drop and opens the file in a new tab.
         e.preventDefault()
@@ -420,14 +445,14 @@ export function PdfEnginePage({
             key={`i-${pageIndex}-${image.imageIndex}`}
             className="contents"
             onDragEnter={(e) => {
-              if (!dragCarriesFile(e.dataTransfer)) return
+              if (!dragCarriesDroppable(e.dataTransfer)) return
               e.preventDefault()
               e.stopPropagation()
               setDropSlot(image.imageIndex)
               setDropPage(false)
             }}
             onDragOver={(e) => {
-              if (!dragCarriesFile(e.dataTransfer)) return
+              if (!dragCarriesDroppable(e.dataTransfer)) return
               e.preventDefault()
               e.stopPropagation()
               e.dataTransfer.dropEffect = "copy"
@@ -443,6 +468,11 @@ export function PdfEnginePage({
               e.stopPropagation()
               setDropSlot(null)
               setDropPage(false)
+              const assetId = assetIdFromDrag(e.dataTransfer)
+              if (assetId) {
+                onDropAssetOnImage(pageIndex, image.imageIndex, assetId)
+                return
+              }
               const file = imageFromDrag(e.dataTransfer)
               if (file) onDropOnImage(pageIndex, image.imageIndex, file)
             }}

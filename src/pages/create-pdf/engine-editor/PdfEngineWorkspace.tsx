@@ -62,10 +62,14 @@ interface PdfEngineWorkspaceProps {
    * the layout beside the page area and nothing more.
    */
   panel?: React.ReactNode
+  /** The asset library, when it is open. On the START side, beside the page
+   * thumbnails — where the brief puts it, and opposite the product panel so
+   * both can be open without fighting for the same edge. */
+  leftPanel?: React.ReactNode
 }
 
 export function PdfEngineWorkspace({
-  doc, documentName, onExit, onDisplayWidthChange, column, toolbar, selection, panel,
+  doc, documentName, onExit, onDisplayWidthChange, column, toolbar, selection, panel, leftPanel,
 }: PdfEngineWorkspaceProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
   /** Sized to the SCALED content during a gesture, so the scrollbars match
@@ -377,6 +381,8 @@ export function PdfEngineWorkspace({
           currentPage={currentPage}
           onSelectPage={goToPage}
         />
+
+        {leftPanel}
 
       {/* The page area and its floating bar, in their own positioning
           context. The bar centres itself across whatever it is anchored to,
