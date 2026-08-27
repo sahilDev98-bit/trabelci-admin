@@ -188,6 +188,7 @@ export async function runWorkspaceSelfTest(): Promise<WorkspaceTestResult> {
       // area, and what is being measured here is the page area at full size.
       assetPanelOpen: false,
       onToggleAssetPanel: () => {},
+      canUndo: false, canRedo: false, onUndo: () => {}, onRedo: () => {},
       productPanelOpen: false,
       onToggleProductPanel: () => {},
       onOpenOrganizer: () => {},

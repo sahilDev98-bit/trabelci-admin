@@ -1,9 +1,14 @@
-import { useRef, useState } from "react"
+import { useMemo, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { toast } from "sonner"
 import { ImagePlusIcon, Loader2Icon, LibraryIcon, Trash2Icon, XIcon } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import {
+  Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle,
+} from "@/components/ui/dialog"
 import {
   useCreatePdfAssetMutation, useDeletePdfAssetMutation, usePdfAssetsQuery,
 } from "@/features/pdfAssets/api"
@@ -30,7 +35,18 @@ import { setAssetDragData } from "./assetDrag"
  * tiles you can see all at once, so filtering it cost two rows of chrome at
  * the top of the panel to solve a problem nobody had. The controls come back
  * when the shelf is big enough to need them, not before.
+ *
+ * The ONE exception is the supplier chooser, and it follows the same rule: an
+ * asset can be filed under the supplier it belongs to ("Varmora Assets",
+ * "Supplier B Assets", as the brief puts it), but the chooser only appears
+ * once there is genuinely something to choose between. With every asset
+ * unfiled, or all from one supplier, it stays out of the way.
  */
+
+/** Stands for "assets that belong to no supplier in particular" — an R11
+ * icon or a Made in Italy badge is not any one brand's. Not a supplier name,
+ * so it cannot collide with one. */
+const UNFILED = "__unfiled__"
 
 /** Panel width, matching the product panel on the other side so the document
  * sits centred when both are open. */
@@ -46,13 +62,43 @@ export function PdfAssetPanel({ onPlaceAsset, onClose }: PdfAssetPanelProps) {
   const { t } = useTranslation()
   const [uploading, setUploading] = useState(false)
   const [pendingDelete, setPendingDelete] = useState<string | null>(null)
+  const [supplierFilter, setSupplierFilter] = useState<string | null>(null)
+  /** Files chosen but not yet stored: the supplier is asked for first. */
+  const [pendingUpload, setPendingUpload] = useState<File[] | null>(null)
+  const [uploadSupplier, setUploadSupplier] = useState("")
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const query = usePdfAssetsQuery()
   const createAsset = useCreatePdfAssetMutation()
   const deleteAsset = useDeletePdfAssetMutation()
 
-  const assets = query.data ?? []
+  const all = useMemo(() => query.data ?? [], [query.data])
+
+  /** Every supplier that actually has something on the shelf, in alphabetical
+   * order. Derived rather than fetched: the whole library is already here, so
+   * a second request would only tell us what we can see. */
+  const suppliers = useMemo(() => {
+    const names = new Set<string>()
+    for (const asset of all) if (asset.supplier) names.add(asset.supplier)
+    return Array.from(names).sort((a, b) => a.localeCompare(b))
+  }, [all])
+
+  const hasUnfiled = useMemo(() => all.some((a) => !a.supplier), [all])
+
+  /**
+   * Whether choosing a supplier is worth showing at all.
+   *
+   * One drawer is not a filing system. The chooser earns its place only when
+   * there is more than one thing to choose between — two suppliers, or one
+   * supplier alongside assets belonging to nobody.
+   */
+  const showSupplierChooser = suppliers.length + (hasUnfiled ? 1 : 0) > 1
+
+  const assets = useMemo(() => {
+    if (!supplierFilter) return all
+    if (supplierFilter === UNFILED) return all.filter((a) => !a.supplier)
+    return all.filter((a) => a.supplier === supplierFilter)
+  }, [all, supplierFilter])
 
   /**
    * Take files from the picker or from a drop onto the panel and store them.
@@ -63,7 +109,7 @@ export function PdfAssetPanel({ onPlaceAsset, onClose }: PdfAssetPanelProps) {
    * cannot fail on a format. It reuses the same converter the editor uses for
    * files dragged off the desktop, so the two cannot disagree.
    */
-  const uploadFiles = async (files: File[]) => {
+  const uploadFiles = async (files: File[], supplier: string | null) => {
     if (files.length === 0) return
     setUploading(true)
     let saved = 0
@@ -83,10 +129,10 @@ export function PdfAssetPanel({ onPlaceAsset, onClose }: PdfAssetPanelProps) {
           await createAsset.mutateAsync({
             file: converted,
             name: file.name.replace(/\.[^.]+$/, ""),
-            // No category is chosen in the panel any more, so everything
-            // lands under "other". The column and the API filter are still
-            // there for the supplier grouping that comes next.
+            // No category is chosen in the panel; only the supplier is. The
+            // column stays because the API and the schema both carry it.
             category: "other",
+            supplier,
             widthPx: width,
             heightPx: height,
           })
@@ -100,10 +146,38 @@ export function PdfAssetPanel({ onPlaceAsset, onClose }: PdfAssetPanelProps) {
       }
       if (saved > 0) {
         toast.success(t("pdfTemplates.assetUploaded", "{{count}} asset added", { count: saved }))
+        // Jump to where they landed, so a batch filed under a supplier does
+        // not appear to have vanished behind whatever filter was in force.
+        setSupplierFilter(supplier ? supplier : (showSupplierChooser ? UNFILED : null))
       }
     } finally {
       setUploading(false)
     }
+  }
+
+  /**
+   * Files have been chosen; ask whose they are before storing them.
+   *
+   * A step in the way of an upload has to earn itself. This one does: the
+   * supplier is knowable only at this moment, by the person doing it, and
+   * filing it later means opening every asset one at a time. It is one field,
+   * it can be skipped with Enter, and it applies to the whole batch — the
+   * usual case being a folder of one supplier's logos dropped at once.
+   */
+  const askSupplierFor = (files: File[]) => {
+    if (files.length === 0) return
+    setPendingUpload(files)
+    // Pre-filled with whichever drawer is open, since dropping files while
+    // looking at Varmora's assets almost always means "these are Varmora's".
+    setUploadSupplier(supplierFilter && supplierFilter !== UNFILED ? supplierFilter : "")
+  }
+
+  const confirmUpload = () => {
+    const files = pendingUpload
+    setPendingUpload(null)
+    if (!files) return
+    const supplier = uploadSupplier.trim()
+    void uploadFiles(files, supplier === "" ? null : supplier)
   }
 
   const handleDelete = async (asset: PdfAsset) => {
@@ -151,6 +225,30 @@ export function PdfAssetPanel({ onPlaceAsset, onClose }: PdfAssetPanelProps) {
         </Button>
       </div>
 
+      {/* ── Whose assets ───────────────────────────────────────────────
+          Only rendered once there is more than one drawer to choose between.
+          One supplier is not a filing system, and an empty chooser is chrome
+          charged against every session to serve none of them. */}
+      {showSupplierChooser && (
+        <div className="shrink-0 border-b p-3">
+          <select
+            data-pdf-asset-supplier
+            value={supplierFilter ?? ""}
+            onChange={(e) => setSupplierFilter(e.target.value === "" ? null : e.target.value)}
+            aria-label={t("pdfTemplates.assetSupplierLabel", "Show assets for")}
+            className="h-9 w-full rounded-md border bg-background px-2 text-sm"
+          >
+            <option value="">{t("pdfTemplates.assetSupplierAll", "All suppliers")}</option>
+            {suppliers.map((name) => (
+              <option key={name} value={name}>{name}</option>
+            ))}
+            {hasUnfiled && (
+              <option value={UNFILED}>{t("pdfTemplates.assetSupplierUnfiled", "No supplier")}</option>
+            )}
+          </select>
+        </div>
+      )}
+
       {/* ── The shelf ──────────────────────────────────────────────────── */}
       <div
         className={`themed-scrollbar min-h-0 flex-1 overflow-y-auto p-3 ${
@@ -175,7 +273,7 @@ export function PdfAssetPanel({ onPlaceAsset, onClose }: PdfAssetPanelProps) {
         onDrop={(e) => {
           e.preventDefault()
           setDropping(false)
-          void uploadFiles(Array.from(e.dataTransfer.files ?? []))
+          askSupplierFor(Array.from(e.dataTransfer.files ?? []))
         }}
       >
         {query.isLoading && (
@@ -191,7 +289,9 @@ export function PdfAssetPanel({ onPlaceAsset, onClose }: PdfAssetPanelProps) {
         )}
         {!query.isLoading && !query.isError && assets.length === 0 && (
           <p className="py-4 text-xs text-muted-foreground">
-            {t("pdfTemplates.assetEmpty", "The library is empty. Add logos, icons and badges here once and use them in every catalogue.")}
+            {all.length > 0
+              ? t("pdfTemplates.assetNoneForSupplier", "Nothing filed here yet.")
+              : t("pdfTemplates.assetEmpty", "The library is empty. Add logos, icons and badges here once and use them in every catalogue.")}
           </p>
         )}
 
@@ -234,10 +334,56 @@ export function PdfAssetPanel({ onPlaceAsset, onClose }: PdfAssetPanelProps) {
             const files = Array.from(e.target.files ?? [])
             // Reset first, so picking the same file twice still fires.
             e.target.value = ""
-            void uploadFiles(files)
+            askSupplierFor(files)
           }}
         />
       </div>
+
+      {/* Whose are these? Asked once per batch, before anything is stored. */}
+      <Dialog
+        open={pendingUpload !== null}
+        onOpenChange={(open) => { if (!open) setPendingUpload(null) }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>
+              {t("pdfTemplates.assetUploadTitle", "Add {{count}} asset", { count: pendingUpload?.length ?? 0 })}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-2">
+            <Label htmlFor="asset-supplier">
+              {t("pdfTemplates.assetSupplierField", "Supplier or brand")}
+            </Label>
+            <Input
+              id="asset-supplier"
+              value={uploadSupplier}
+              onChange={(e) => setUploadSupplier(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); confirmUpload() } }}
+              // Offers the suppliers already in use without forcing a choice
+              // from them: a new supplier must not require a settings screen.
+              list="asset-supplier-options"
+              placeholder={t("pdfTemplates.assetSupplierPlaceholder", "e.g. Varmora")}
+              autoFocus
+              dir="auto"
+            />
+            <datalist id="asset-supplier-options">
+              {suppliers.map((name) => <option key={name} value={name} />)}
+            </datalist>
+            <p className="text-xs text-muted-foreground">
+              {t(
+                "pdfTemplates.assetSupplierHint",
+                "Leave empty for artwork that belongs to no one supplier, like an R11 icon or a NEW badge.",
+              )}
+            </p>
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setPendingUpload(null)}>
+              {t("common.cancel", "Cancel")}
+            </Button>
+            <Button onClick={confirmUpload}>{t("common.add", "Add")}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </aside>
   )
 }

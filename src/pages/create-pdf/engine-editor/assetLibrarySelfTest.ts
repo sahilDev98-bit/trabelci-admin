@@ -61,6 +61,12 @@ export const ASSET_FIXTURE = [
     created_at: "2026-01-02T00:00:00Z",
   },
   {
+    id: "4", name: "Supplier B logo", category: "logo", supplier: "Supplier B",
+    file_url: "https://example.invalid/assets/supplier-b.png",
+    mime_type: "image/png", width_px: 300, height_px: 100, file_size: 3072,
+    created_at: "2026-01-04T00:00:00Z",
+  },
+  {
     id: "3", name: "NEW badge", category: "badge", supplier: null,
     file_url: "https://example.invalid/assets/new.png",
     mime_type: "image/png", width_px: 200, height_px: 80, file_size: 1024,
@@ -71,6 +77,11 @@ export const ASSET_FIXTURE = [
 export interface AssetLibraryTestResult {
   errors: string[]
   tilesShown: number
+  /** Filing by supplier: the chooser and what it narrows to. */
+  supplierOptions: string[]
+  tilesForVarmora: number
+  tilesForUnfiled: number
+  tilesBackOnAll: number
   /** What a drag out of the panel is carrying. */
   dragTypes: string[]
   draggedAssetId: string
@@ -117,6 +128,7 @@ function dragEvent(type: string, data: Record<string, string>, point?: { x: numb
 export async function runAssetLibrarySelfTest(): Promise<AssetLibraryTestResult> {
   const out: AssetLibraryTestResult = {
     errors: [], tilesShown: 0,
+    supplierOptions: [], tilesForVarmora: 0, tilesForUnfiled: 0, tilesBackOnAll: 0,
     dragTypes: [], draggedAssetId: "", pageLitUpForAsset: false,
     pageLitUpForEmptyDrag: false, droppedAssetId: "", droppedXPts: 0,
     droppedYPts: 0, expectedXPts: 0, expectedYPts: 0,
@@ -142,6 +154,49 @@ export async function runAssetLibrarySelfTest(): Promise<AssetLibraryTestResult>
     out.tilesShown = tiles().length
     if (out.tilesShown !== ASSET_FIXTURE.length) {
       out.errors.push(`the shelf shows ${out.tilesShown} of ${ASSET_FIXTURE.length} assets`)
+    }
+
+    // ── 1b. Filing by supplier ──────────────────────────────────────────
+    //
+    // The brief asks for assets "organized by supplier/brand" — Varmora's
+    // things together, Supplier B's together, and the ones belonging to
+    // nobody (an R11 icon, a NEW badge) reachable on their own.
+    const chooser = document.querySelector<HTMLSelectElement>("[data-pdf-asset-supplier]")
+    if (!chooser) {
+      out.errors.push("no supplier chooser, with two suppliers on the shelf")
+    } else {
+      out.supplierOptions = Array.from(chooser.options).map((o) => o.textContent?.trim() ?? "")
+
+      const choose = async (value: string) => {
+        const setter = Object.getOwnPropertyDescriptor(
+          window.HTMLSelectElement.prototype, "value")?.set
+        setter?.call(chooser, value)
+        chooser.dispatchEvent(new Event("change", { bubbles: true }))
+        await wait(80)
+      }
+
+      await choose("Varmora")
+      out.tilesForVarmora = tiles().length
+      await choose("__unfiled__")
+      out.tilesForUnfiled = tiles().length
+      await choose("")
+      out.tilesBackOnAll = tiles().length
+
+      if (out.tilesForVarmora !== 1) {
+        out.errors.push(`Varmora's drawer holds ${out.tilesForVarmora} assets, expected 1`)
+      }
+      if (out.tilesForUnfiled !== 2) {
+        out.errors.push(`the no-supplier drawer holds ${out.tilesForUnfiled} assets, expected 2`)
+      }
+      // The control for the whole mechanism: choosing a drawer must show
+      // FEWER than everything, or "filtering" is doing nothing at all.
+      if (out.tilesForVarmora >= out.tilesShown) {
+        out.errors.push("choosing a supplier did not narrow the shelf")
+      }
+      if (out.tilesBackOnAll !== out.tilesShown) {
+        out.errors.push(
+          `going back to all suppliers showed ${out.tilesBackOnAll} of ${out.tilesShown}`)
+      }
     }
 
     // ── 2. What a drag out of the panel carries ─────────────────────────
@@ -401,7 +456,7 @@ async function measurePageDrops(out: AssetLibraryTestResult): Promise<AssetLibra
  * what was sent as clearly as the thing receiving it, and asserting here on
  * what we believe we sent would only be re-checking our own arithmetic.
  */
-export async function uploadSvgThroughPanel(): Promise<{ chosenBytes: number }> {
+export async function uploadSvgThroughPanel(): Promise<{ chosenBytes: number; supplierTyped: string }> {
   const host = document.createElement("div")
   host.style.cssText = "position:fixed;inset:0;display:flex"
   document.body.appendChild(host)
@@ -428,10 +483,26 @@ export async function uploadSvgThroughPanel(): Promise<{ chosenBytes: number }> 
     input.files = dt.files
     input.dispatchEvent(new Event("change", { bubbles: true }))
 
+    // Choosing files no longer uploads them: the panel asks whose they are
+    // first. The dialog is rendered in a portal at the end of the document,
+    // so it is found from `document` rather than from inside the panel.
+    await until("the supplier dialog", () => !!document.getElementById("asset-supplier"))
+    const supplierField = document.getElementById("asset-supplier") as HTMLInputElement
+    const setter = Object.getOwnPropertyDescriptor(
+      window.HTMLInputElement.prototype, "value")?.set
+    setter?.call(supplierField, "Varmora")
+    supplierField.dispatchEvent(new Event("input", { bubbles: true }))
+    await wait(60)
+
+    const confirm = Array.from(document.querySelectorAll("button"))
+      .find((b) => b.textContent?.trim() === "Add")
+    if (!confirm) throw new Error("the supplier dialog has no Add button")
+    confirm.click()
+
     // Waits for the upload to have been ATTEMPTED, not to have succeeded —
     // the caller decides what the server says.
     await wait(1500)
-    return { chosenBytes: file.size }
+    return { chosenBytes: file.size, supplierTyped: "Varmora" }
   } finally {
     root.unmount()
     host.remove()
@@ -514,6 +585,7 @@ export async function showWorkspaceForDrag(pageCount = 12): Promise<void> {
     selection: null, contentMode: "text" as const, onToggleContentMode: () => {},
     onAddText: () => {}, onAddImage: () => {},
     assetPanelOpen: true, onToggleAssetPanel: () => {},
+    canUndo: false, canRedo: false, onUndo: () => {}, onRedo: () => {},
     productPanelOpen: false, onToggleProductPanel: () => {},
     onOpenOrganizer: () => {}, onEditSelectedText: () => {},
     onReplaceSelectedImage: () => {}, onReplaceSelectedVector: () => {},

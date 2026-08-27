@@ -226,6 +226,16 @@ export class PdfEngineClient {
     return this.call("save", { docId })
   }
 
+  /** Step the document back or forward through its own history. `moved` is
+   * false when there was nowhere to go. */
+  stepHistory(docId: string, direction: "undo" | "redo") {
+    return this.call("stepHistory", { docId, direction })
+  }
+
+  historyState(docId: string) {
+    return this.call("historyState", { docId })
+  }
+
   terminate(): void {
     this.terminated = true
     for (const [, entry] of this.pending) entry.reject(new Error("PDF engine client terminated"))

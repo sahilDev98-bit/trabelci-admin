@@ -125,6 +125,13 @@ export interface UsePdfEngineDocumentResult {
     pageIndex: number, imageIndex: number,
     rect: { x: number; y: number; width: number; height: number },
   ) => Promise<number>
+  /** Whether there is anything to step back to, or forward to. */
+  canUndo: boolean
+  canRedo: boolean
+  /** Step the document through its own history. Resolves to false when there
+   * was nowhere to go, so a caller can tell "nothing happened" from "done". */
+  undo: () => Promise<boolean>
+  redo: () => Promise<boolean>
   /** Resolves to the new line's index, or -1 if it could not be identified. */
   addTextOverlay: (pageIndex: number, overlay: TextOverlayRequest) => Promise<number>
   addImageOverlay: (
@@ -164,6 +171,7 @@ export function usePdfEngineDocument(templateId: string | null | undefined): Use
    * 7ms for the edit itself, which is the entire reason the editor felt
    * slow after every action.
    */
+  const [history, setHistory] = useState({ canUndo: false, canRedo: false })
   const [lastChange, setLastChange] = useState<
     { pageIndex: number; rect: PdfRect; revision: number } | null
   >(null)
@@ -372,6 +380,11 @@ export function usePdfEngineDocument(templateId: string | null | undefined): Use
     setBusy(true)
     try {
       const result = await run(id)
+      // Every mutation the worker records makes a step available to undo, and
+      // discards whatever future an earlier undo had left — the same rule the
+      // worker applies to the snapshot stack, mirrored here so the buttons do
+      // not need a round trip to know their own state.
+      setHistory({ canUndo: true, canRedo: false })
       const refreshed = await Promise.all(pages.map(async (pageIndex) => {
         const [{ lines }, { images }, { groups }] = await Promise.all([
           getEngine().listTextLines(id, pageIndex),
@@ -562,6 +575,7 @@ export function usePdfEngineDocument(templateId: string | null | undefined): Use
     setBusy(true)
     try {
       const result = await getEngine().applyPagePlan(id, plan)
+      setHistory({ canUndo: true, canRedo: false })
       setPages(result.pages)
       // A page plan renumbers, duplicates and drops pages wholesale, so
       // every cached per-page list now refers to pages that may not exist.
@@ -575,6 +589,41 @@ export function usePdfEngineDocument(templateId: string | null | undefined): Use
       setBusy(false)
     }
   }, [getEngine])
+
+  /**
+   * Step back or forward through the document's history.
+   *
+   * Every cached per-page list is thrown away rather than remapped. Undo
+   * replaces the whole document — a page can come back, an object can come
+   * back at a different index — so anything remembered about it is stale by
+   * construction. Rebuilding from the engine is cheap (0-8ms a page) and
+   * cannot be subtly wrong; remapping could be, and would show up as the
+   * wrong box being selected long after the undo.
+   */
+  const stepHistory = useCallback(async (direction: "undo" | "redo") => {
+    const id = docIdRef.current
+    if (!id) return false
+    setBusy(true)
+    try {
+      const result = await getEngine().stepHistory(id, direction)
+      setHistory({ canUndo: result.canUndo, canRedo: result.canRedo })
+      if (!result.moved) return false
+      if (result.pages) setPages(result.pages)
+      setPageText({})
+      setPageImages({})
+      setPageVectors({})
+      // Null, not a rect: a partial repaint is only safe when the change is
+      // known to be local, and this one is the opposite of local.
+      setLastChange(null)
+      setRevision((r) => r + 1)
+      return true
+    } finally {
+      setBusy(false)
+    }
+  }, [getEngine])
+
+  const undo = useCallback(() => stepHistory("undo"), [stepHistory])
+  const redo = useCallback(() => stepHistory("redo"), [stepHistory])
 
   const save = useCallback(async () => {
     const id = docIdRef.current
@@ -605,6 +654,7 @@ export function usePdfEngineDocument(templateId: string | null | undefined): Use
     renderCleanPatch, renderImagePreview, renderPageRegion, lastChange,
     removeVector, replaceVector, setVectorRect, transformVector, styleText, scaleText, alignText, transformImage, renderPage, editText, moveText, moveTextToPage, moveImageToPage, removeText,
     replaceImage, removeImage, setImageRect, addTextOverlay, addImageOverlay, applyPagePlan,
+    canUndo: history.canUndo, canRedo: history.canRedo, undo, redo,
     save, busy, revision,
   }), [
     phase, error, downloadPercent, pages, docId, pageText, pageImages,
@@ -613,6 +663,6 @@ export function usePdfEngineDocument(templateId: string | null | undefined): Use
     removeVector, replaceVector, setVectorRect, transformVector, styleText, scaleText, alignText, transformImage,
     renderPage, editText, moveText, moveTextToPage, moveImageToPage, removeText,
     replaceImage, removeImage, setImageRect, addTextOverlay, addImageOverlay,
-    applyPagePlan, save, busy, revision,
+    applyPagePlan, save, busy, revision, history, undo, redo,
   ])
 }

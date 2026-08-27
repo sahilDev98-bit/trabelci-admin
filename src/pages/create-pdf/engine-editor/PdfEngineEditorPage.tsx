@@ -589,6 +589,52 @@ export function PdfEngineEditorPage() {
     }
   }
 
+  // ── Undo / redo ───────────────────────────────────────────────────────────
+
+  /**
+   * Step the document back or forward.
+   *
+   * The SELECTION is dropped first, always. Undo replaces the whole document:
+   * the object that was selected may no longer exist, or may now be at a
+   * different index — and a selection pointing at the wrong object is worse
+   * than none, because the next thing the user does lands on it.
+   */
+  const runHistory = useCallback(async (direction: "undo" | "redo") => {
+    setSelection(null)
+    setSelected(null)
+    setOriginPatch(null)
+    setImagePreview(null)
+    try {
+      await (direction === "undo" ? doc.undo() : doc.redo())
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : String(err))
+    }
+  }, [doc])
+
+  /**
+   * Ctrl/Cmd+Z and Ctrl/Cmd+Shift+Z, plus Ctrl+Y for the Windows habit.
+   *
+   * Ignored while a dialog or a field has focus, so undoing a typo inside the
+   * Edit text box rewinds the TEXT rather than the document behind it — the
+   * browser's own undo is the right one there.
+   */
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (!e.ctrlKey && !e.metaKey) return
+      const key = e.key.toLowerCase()
+      if (key !== "z" && key !== "y") return
+      const el = document.activeElement
+      const typing = el instanceof HTMLElement
+        && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)
+      if (typing) return
+      e.preventDefault()
+      const redo = key === "y" || e.shiftKey
+      void runHistory(redo ? "redo" : "undo")
+    }
+    window.addEventListener("keydown", onKeyDown)
+    return () => window.removeEventListener("keydown", onKeyDown)
+  }, [runHistory])
+
   // ── Asset library ─────────────────────────────────────────────────────────
 
   /**
@@ -991,6 +1037,10 @@ export function PdfEngineEditorPage() {
           onToggleContentMode: () => setContentMode((m) => (m === "text" ? "images" : "text")),
           onAddText: () => setNewTextDraft({ pageIndex: visiblePageIndex(), text: "" }),
           onAddImage: () => openFilePicker({ kind: "overlay", pageIndex: visiblePageIndex() }),
+          canUndo: doc.canUndo,
+          canRedo: doc.canRedo,
+          onUndo: () => void runHistory("undo"),
+          onRedo: () => void runHistory("redo"),
           assetPanelOpen,
           onToggleAssetPanel: () => setAssetPanelOpen((open) => !open),
           productPanelOpen,

@@ -267,6 +267,31 @@ export interface EngineMethods {
   }
   applyPagePlan: { params: { docId: string; plan: PagePlanRequest[] }; result: { docId: string; pages: EnginePage[] } }
   save: { params: { docId: string }; result: { bytes: ArrayBuffer } }
+  /**
+   * Steps the document back or forward through its own history.
+   *
+   * `moved` is false when there was nowhere to go — pressing undo with an
+   * empty history is not an error, it is simply nothing.
+   *
+   * `pages` comes back because the document is REPLACED wholesale: page
+   * count and rotation can both differ from before, and everything the caller
+   * knows about object indices is stale.
+   */
+  stepHistory: {
+    params: { docId: string; direction: "undo" | "redo" }
+    result: {
+      moved: boolean
+      pages?: EnginePage[]
+      canUndo: boolean
+      canRedo: boolean
+      undoDepth: number
+      redoDepth: number
+    }
+  }
+  historyState: {
+    params: { docId: string }
+    result: { canUndo: boolean; canRedo: boolean; undoDepth: number; redoDepth: number }
+  }
 }
 
 export type EngineMethodName = keyof EngineMethods

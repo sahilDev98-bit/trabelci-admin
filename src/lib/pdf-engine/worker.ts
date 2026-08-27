@@ -34,15 +34,46 @@ import { applyTextStyle, readTextStyle, scaleTextSize, alignTextGroup } from "./
 import { listPages, buildDocumentFromPlan } from "./pages"
 import { addTextOverlay, addImageOverlay } from "./overlay"
 import { loadFontMetrics, type FontMetrics } from "./layout"
+import { DocumentHistory } from "./history"
 import type {
-  EngineMethods, EngineRequest, EngineResponse, EnginePage, EngineTextLine, EngineImage,
+  EngineMethods, EngineMethodName, EngineRequest, EngineResponse,
+  EnginePage, EngineTextLine, EngineImage,
 } from "./protocol"
 
 interface OpenDoc {
   handle: number
   scratch: Scratch
   fonts: DocumentFonts
+  history: DocumentHistory
 }
+
+/**
+ * Every method that CHANGES the document.
+ *
+ * Listed once, here, rather than each handler remembering to record itself.
+ * A handler added later that forgets to opt in would simply not be undoable,
+ * and nobody would notice until they tried — whereas a list in one place can
+ * be read against the handler map and checked.
+ *
+ * Deliberately excludes `open` and `close` (there is no "before" to return
+ * to) and every read-only method.
+ *
+ * Typed as EngineMethodName rather than string, and that is load-bearing: the
+ * first version of this list carried "removeVector" and "replaceVector",
+ * neither of which exists — the real names are removeVectorGroup and
+ * replaceVectorGroupWithImage. Deleting or replacing a piece of artwork would
+ * simply not have been undoable, silently, and nothing would have failed.
+ * With the name typed, a wrong one is a compile error.
+ */
+const MUTATING_METHODS = new Set<EngineMethodName>([
+  "editTextLine", "removeTextLine", "moveTextLine", "moveTextLineToPage",
+  "styleTextLine", "scaleTextLine", "alignTextLine",
+  "replaceImage", "removeImage", "setImageRect", "transformImage",
+  "moveImageToPage", "addImageOverlay", "addTextOverlay",
+  "replaceVectorGroupWithImage", "removeVectorGroup",
+  "setVectorGroupRect", "transformVectorGroup",
+  "applyPagePlan",
+])
 
 const docs = new Map<string, OpenDoc>()
 let nextDocId = 1
@@ -243,7 +274,11 @@ const handlers: {
       handle = openDocument(pdfium, new Uint8Array(bytes), scratch)
     }
 
-    docs.set(docId, { handle, scratch, fonts: new DocumentFonts(pdfium, handle) })
+    docs.set(docId, {
+      handle, scratch,
+      fonts: new DocumentFonts(pdfium, handle),
+      history: new DocumentHistory(),
+    })
     return { docId, pages: toEnginePages(pdfium, handle) }
   },
 
@@ -252,9 +287,52 @@ const handlers: {
     if (!doc) return { closed: false }
     pdfium.FPDF_CloseDocument(doc.handle)
     doc.scratch.free()
+    // Freed explicitly: the history can be holding a hundred megabytes, and
+    // leaving it to the garbage collector while a tab opens the next document
+    // is how a session ends up holding two documents' worth of snapshots.
+    doc.history.clear()
     docs.delete(docId)
     return { closed: true }
   },
+
+  /**
+   * Steps the document back or forward through its own history.
+   *
+   * The whole document is REPLACED: the old handle is closed and the snapshot
+   * is opened in its place. Everything the UI is holding about the document —
+   * which line is at which index, where the images are — is therefore stale
+   * afterwards, which is why the pages are returned and the caller reloads.
+   */
+  stepHistory: ({ docId, direction }, { pdfium }) => {
+    const doc = requireDoc(docId)
+    const current = saveDocument(pdfium, doc.handle, doc.scratch)
+    // Copied out of the WASM heap: saveDocument's buffer is scratch memory
+    // and the next operation will write over it.
+    const currentCopy = new Uint8Array(current.length)
+    currentCopy.set(current)
+
+    const target = direction === "undo"
+      ? doc.history.undo(currentCopy)
+      : doc.history.redo(currentCopy)
+    if (!target) return { moved: false, ...doc.history.state() }
+
+    pdfium.FPDF_CloseDocument(doc.handle)
+    doc.scratch.free()
+    const scratch = new Scratch(pdfium)
+    const handle = openDocument(pdfium, target, scratch)
+    docs.set(docId, {
+      handle, scratch,
+      fonts: new DocumentFonts(pdfium, handle),
+      history: doc.history,
+    })
+    return {
+      moved: true,
+      pages: toEnginePages(pdfium, handle),
+      ...doc.history.state(),
+    }
+  },
+
+  historyState: ({ docId }) => requireDoc(docId).history.state(),
 
   listPages: ({ docId }, { pdfium }) => ({ pages: toEnginePages(pdfium, requireDoc(docId).handle) }),
 
@@ -727,7 +805,39 @@ self.onmessage = async (event: MessageEvent<EngineRequest>) => {
       p: unknown, c: { pdfium: WrappedPdfiumModule; transfer: Transferable[] },
     ) => Promise<unknown> | unknown
     if (!handler) throw new Error(`Unknown engine method: ${method}`)
-    const result = await handler(params, { pdfium, transfer })
+
+    // Recorded here, at the ONE door every operation comes through, rather
+    // than inside each handler. Two things follow from that: a new mutating
+    // handler is undoable the moment its name is on the list, and the
+    // snapshot is taken strictly BEFORE the change with no handler able to
+    // half-apply something first.
+    //
+    // If the handler then throws, the snapshot is dropped again — an undo
+    // step that restores the state you are already in is not an undo, it is a
+    // key press that appears to do nothing.
+    const docId = (params as { docId?: string } | undefined)?.docId
+    const target = MUTATING_METHODS.has(method as EngineMethodName) && docId
+      ? docs.get(docId)
+      : undefined
+    let snapshot: Uint8Array | null = null
+    if (target) {
+      const saved = saveDocument(pdfium, target.handle, target.scratch)
+      snapshot = new Uint8Array(saved.length)
+      snapshot.set(saved)
+    }
+
+    let result: unknown
+    try {
+      result = await handler(params, { pdfium, transfer })
+    } catch (err) {
+      snapshot = null
+      throw err
+    }
+    // Pushed only once the change has actually happened. The document the
+    // handler acted on is looked up again because stepHistory replaces the
+    // OpenDoc wholesale, and a stale reference would push onto a history the
+    // document no longer owns.
+    if (snapshot && docId) docs.get(docId)?.history.push(snapshot)
     const response: EngineResponse = { id, ok: true, result }
     ;(self as DedicatedWorkerGlobalScope).postMessage(response, transfer)
   } catch (err) {

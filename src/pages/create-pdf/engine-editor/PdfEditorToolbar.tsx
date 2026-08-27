@@ -2,8 +2,8 @@ import {
   AlignCenterIcon, AlignLeftIcon, AlignRightIcon, ArrowUpDownIcon,
   BoldIcon, CopyIcon, DownloadIcon, FlipHorizontalIcon, FlipVerticalIcon,
   ArrowLeftIcon, ImageIcon, ImagePlusIcon, ItalicIcon, LibraryIcon, Loader2Icon,
-  MinusIcon, PackageSearchIcon, PlusIcon, RotateCcwIcon, RotateCwIcon,
-  ScanSearchIcon, Trash2Icon, TypeIcon, TypeOutlineIcon, XIcon,
+  MinusIcon, PackageSearchIcon, PlusIcon, RedoIcon, RotateCcwIcon, RotateCwIcon,
+  ScanSearchIcon, Trash2Icon, TypeIcon, TypeOutlineIcon, UndoIcon, XIcon,
 } from "lucide-react"
 import { useTranslation } from "react-i18next"
 
@@ -54,6 +54,13 @@ interface PdfEditorToolbarProps {
   productPanelOpen: boolean
   onToggleProductPanel: () => void
   onOpenOrganizer: (mode: PdfOrganizerMode) => void
+  /** Step the document back and forward. Disabled rather than hidden when
+   * there is nowhere to go: a control that disappears is one you have to
+   * hunt for, and its absence says nothing about why. */
+  canUndo: boolean
+  canRedo: boolean
+  onUndo: () => void
+  onRedo: () => void
   onEditSelectedText: () => void
   onReplaceSelectedImage: () => void
   onReplaceSelectedVector: () => void
@@ -85,13 +92,14 @@ function Divider() {
 }
 
 function ToolButton({
-  label, icon: Icon, onClick, active, danger,
+  label, icon: Icon, onClick, active, danger, disabled,
 }: {
   label: string
   icon: typeof TypeIcon
   onClick: () => void
   active?: boolean
   danger?: boolean
+  disabled?: boolean
 }) {
   return (
     <Tooltip>
@@ -101,6 +109,7 @@ function ToolButton({
           size="sm"
           variant={active ? "secondary" : "ghost"}
           onClick={onClick}
+          disabled={disabled}
           aria-label={label}
           aria-pressed={active}
           className={`size-9 shrink-0 p-0 ${danger ? "text-destructive hover:bg-destructive/10" : ""}`}
@@ -118,6 +127,7 @@ export function PdfEditorToolbar({
   onZoomToSelection, selection, contentMode, onToggleContentMode,
   onAddText, onAddImage, assetPanelOpen, onToggleAssetPanel,
   productPanelOpen, onToggleProductPanel, onOpenOrganizer,
+  canUndo, canRedo, onUndo, onRedo,
   onEditSelectedText, onReplaceSelectedImage, onReplaceSelectedVector,
   textStyle, onToggleBold, onToggleItalic, onTextColor, onScaleText, onAlignText,
   onTransformImage, onTransformVector,
@@ -231,6 +241,22 @@ export function PdfEditorToolbar({
               <span className="text-xs">{t("pdfTemplates.engineProductShort", "Product")}</span>
             </Button>
           </div>
+          <Divider />
+          {/* Undo sits with the DOCUMENT tools, not the selection's: it
+              applies to the last thing that happened whether or not anything
+              is selected, and it is the control people reach for fastest. */}
+          <ToolButton
+            label={t("pdfTemplates.engineUndo", "Undo")}
+            icon={UndoIcon}
+            onClick={onUndo}
+            disabled={!canUndo}
+          />
+          <ToolButton
+            label={t("pdfTemplates.engineRedo", "Redo")}
+            icon={RedoIcon}
+            onClick={onRedo}
+            disabled={!canRedo}
+          />
           <Divider />
           <ToolButton label={t("pdfTemplates.railCopyPage", "Duplicate pages")} icon={CopyIcon} onClick={() => onOpenOrganizer("copy")} />
           <ToolButton label={t("pdfTemplates.railMovePage", "Reorder pages")} icon={ArrowUpDownIcon} onClick={() => onOpenOrganizer("move")} />
