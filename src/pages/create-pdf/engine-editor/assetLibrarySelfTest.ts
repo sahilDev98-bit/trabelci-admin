@@ -3,8 +3,11 @@
 // Five claims, each with a control that has to fail for the proof to mean
 // anything.
 //
-//   1. The shelf shows what is on it, and the filters narrow it. Cheap, but
-//      it is what everything below stands on.
+//   1. The shelf shows everything on it. Cheap, but it is what everything
+//      below stands on. There is nothing to filter: the search box and
+//      category chips were removed once the panel was in use, because a
+//      couple of dozen tiles are all visible at once and the controls cost
+//      two rows of chrome to solve a problem nobody had.
 //
 //   2. Dragging a tile marks the drag as carrying an asset — and the page can
 //      tell WHILE THE POINTER IS STILL MOVING. This is the subtle one and the
@@ -63,8 +66,6 @@ export const ASSET_FIXTURE = [
 export interface AssetLibraryTestResult {
   errors: string[]
   tilesShown: number
-  tilesAfterCategoryFilter: number
-  tilesAfterSearch: number
   /** What a drag out of the panel is carrying. */
   dragTypes: string[]
   draggedAssetId: string
@@ -108,7 +109,7 @@ function dragEvent(type: string, data: Record<string, string>, point?: { x: numb
 
 export async function runAssetLibrarySelfTest(): Promise<AssetLibraryTestResult> {
   const out: AssetLibraryTestResult = {
-    errors: [], tilesShown: 0, tilesAfterCategoryFilter: 0, tilesAfterSearch: 0,
+    errors: [], tilesShown: 0,
     dragTypes: [], draggedAssetId: "", pageLitUpForAsset: false,
     pageLitUpForEmptyDrag: false, droppedAssetId: "", droppedXPts: 0,
     droppedYPts: 0, expectedXPts: 0, expectedYPts: 0,
@@ -122,7 +123,7 @@ export async function runAssetLibrarySelfTest(): Promise<AssetLibraryTestResult>
   await i18n.changeLanguage("en")
 
   try {
-    // ── 1. The shelf, and its filters ───────────────────────────────────
+    // ── 1. The shelf ────────────────────────────────────────────────────
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
     root.render(createElement(QueryClientProvider, { client },
       createElement(PdfAssetPanel, { onPlaceAsset: () => {}, onClose: () => {} })))
@@ -134,33 +135,6 @@ export async function runAssetLibrarySelfTest(): Promise<AssetLibraryTestResult>
     if (out.tilesShown !== ASSET_FIXTURE.length) {
       out.errors.push(`the shelf shows ${out.tilesShown} of ${ASSET_FIXTURE.length} assets`)
     }
-
-    const chip = (label: string) => Array
-      .from(document.querySelectorAll<HTMLButtonElement>("[data-pdf-asset-panel] button"))
-      .find((b) => b.textContent?.trim() === label)
-
-    chip("Logos")?.click()
-    await wait(60)
-    out.tilesAfterCategoryFilter = tiles().length
-    if (out.tilesAfterCategoryFilter !== 1) {
-      out.errors.push(`filtering to logos left ${out.tilesAfterCategoryFilter} tiles, expected 1`)
-    }
-    chip("Logos")?.click()
-    await wait(60)
-
-    const search = document.querySelector<HTMLInputElement>("[data-pdf-asset-panel] input[type='text'], [data-pdf-asset-panel] input:not([type='file'])")
-    if (!search) throw new Error("the panel has no search box")
-    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set
-    setter?.call(search, "badge")
-    search.dispatchEvent(new Event("input", { bubbles: true }))
-    await wait(80)
-    out.tilesAfterSearch = tiles().length
-    if (out.tilesAfterSearch !== 1) {
-      out.errors.push(`searching for "badge" left ${out.tilesAfterSearch} tiles, expected 1`)
-    }
-    setter?.call(search, "")
-    search.dispatchEvent(new Event("input", { bubbles: true }))
-    await wait(80)
 
     // ── 2. What a drag out of the panel carries ─────────────────────────
     const tile = tiles().find((el) => el.dataset.pdfAssetTile === "1")

@@ -1,14 +1,13 @@
-import { useMemo, useRef, useState } from "react"
+import { useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { toast } from "sonner"
-import { ImagePlusIcon, Loader2Icon, LibraryIcon, SearchIcon, Trash2Icon, XIcon } from "lucide-react"
+import { ImagePlusIcon, Loader2Icon, LibraryIcon, Trash2Icon, XIcon } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
 import {
   useCreatePdfAssetMutation, useDeletePdfAssetMutation, usePdfAssetsQuery,
 } from "@/features/pdfAssets/api"
-import { ASSET_CATEGORIES, type AssetCategory, type PdfAsset } from "@/features/pdfAssets/types"
+import { type PdfAsset } from "@/features/pdfAssets/types"
 import { readImageSize, toEmbeddableImage } from "./imageFile"
 import { setAssetDragData } from "./assetDrag"
 
@@ -25,6 +24,12 @@ import { setAssetDragData } from "./assetDrag"
  * gesture the brief asks for and puts it exactly where you want; clicking it
  * drops it on the page in view, which is faster when the position is going to
  * be adjusted anyway and is the only route available from a keyboard.
+ *
+ * Everything on the shelf is shown, always. A search box and category filters
+ * were built first and then taken out: a brand library is a couple of dozen
+ * tiles you can see all at once, so filtering it cost two rows of chrome at
+ * the top of the panel to solve a problem nobody had. The controls come back
+ * when the shelf is big enough to need them, not before.
  */
 
 /** Panel width, matching the product panel on the other side so the document
@@ -39,28 +44,15 @@ interface PdfAssetPanelProps {
 
 export function PdfAssetPanel({ onPlaceAsset, onClose }: PdfAssetPanelProps) {
   const { t } = useTranslation()
-  const [category, setCategory] = useState<AssetCategory | null>(null)
-  const [search, setSearch] = useState("")
   const [uploading, setUploading] = useState(false)
   const [pendingDelete, setPendingDelete] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
-  // Fetched unfiltered and narrowed here. A brand library is tens of items,
-  // so filtering in the browser is instant and — more to the point — means
-  // typing in the search box does not fire a request per keystroke.
   const query = usePdfAssetsQuery()
   const createAsset = useCreatePdfAssetMutation()
   const deleteAsset = useDeletePdfAssetMutation()
 
-  const assets = useMemo(() => {
-    const term = search.trim().toLowerCase()
-    return (query.data ?? []).filter((asset) => {
-      if (category && asset.category !== category) return false
-      if (!term) return true
-      return asset.name.toLowerCase().includes(term)
-        || (asset.supplier?.toLowerCase().includes(term) ?? false)
-    })
-  }, [query.data, category, search])
+  const assets = query.data ?? []
 
   /**
    * Take files from the picker or from a drop onto the panel and store them.
@@ -91,7 +83,10 @@ export function PdfAssetPanel({ onPlaceAsset, onClose }: PdfAssetPanelProps) {
           await createAsset.mutateAsync({
             file: converted,
             name: file.name.replace(/\.[^.]+$/, ""),
-            category: category ?? "other",
+            // No category is chosen in the panel any more, so everything
+            // lands under "other". The column and the API filter are still
+            // there for the supplier grouping that comes next.
+            category: "other",
             widthPx: width,
             heightPx: height,
           })
@@ -156,35 +151,6 @@ export function PdfAssetPanel({ onPlaceAsset, onClose }: PdfAssetPanelProps) {
         </Button>
       </div>
 
-      {/* ── Find ───────────────────────────────────────────────────────── */}
-      <div className="shrink-0 space-y-2 border-b p-3">
-        <div className="relative">
-          <SearchIcon className="pointer-events-none absolute start-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="ps-9"
-            placeholder={t("pdfTemplates.assetSearchPlaceholder", "Search assets")}
-            aria-label={t("pdfTemplates.assetSearchPlaceholder", "Search assets")}
-          />
-        </div>
-        <div className="flex flex-wrap gap-1">
-          <CategoryChip
-            label={t("pdfTemplates.assetCategoryAll", "All")}
-            active={category === null}
-            onClick={() => setCategory(null)}
-          />
-          {ASSET_CATEGORIES.map((id) => (
-            <CategoryChip
-              key={id}
-              label={t(`pdfTemplates.assetCategory_${id}`, id)}
-              active={category === id}
-              onClick={() => setCategory((c) => (c === id ? null : id))}
-            />
-          ))}
-        </div>
-      </div>
-
       {/* ── The shelf ──────────────────────────────────────────────────── */}
       <div
         className={`themed-scrollbar min-h-0 flex-1 overflow-y-auto p-3 ${
@@ -225,9 +191,7 @@ export function PdfAssetPanel({ onPlaceAsset, onClose }: PdfAssetPanelProps) {
         )}
         {!query.isLoading && !query.isError && assets.length === 0 && (
           <p className="py-4 text-xs text-muted-foreground">
-            {query.data?.length
-              ? t("pdfTemplates.assetNoMatches", "No assets match that search.")
-              : t("pdfTemplates.assetEmpty", "The library is empty. Add logos, icons and badges here once and use them in every catalogue.")}
+            {t("pdfTemplates.assetEmpty", "The library is empty. Add logos, icons and badges here once and use them in every catalogue.")}
           </p>
         )}
 
@@ -275,23 +239,6 @@ export function PdfAssetPanel({ onPlaceAsset, onClose }: PdfAssetPanelProps) {
         />
       </div>
     </aside>
-  )
-}
-
-function CategoryChip({
-  label, active, onClick,
-}: { label: string; active: boolean; onClick: () => void }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-pressed={active}
-      className={`rounded-full border px-2 py-0.5 text-xs capitalize transition ${
-        active ? "border-transparent bg-primary text-primary-foreground" : "hover:bg-muted"
-      }`}
-    >
-      {label}
-    </button>
   )
 }
 
