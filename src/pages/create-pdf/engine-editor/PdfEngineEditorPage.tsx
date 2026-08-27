@@ -22,6 +22,7 @@ import { useCrossPageDrag, type CrossPageDrop } from "./useCrossPageDrag"
 import { dropToPagePoints, textMoveDelta, textPlacementOnPage, imagePlacement } from "./dropGeometry"
 import { CrossPageDragGhost } from "./CrossPageDragGhost"
 import { findFreeSpot, newImageSize, type Box } from "./placement"
+import { readImageSize } from "./imageFile"
 import { PdfEngineWorkspace } from "./PdfEngineWorkspace"
 import { PdfProductPanel } from "./PdfProductPanel"
 import { PdfEditorLoadingScreen } from "../PdfEditorLoadingScreen"
@@ -493,10 +494,10 @@ export function PdfEngineEditorPage() {
         const page = doc.pages[target.pageIndex]
         if (!page) return
         // Sized to the image's own aspect ratio so it isn't stretched into
-        // whatever box we happened to guess.
-        const bitmap = await createImageBitmap(file)
-        const size = newImageSize(page, bitmap.width, bitmap.height, NEW_IMAGE_WIDTH_PTS)
-        bitmap.close()
+        // whatever box we happened to guess. Read through readImageSize
+        // rather than createImageBitmap directly, which cannot decode SVG.
+        const { width: pxWidth, height: pxHeight } = await readImageSize(file)
+        const size = newImageSize(page, pxWidth, pxHeight, NEW_IMAGE_WIDTH_PTS)
         // Put somewhere with ROOM, rather than always the same corner.
         // A fixed top-left inset is where a designed page keeps its logo, so
         // the new image landed underneath it — and since logos and text draw
@@ -565,9 +566,8 @@ export function PdfEngineEditorPage() {
     const page = doc.pages[pageIndex]
     if (!page) return
     try {
-      const bitmap = await createImageBitmap(file)
-      const { width, height } = newImageSize(page, bitmap.width, bitmap.height, NEW_IMAGE_WIDTH_PTS)
-      bitmap.close()
+      const { width: pxWidth, height: pxHeight } = await readImageSize(file)
+      const { width, height } = newImageSize(page, pxWidth, pxHeight, NEW_IMAGE_WIDTH_PTS)
       // Centred on the cursor — the whole point of dropping rather than
       // clicking is that YOU chose the spot — then clamped so an image
       // dropped near an edge still lands wholly on the page.

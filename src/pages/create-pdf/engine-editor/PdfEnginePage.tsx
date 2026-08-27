@@ -126,6 +126,10 @@ function imageFromDrag(dt: DataTransfer | null): File | null {
   if (!dt) return null
   for (const file of Array.from(dt.files ?? [])) {
     if (file.type.startsWith("image/")) return file
+    // Some systems hand over a dragged .svg with no MIME type at all, and a
+    // logo that silently refuses to drop is indistinguishable from a broken
+    // editor. The name is the only evidence left, so it is used.
+    if (/\.svg$/i.test(file.name)) return file
   }
   return null
 }

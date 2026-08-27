@@ -14,6 +14,7 @@ import {
 } from "@/lib/pdf-engine"
 import { fetchPdfMasterTemplateSource } from "@/features/pdfTemplates/api"
 import { addedLineIndex } from "./placement"
+import { toEmbeddableImage } from "./imageFile"
 
 /**
  * Owns one PDF editing session: the worker, the open document, and the
@@ -135,32 +136,6 @@ export interface UsePdfEngineDocumentResult {
   busy: boolean
   /** Bumped whenever the document changes, so canvases know to repaint. */
   revision: number
-}
-
-/** PDFium accepts PNG and JPEG directly; anything else has to be converted
- * before it can be embedded. Done via canvas rather than rejected, so a
- * user picking a WebP or GIF logo still gets what they expect. */
-async function toEmbeddableImage(file: File): Promise<{ bytes: ArrayBuffer; kind: "png" | "jpeg" }> {
-  const type = file.type.toLowerCase()
-  if (type === "image/png") return { bytes: await file.arrayBuffer(), kind: "png" }
-  if (type === "image/jpeg" || type === "image/jpg") return { bytes: await file.arrayBuffer(), kind: "jpeg" }
-
-  const bitmap = await createImageBitmap(file)
-  try {
-    const canvas = document.createElement("canvas")
-    canvas.width = bitmap.width
-    canvas.height = bitmap.height
-    const ctx = canvas.getContext("2d")
-    if (!ctx) throw new Error("Could not read that image")
-    ctx.drawImage(bitmap, 0, 0)
-    // PNG rather than JPEG: the source may have transparency (a cut-out
-    // logo), and re-encoding that to JPEG would fill it with black.
-    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/png"))
-    if (!blob) throw new Error("Could not convert that image")
-    return { bytes: await blob.arrayBuffer(), kind: "png" }
-  } finally {
-    bitmap.close()
-  }
 }
 
 /**
