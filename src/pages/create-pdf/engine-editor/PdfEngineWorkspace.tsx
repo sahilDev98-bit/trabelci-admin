@@ -37,6 +37,26 @@ import type { UsePdfEngineDocumentResult } from "./usePdfEngineDocument"
  * the screen, not to frame it. */
 const PAGE_AREA_PADDING_PX = 16
 
+/**
+ * How close to the top or bottom of the page area a DRAG must get before the
+ * document starts scrolling itself.
+ *
+ * Auto-scroll is not a nicety here, it is the only way to move the document
+ * while dragging. Measured on a bare page with no application code: during an
+ * HTML5 drag the browser delivers ZERO wheel events and the scroll position
+ * does not move, where the identical wheel outside a drag scrolls normally.
+ * So the wheel cannot be made to work during a drag by any code of ours —
+ * dragging a logo from the library to page 9 of 14 has to be possible without
+ * it.
+ *
+ * Matches useCrossPageDrag's own auto-scroll, so dragging a logo in from the
+ * library and dragging a photo between pages feel like the same gesture.
+ */
+const DRAG_AUTOSCROLL_EDGE_PX = 110
+/** Fastest auto-scroll, CSS px per animation frame (~60/s), reached only hard
+ * against the edge. */
+const DRAG_AUTOSCROLL_MAX_STEP_PX = 24
+
 interface PdfEngineWorkspaceProps {
   doc: UsePdfEngineDocumentResult
   documentName: string
@@ -138,6 +158,78 @@ export function PdfEngineWorkspace({
   useEffect(() => {
     if (displayWidth > 0) onDisplayWidthChange(displayWidth)
   }, [displayWidth, onDisplayWidthChange])
+
+  /**
+   * Scrolls the page area while something is being dragged near its edge.
+   *
+   * Held in refs and driven by requestAnimationFrame rather than state: this
+   * runs on every dragover — dozens a second — and re-rendering the page
+   * column costs about 144ms on a real catalogue, so a gesture must cause no
+   * React render at all.
+   */
+  const dragScrollSpeed = useRef(0)
+  const dragScrollFrame = useRef<number | null>(null)
+
+  const stopDragScroll = useCallback(() => {
+    dragScrollSpeed.current = 0
+    if (dragScrollFrame.current !== null) {
+      cancelAnimationFrame(dragScrollFrame.current)
+      dragScrollFrame.current = null
+    }
+  }, [])
+
+  const onDragOverArea = useCallback((e: React.DragEvent<HTMLDivElement>) => {
+    const scroller = scrollRef.current
+    if (!scroller) return
+    const box = scroller.getBoundingClientRect()
+    const fromTop = e.clientY - box.top
+    const fromBottom = box.bottom - e.clientY
+
+    // Speed ramps with how far into the edge zone the pointer is, so resting
+    // just inside it creeps and pushing right to the edge moves quickly.
+    let speed = 0
+    if (fromTop < DRAG_AUTOSCROLL_EDGE_PX) {
+      speed = -Math.ceil(
+        ((DRAG_AUTOSCROLL_EDGE_PX - Math.max(0, fromTop)) / DRAG_AUTOSCROLL_EDGE_PX)
+        * DRAG_AUTOSCROLL_MAX_STEP_PX)
+    } else if (fromBottom < DRAG_AUTOSCROLL_EDGE_PX) {
+      speed = Math.ceil(
+        ((DRAG_AUTOSCROLL_EDGE_PX - Math.max(0, fromBottom)) / DRAG_AUTOSCROLL_EDGE_PX)
+        * DRAG_AUTOSCROLL_MAX_STEP_PX)
+    }
+    dragScrollSpeed.current = speed
+
+    if (speed !== 0 && dragScrollFrame.current === null) {
+      const tick = () => {
+        const el = scrollRef.current
+        if (!el || dragScrollSpeed.current === 0) {
+          dragScrollFrame.current = null
+          return
+        }
+        const before = el.scrollTop
+        el.scrollTop += dragScrollSpeed.current
+        // Stop at the ends rather than spinning a frame loop that can no
+        // longer move anything.
+        if (el.scrollTop === before) {
+          dragScrollFrame.current = null
+          return
+        }
+        dragScrollFrame.current = requestAnimationFrame(tick)
+      }
+      dragScrollFrame.current = requestAnimationFrame(tick)
+    }
+  }, [])
+
+  // Every way a drag can end, including one that ends outside the window.
+  useEffect(() => {
+    window.addEventListener("dragend", stopDragScroll)
+    window.addEventListener("drop", stopDragScroll)
+    return () => {
+      window.removeEventListener("dragend", stopDragScroll)
+      window.removeEventListener("drop", stopDragScroll)
+      stopDragScroll()
+    }
+  }, [stopDragScroll])
 
   /** Which page is in view, for the toolbar's page counter. */
   const onScroll = useCallback(() => {
@@ -392,6 +484,25 @@ export function PdfEngineWorkspace({
       <div
         ref={scrollRef}
         onScroll={onScroll}
+        // Auto-scroll while dragging. On the SCROLLER rather than on each
+        // page, so it keeps working in the gaps between pages and in the
+        // margins beside them — which is exactly where the pointer is when
+        // someone is dragging past a page rather than onto it.
+        onDragOver={onDragOverArea}
+        // Whether the pointer really left is decided by WHERE IT IS, not by
+        // relatedTarget. In an HTML5 drag Chrome reports relatedTarget as null
+        // on dragleave, so the usual "did it just cross onto a child?" guard
+        // reads every crossing as an exit — and since the pages are children,
+        // the scroll was cancelled the instant the pointer touched one. It
+        // looked exactly like auto-scroll not being implemented at all.
+        onDragLeave={(e) => {
+          const box = e.currentTarget.getBoundingClientRect()
+          const inside = e.clientX >= box.left && e.clientX <= box.right
+            && e.clientY >= box.top && e.clientY <= box.bottom
+          if (inside) return
+          stopDragScroll()
+        }}
+        onDrop={stopDragScroll}
         // dir="ltr" even in Hebrew, and this is not an oversight.
         //
         // A browser numbers a container's horizontal scroll from the reading

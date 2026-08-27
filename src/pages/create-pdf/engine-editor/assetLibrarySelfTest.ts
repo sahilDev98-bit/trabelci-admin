@@ -41,6 +41,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import i18n from "@/i18n"
 import { PdfAssetPanel } from "./PdfAssetPanel"
 import { PdfEnginePage } from "./PdfEnginePage"
+import { PdfEngineWorkspace } from "./PdfEngineWorkspace"
+import type { UsePdfEngineDocumentResult } from "./usePdfEngineDocument"
 import { ASSET_DRAG_MIME } from "./assetDrag"
 
 /** What the caller must serve from GET /pdf-assets. Snake_case, because this
@@ -463,4 +465,71 @@ export async function showAssetPanel(language: "en" | "he"): Promise<void> {
   root.render(createElement(QueryClientProvider, { client },
     createElement(PdfAssetPanel, { onPlaceAsset: () => {}, onClose: () => {} })))
   await until("the asset panel", () => !!document.querySelector("[data-pdf-asset-panel]"))
+}
+
+/**
+ * Mounts the whole workspace — thumbnails, page area, asset panel — for
+ * measuring how a drag behaves against a document taller than the window.
+ *
+ * The panel and the pages have to be in one layout for this: what is being
+ * measured is dragging OUT of the panel and ACROSS the page area, and a panel
+ * mounted on its own has no page area to drag across.
+ */
+export async function showWorkspaceForDrag(pageCount = 12): Promise<void> {
+  inspection?.root.unmount()
+  inspection?.host.remove()
+  await i18n.changeLanguage("en")
+
+  const host = document.createElement("div")
+  host.style.cssText = "position:fixed;inset:0"
+  document.body.appendChild(host)
+  const root = createRoot(host)
+  inspection = { root, host }
+
+  const page = { index: 0, widthPts: 595, heightPts: 794, rotation: 0 }
+  const pages = Array.from({ length: pageCount }, (_, i) => ({ ...page, index: i }))
+  const empty = Object.fromEntries(pages.map((_, i) => [i, { loaded: true, lines: [], images: [], groups: [] }]))
+  const noop = async () => {}
+  const doc = {
+    phase: "ready", error: null, downloadPercent: null,
+    pages, docId: "t", revision: 0, busy: false,
+    pageText: Object.fromEntries(pages.map((_, i) => [i, { loaded: true, lines: [] }])),
+    pageImages: Object.fromEntries(pages.map((_, i) => [i, { loaded: true, images: [] }])),
+    pageVectors: Object.fromEntries(pages.map((_, i) => [i, { loaded: true, groups: [] }])),
+    loadPageText: noop, loadPageImages: noop, loadPageVectors: noop,
+    renderPage: async () => null, renderPageRegion: async () => null,
+    renderCleanPatch: async () => null, renderImagePreview: async () => null,
+    lastChange: null, save: async () => new Blob(),
+  } as unknown as UsePdfEngineDocumentResult
+  void empty
+
+  const column = {
+    contentMode: "text" as const, selection: null, onSelect: () => {},
+    drag: null, onMoveStart: () => {}, originPatch: null, imagePreview: null,
+    onEditLine: () => {}, onReplaceImage: () => {}, onReplaceVector: () => {},
+    onDropOnImage: () => {}, onDropOnPage: () => {}, onDropAssetOnPage: () => {},
+    onTransformImage: () => {}, onTransformVector: () => {}, onResizeText: () => {},
+  }
+  const toolbar = {
+    selection: null, contentMode: "text" as const, onToggleContentMode: () => {},
+    onAddText: () => {}, onAddImage: () => {},
+    assetPanelOpen: true, onToggleAssetPanel: () => {},
+    productPanelOpen: false, onToggleProductPanel: () => {},
+    onOpenOrganizer: () => {}, onEditSelectedText: () => {},
+    onReplaceSelectedImage: () => {}, onReplaceSelectedVector: () => {},
+    onDeleteSelected: () => {}, textStyle: null, onToggleBold: () => {},
+    onToggleItalic: () => {}, onTextColor: () => {}, onScaleText: () => {},
+    onAlignText: () => {}, onTransformImage: () => {}, onTransformVector: () => {},
+    onDeselect: () => {}, onDownload: () => {}, downloading: false, busy: false,
+  }
+
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  root.render(createElement(QueryClientProvider, { client },
+    createElement(PdfEngineWorkspace, {
+      doc, documentName: "drag test", onExit: () => {},
+      onDisplayWidthChange: () => {}, selection: null, column, toolbar,
+      leftPanel: createElement(PdfAssetPanel, { onPlaceAsset: () => {}, onClose: () => {} }),
+    })))
+  await until("the workspace", () => !!document.querySelector("[data-pdf-workspace]"))
+  await until("the pages", () => document.querySelectorAll("[data-engine-page-index]").length > 1)
 }
