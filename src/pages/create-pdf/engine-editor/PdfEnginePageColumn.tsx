@@ -39,7 +39,6 @@ interface PdfEnginePageColumnProps {
   onDropOnImage: (pageIndex: number, imageIndex: number, file: File) => void
   onDropOnPage: (pageIndex: number, file: File, xPts: number, yFromTopPts: number) => void
   onDropAssetOnPage: (pageIndex: number, assetId: string, xPts: number, yFromTopPts: number) => void
-  onDropAssetOnImage: (pageIndex: number, imageIndex: number, assetId: string) => void
   onTransformImage: (
     pageIndex: number, imageIndex: number,
     rect: { x: number; y: number; width: number; height: number },
@@ -70,7 +69,7 @@ export function PdfEnginePageColumn({
   doc, displayWidth, gutter, columnRef, contentMode, selection, onSelect,
   drag, onMoveStart, originPatch, imagePreview,
   onEditLine, onReplaceImage, onReplaceVector,
-  onDropOnImage, onDropOnPage, onDropAssetOnPage, onDropAssetOnImage,
+  onDropOnImage, onDropOnPage, onDropAssetOnPage,
   onTransformImage, onTransformVector, onResizeText,
 }: PdfEnginePageColumnProps) {
   return (
@@ -109,7 +108,6 @@ export function PdfEnginePageColumn({
             onDropOnImage={onDropOnImage}
             onDropOnPage={onDropOnPage}
             onDropAssetOnPage={onDropAssetOnPage}
-            onDropAssetOnImage={onDropAssetOnImage}
             onTransformImage={onTransformImage}
             onTransformVector={onTransformVector}
             onResizeText={onResizeText}

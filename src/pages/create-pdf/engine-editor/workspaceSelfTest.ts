@@ -174,7 +174,6 @@ export async function runWorkspaceSelfTest(): Promise<WorkspaceTestResult> {
       onReplaceVector: () => {},
       onDropOnImage: () => {},
       onDropAssetOnPage: () => {},
-      onDropAssetOnImage: () => {},
       onDropOnPage: () => {},
       onTransformImage: () => {},
       onTransformVector: () => {},

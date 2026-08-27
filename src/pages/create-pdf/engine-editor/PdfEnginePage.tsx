@@ -56,11 +56,13 @@ interface PdfEnginePageProps {
    * how a human describes a position; the caller converts to PDF's
    * bottom-up space. */
   onDropOnPage: (pageIndex: number, file: File, xPts: number, yFromTopPts: number) => void
-  /** The same two drops, but for artwork dragged out of the asset library.
+  /** Artwork dragged out of the asset library, dropped anywhere on the page.
    * It arrives as an id rather than a file — the bytes live on the server —
-   * so fetching them is the editor's job, not this component's. */
+   * so fetching them is the editor's job, not this component's.
+   *
+   * There is no on-IMAGE counterpart on purpose: an asset always adds, never
+   * replaces. See the image slot's drop handler for why. */
   onDropAssetOnPage: (pageIndex: number, assetId: string, xPts: number, yFromTopPts: number) => void
-  onDropAssetOnImage: (pageIndex: number, imageIndex: number, assetId: string) => void
   /** Committed once a move/resize gesture ends, in PDF points. */
   onTransformImage: (
     pageIndex: number, imageIndex: number,
@@ -167,7 +169,7 @@ export function PdfEnginePage({
   page, pageIndex, displayWidth, text, images, vectors, contentMode, revision,
   renderPage, renderPageRegion, lastChange, loadPageText, loadPageImages, loadPageVectors,
   onSelectLine, onReplaceImage, onReplaceVector,
-  onDropOnImage, onDropOnPage, onDropAssetOnPage, onDropAssetOnImage,
+  onDropOnImage, onDropOnPage, onDropAssetOnPage,
   onTransformImage, onTransformVector, onResizeText,
   selection, onSelect, onMoveStart, draggingSlot, dropTargetPage, originPatchUrl, imagePreviewUrl,
 }: PdfEnginePageProps) {
@@ -444,7 +446,22 @@ export function PdfEnginePage({
           <div
             key={`i-${pageIndex}-${image.imageIndex}`}
             className="contents"
+            // A picture accepts a dropped FILE as a replacement — that is how
+            // a photo gets swapped for a better one.
+            //
+            // It deliberately does NOT accept an asset. Artwork from the
+            // library is a logo, a badge, a certification mark: things that
+            // belong ON TOP of a photo, not instead of it. Dropping one onto
+            // a picture used to destroy the picture, which is never what
+            // anyone meant by dragging a logo over an image.
+            //
+            // So an asset drag is passed straight through — no preventDefault,
+            // no stopPropagation — and the PAGE handles it as an addition at
+            // the point it was released. That also gives the right hint while
+            // dragging: the page lights up rather than the picture, so it is
+            // visible before the drop that nothing is about to be replaced.
             onDragEnter={(e) => {
+              if (dragCarriesAsset(e.dataTransfer)) return
               if (!dragCarriesDroppable(e.dataTransfer)) return
               e.preventDefault()
               e.stopPropagation()
@@ -452,6 +469,7 @@ export function PdfEnginePage({
               setDropPage(false)
             }}
             onDragOver={(e) => {
+              if (dragCarriesAsset(e.dataTransfer)) return
               if (!dragCarriesDroppable(e.dataTransfer)) return
               e.preventDefault()
               e.stopPropagation()
@@ -462,17 +480,13 @@ export function PdfEnginePage({
               setDropSlot(null)
             }}
             onDrop={(e) => {
+              if (dragCarriesAsset(e.dataTransfer)) return
               e.preventDefault()
               // Stopped here so the page-level handler doesn't ALSO fire and
               // add a second copy as a floating image.
               e.stopPropagation()
               setDropSlot(null)
               setDropPage(false)
-              const assetId = assetIdFromDrag(e.dataTransfer)
-              if (assetId) {
-                onDropAssetOnImage(pageIndex, image.imageIndex, assetId)
-                return
-              }
               const file = imageFromDrag(e.dataTransfer)
               if (file) onDropOnImage(pageIndex, image.imageIndex, file)
             }}

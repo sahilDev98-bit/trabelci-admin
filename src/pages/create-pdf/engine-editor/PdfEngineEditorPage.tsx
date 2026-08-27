@@ -613,18 +613,19 @@ export function PdfEngineEditorPage() {
     }
   }
 
-  /** Dropped on bare paper — lands centred on the drop point. */
+  /**
+   * Dropped anywhere on a page — bare paper or over an existing picture.
+   *
+   * Always an ADDITION, never a replacement, and that is the one rule that
+   * differs from a file dragged off the desktop. Artwork from the library is a
+   * logo, a badge, a certification mark — things that belong on top of a
+   * photo. Dropping one onto a photo used to destroy the photo, which is
+   * never what dragging a logo over an image was meant to do.
+   */
   const handleDropAssetOnPage = (
     pageIndex: number, assetId: string, xPts: number, yFromTopPts: number,
   ) => {
     void withAssetFile(assetId, (file) => handleDropOnPage(pageIndex, file, xPts, yFromTopPts))
-  }
-
-  /** Dropped straight onto an existing picture — swaps it, keeping that
-   * slot's position, size and shape. This is how a template's placeholder
-   * logo gets replaced with the real one. */
-  const handleDropAssetOnImage = (pageIndex: number, imageIndex: number, assetId: string) => {
-    void withAssetFile(assetId, (file) => handleDropOnImage(pageIndex, imageIndex, file))
   }
 
   /**
@@ -925,7 +926,6 @@ export function PdfEngineEditorPage() {
     onDropOnPage: (pageIndex: number, file: File, x: number, y: number) =>
       void handleDropOnPage(pageIndex, file, x, y),
     onDropAssetOnPage: handleDropAssetOnPage,
-    onDropAssetOnImage: handleDropAssetOnImage,
     onTransformImage: (
       pageIndex: number, imageIndex: number,
       rect: { x: number; y: number; width: number; height: number },

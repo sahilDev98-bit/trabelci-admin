@@ -21,8 +21,11 @@
 //      page, in PDF points. A logo that lands somewhere other than where it
 //      was dropped is the whole gesture wasted.
 //
-//   4. Dropping onto an existing picture replaces THAT picture rather than
-//      adding a second one — how a template's placeholder logo gets swapped.
+//   4. Dropping an asset onto an existing picture ADDS it on top rather than
+//      replacing the picture — a logo belongs over a photo, not instead of
+//      it. The control is a FILE dropped on the same picture, which must
+//      still replace it: without that, simply deleting the replace path would
+//      pass.
 //
 //   5. An SVG is converted before it is stored, so the library only ever holds
 //      formats PDFium can embed — this is what makes a supplier's vector logo
@@ -79,10 +82,12 @@ export interface AssetLibraryTestResult {
   droppedYPts: number
   expectedXPts: number
   expectedYPts: number
-  /** Dropping onto a picture must replace that picture, not add one. */
-  droppedOnImageIndex: number
-  droppedOnImageAssetId: string
-  addedInsteadOfReplaced: boolean
+  /** An asset dropped on a picture must ADD, never replace. */
+  assetOnPictureWasAdded: boolean
+  pictureOfferedItselfForAsset: boolean
+  /** Control: a FILE on the same picture must still replace it. */
+  fileReplacedImageIndex: number
+  pictureOfferedItselfForFile: boolean
 }
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms))
@@ -113,7 +118,8 @@ export async function runAssetLibrarySelfTest(): Promise<AssetLibraryTestResult>
     dragTypes: [], draggedAssetId: "", pageLitUpForAsset: false,
     pageLitUpForEmptyDrag: false, droppedAssetId: "", droppedXPts: 0,
     droppedYPts: 0, expectedXPts: 0, expectedYPts: 0,
-    droppedOnImageIndex: -1, droppedOnImageAssetId: "", addedInsteadOfReplaced: false,
+    assetOnPictureWasAdded: false, pictureOfferedItselfForAsset: false,
+    fileReplacedImageIndex: -1, pictureOfferedItselfForFile: false,
   }
 
   const host = document.createElement("div")
@@ -201,20 +207,19 @@ async function measurePageDrops(out: AssetLibraryTestResult): Promise<AssetLibra
       onReplaceVector: () => {},
       onSelectLine: () => {},
       onReplaceImage: () => {},
-      onDropOnImage: () => {},
+      onDropOnImage: (_pageIndex: number, imageIndex: number, file: File) => {
+        out.fileReplacedImageIndex = imageIndex
+        void file
+      },
       onDropOnPage: () => {
-        // Reaching the FILE handler means the asset was not recognised and
-        // the page fell through to "an image dragged off the desktop".
+        // Reaching the FILE handler with an ASSET means the asset was not
+        // recognised and the page fell through to "dragged off the desktop".
         out.errors.push("an asset drop was handled as a plain file drop")
       },
       onDropAssetOnPage: (_pageIndex: number, assetId: string, xPts: number, yFromTopPts: number) => {
         out.droppedAssetId = assetId
         out.droppedXPts = Math.round(xPts)
         out.droppedYPts = Math.round(yFromTopPts)
-      },
-      onDropAssetOnImage: (_pageIndex: number, imageIndex: number, assetId: string) => {
-        out.droppedOnImageIndex = imageIndex
-        out.droppedOnImageAssetId = assetId
       },
       onTransformImage: () => {},
       onTransformVector: () => {},
@@ -279,33 +284,100 @@ async function measurePageDrops(out: AssetLibraryTestResult): Promise<AssetLibra
         + ` at ${out.expectedXPts},${out.expectedYPts}pt`)
     }
 
-    // Dropped ON the picture: that slot is replaced, and the page-level
-    // handler must NOT also fire, or one gesture would both swap the logo and
-    // add a second copy of it.
-    const before = out.droppedAssetId
-    out.droppedAssetId = ""
+    // ── Dropped ON an existing picture ──────────────────────────────
+    //
+    // An asset must ADD here, not replace. A logo, a badge, a certification
+    // mark belongs on TOP of a photo — dropping one onto a photo used to
+    // destroy the photo, which is never what dragging a logo over an image
+    // was meant to do. A file dragged off the desktop still replaces, and
+    // that difference is the whole point of this block.
     const slot = document.querySelector<HTMLElement>("[data-pdf-image-slot]")
-      ?? document.querySelector<HTMLElement>("[data-pdf-image-slot='0']")
     if (!slot) {
       out.errors.push("the page shows no image slot to drop onto")
-    } else {
-      slot.dispatchEvent(dragEvent("drop", { [ASSET_DRAG_MIME]: "3" }, {
-        x: box.left + 200, y: box.top + 150,
-      }))
-      await wait(60)
-      out.addedInsteadOfReplaced = out.droppedAssetId !== ""
-      if (out.droppedOnImageAssetId !== "3") {
-        out.errors.push(
-          `dropping on a picture reported "${out.droppedOnImageAssetId}", expected "3"`)
-      }
-      if (out.droppedOnImageIndex !== 0) {
-        out.errors.push(`the wrong picture was targeted: index ${out.droppedOnImageIndex}`)
-      }
-      if (out.addedInsteadOfReplaced) {
-        out.errors.push("dropping onto a picture ALSO added a new one")
-      }
+      return out
     }
-    void before
+
+    // While the pointer is over the picture, the PICTURE must not offer
+    // itself — the page should. That is what makes it visible before letting
+    // go that nothing is about to be overwritten.
+    //
+    // Measured from what the slot LOOKS like, not from defaultPrevented. The
+    // event bubbles from the slot up to the page, and the page legitimately
+    // prevents it, so defaultPrevented is true no matter which of the two
+    // accepted the drag — it cannot tell them apart. The highlight can: it is
+    // set only by the slot's own handler, and it is also the thing the user
+    // actually sees.
+    const slotIsHighlighted = () =>
+      (slot.className.includes("ring-emerald-500")
+        || slot.querySelector('[class*="ring-emerald-500"]') !== null)
+
+    slot.dispatchEvent(dragEvent("dragenter", { [ASSET_DRAG_MIME]: "3" },
+      { x: box.left + 200, y: box.top + 150 }))
+    slot.dispatchEvent(dragEvent("dragover", { [ASSET_DRAG_MIME]: "3" },
+      { x: box.left + 200, y: box.top + 150 }))
+    await wait(60)
+    out.pictureOfferedItselfForAsset = slotIsHighlighted()
+
+    out.droppedAssetId = ""
+    out.droppedXPts = 0
+    out.droppedYPts = 0
+    const onPictureX = 200
+    const onPictureY = 150
+    slot.dispatchEvent(dragEvent("drop", { [ASSET_DRAG_MIME]: "3" },
+      { x: box.left + onPictureX, y: box.top + onPictureY }))
+    await wait(60)
+
+    out.assetOnPictureWasAdded = out.droppedAssetId === "3"
+    if (!out.assetOnPictureWasAdded) {
+      out.errors.push(
+        `dropping an asset on a picture reported "${out.droppedAssetId}" as an`
+        + ' addition, expected "3" — it did not add')
+    }
+    if (out.fileReplacedImageIndex !== -1) {
+      out.errors.push("dropping an asset on a picture REPLACED the picture")
+    }
+    if (Math.abs(out.droppedXPts - onPictureX) > 1
+      || Math.abs(out.droppedYPts - onPictureY) > 1) {
+      out.errors.push(
+        `the asset landed at ${out.droppedXPts},${out.droppedYPts}pt but was`
+        + ` released over the picture at ${onPictureX},${onPictureY}pt`)
+    }
+
+    // ── The control: a FILE on the same picture still replaces it ───────
+    //
+    // Without this, deleting the replace path entirely would pass every check
+    // above. Swapping a photo for a better one is behaviour that was working
+    // and must not have been broken by making assets behave differently.
+    const dt = new DataTransfer()
+    dt.items.add(new File([new Uint8Array([1, 2, 3])], "photo.png", { type: "image/png" }))
+    const fileDragEvent = (type: string) => new DragEvent(type, {
+      bubbles: true, cancelable: true, dataTransfer: dt,
+      clientX: box.left + onPictureX, clientY: box.top + onPictureY,
+    })
+    slot.dispatchEvent(fileDragEvent("dragenter"))
+    slot.dispatchEvent(fileDragEvent("dragover"))
+    await wait(60)
+    // Read the same way as above, so the two answers are comparable. This is
+    // the control for that measurement as much as for the behaviour: if a
+    // file does not highlight the picture either, the check is simply blind.
+    out.pictureOfferedItselfForFile = slotIsHighlighted()
+
+    slot.dispatchEvent(fileDragEvent("drop"))
+    await wait(60)
+
+    if (out.fileReplacedImageIndex !== 0) {
+      out.errors.push(
+        "a FILE dropped on a picture no longer replaces it — the asset change"
+        + " broke the behaviour it was supposed to leave alone")
+    }
+    if (!out.pictureOfferedItselfForFile) {
+      out.errors.push("the picture no longer offers itself as a target for a file")
+    }
+    if (out.pictureOfferedItselfForAsset) {
+      out.errors.push(
+        "the picture offered itself for an ASSET, so the hint while dragging"
+        + " still says it is about to be replaced")
+    }
 
     return out
   } catch (err) {

@@ -152,7 +152,7 @@ async function runDirection(direction: "ltr" | "rtl"): Promise<RtlCase> {
         onMoveStart: () => {}, originPatch: null, imagePreview: null,
         onEditLine: () => {}, onReplaceImage: () => {}, onReplaceVector: () => {},
         onDropOnImage: () => {}, onDropOnPage: () => {}, onTransformImage: () => {},
-        onDropAssetOnPage: () => {}, onDropAssetOnImage: () => {},
+        onDropAssetOnPage: () => {},
         onResizeText: () => {},
       } as never,
       toolbar: {
