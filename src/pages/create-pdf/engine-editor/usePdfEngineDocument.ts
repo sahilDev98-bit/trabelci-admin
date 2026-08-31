@@ -11,6 +11,7 @@ import {
   type TextOverlayRequest,
   type ImageOverlayRequest,
   type PagePlanRequest,
+  type EnginePageLayer,
 } from "@/lib/pdf-engine"
 import { fetchPdfMasterTemplateSource } from "@/features/pdfTemplates/api"
 import { addedLineIndex } from "./placement"
@@ -125,6 +126,13 @@ export interface UsePdfEngineDocumentResult {
     pageIndex: number, imageIndex: number,
     rect: { x: number; y: number; width: number; height: number },
   ) => Promise<number>
+  /** Everything on a page in painting order, TOP first. Loaded on demand:
+   * only the layers panel wants it, and it changes with every edit. */
+  listLayers: (pageIndex: number) => Promise<EnginePageLayer[]>
+  /** Move a layer to a new position in that order, counted from the top. */
+  reorderLayer: (
+    pageIndex: number, kind: "text" | "image" | "vector", index: number, toPosition: number,
+  ) => Promise<void>
   /** Whether there is anything to step back to, or forward to. */
   canUndo: boolean
   canRedo: boolean
@@ -622,6 +630,23 @@ export function usePdfEngineDocument(templateId: string | null | undefined): Use
     }
   }, [getEngine])
 
+  const listLayers = useCallback(async (pageIndex: number) => {
+    const id = docIdRef.current
+    if (!id) return []
+    const { layers } = await getEngine().listLayers(id, pageIndex)
+    return layers
+  }, [getEngine])
+
+  const reorderLayer = useCallback(async (
+    pageIndex: number, kind: "text" | "image" | "vector", index: number, toPosition: number,
+  ) => {
+    // Through mutate, so the page's cached lists are refreshed and the canvas
+    // repainted — reordering changes what is visible even though nothing
+    // moved or changed size.
+    await mutate(pageIndex, (id) =>
+      getEngine().reorderLayer(id, pageIndex, kind, index, toPosition).then(() => undefined))
+  }, [getEngine, mutate])
+
   const undo = useCallback(() => stepHistory("undo"), [stepHistory])
   const redo = useCallback(() => stepHistory("redo"), [stepHistory])
 
@@ -655,6 +680,7 @@ export function usePdfEngineDocument(templateId: string | null | undefined): Use
     removeVector, replaceVector, setVectorRect, transformVector, styleText, scaleText, alignText, transformImage, renderPage, editText, moveText, moveTextToPage, moveImageToPage, removeText,
     replaceImage, removeImage, setImageRect, addTextOverlay, addImageOverlay, applyPagePlan,
     canUndo: history.canUndo, canRedo: history.canRedo, undo, redo,
+    listLayers, reorderLayer,
     save, busy, revision,
   }), [
     phase, error, downloadPercent, pages, docId, pageText, pageImages,
@@ -664,5 +690,6 @@ export function usePdfEngineDocument(templateId: string | null | undefined): Use
     renderPage, editText, moveText, moveTextToPage, moveImageToPage, removeText,
     replaceImage, removeImage, setImageRect, addTextOverlay, addImageOverlay,
     applyPagePlan, save, busy, revision, history, undo, redo,
+    listLayers, reorderLayer,
   ])
 }

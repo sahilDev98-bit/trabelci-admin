@@ -16,6 +16,7 @@ export { PdfEngineClient, drawRenderedPage, drawPagePatch } from "./client"
 export type {
   EnginePage, EngineTextLine, EngineImage, EngineVectorGroup, RenderedPage,
   EditTextOptions, TextOverlayRequest, ImageOverlayRequest, PagePlanRequest,
+  EnginePageLayer,
 } from "./protocol"
 export type { TextAlign } from "./layout"
 export type { PdfMatrix, PdfRect } from "./core"

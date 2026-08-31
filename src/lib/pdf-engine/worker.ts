@@ -35,6 +35,7 @@ import { listPages, buildDocumentFromPlan } from "./pages"
 import { addTextOverlay, addImageOverlay } from "./overlay"
 import { loadFontMetrics, type FontMetrics } from "./layout"
 import { DocumentHistory } from "./history"
+import { listPageLayers, reorderLayer } from "./layers"
 import type {
   EngineMethods, EngineMethodName, EngineRequest, EngineResponse,
   EnginePage, EngineTextLine, EngineImage,
@@ -70,7 +71,7 @@ const MUTATING_METHODS = new Set<EngineMethodName>([
   "styleTextLine", "scaleTextLine", "alignTextLine",
   "replaceImage", "removeImage", "setImageRect", "transformImage",
   "moveImageToPage", "addImageOverlay", "addTextOverlay",
-  "replaceVectorGroupWithImage", "removeVectorGroup",
+  "replaceVectorGroupWithImage", "removeVectorGroup", "reorderLayer",
   "setVectorGroupRect", "transformVectorGroup",
   "applyPagePlan",
 ])
@@ -333,6 +334,33 @@ const handlers: {
   },
 
   historyState: ({ docId }) => requireDoc(docId).history.state(),
+
+  listLayers: ({ docId, pageIndex }, { pdfium }) => {
+    const doc = requireDoc(docId)
+    return withPage(pdfium, doc.handle, pageIndex, (page) => ({
+      // The panel wants what is on TOP at the top of its list, but the engine
+      // works bottom-first because that is the page's own order. Reversed
+      // here, once, so no caller has to remember which way round it is.
+      layers: listPageLayers(pdfium, page, doc.scratch).map((l) => ({
+        kind: l.kind, index: l.index,
+        objectCount: l.objectIndices.length,
+        text: l.text, bbox: l.bbox,
+      })).reverse(),
+    }))
+  },
+
+  reorderLayer: ({ docId, pageIndex, kind, index, toPosition }, { pdfium }) => {
+    const doc = requireDoc(docId)
+    return withPage(pdfium, doc.handle, pageIndex, (page) => {
+      const total = listPageLayers(pdfium, page, doc.scratch).length
+      // The caller counts from the TOP, matching what it shows; the engine
+      // counts from the bottom. Converted here rather than at either end.
+      const fromBottom = total - 1 - toPosition
+      const r = reorderLayer(pdfium, page, doc.scratch, { kind, index }, fromBottom)
+      if (!r.ok) throw new Error(r.error ?? "could not move that layer")
+      return { ok: true, newPosition: total - 1 - (r.newPosition ?? fromBottom) }
+    })
+  },
 
   listPages: ({ docId }, { pdfium }) => ({ pages: toEnginePages(pdfium, requireDoc(docId).handle) }),
 

@@ -232,6 +232,19 @@ export class PdfEngineClient {
     return this.call("stepHistory", { docId, direction })
   }
 
+  /** Everything on a page in painting order, TOP first. */
+  listLayers(docId: string, pageIndex: number) {
+    return this.call("listLayers", { docId, pageIndex })
+  }
+
+  /** Move a layer to a new position, counted from the TOP. */
+  reorderLayer(
+    docId: string, pageIndex: number,
+    kind: "text" | "image" | "vector", index: number, toPosition: number,
+  ) {
+    return this.call("reorderLayer", { docId, pageIndex, kind, index, toPosition })
+  }
+
   historyState(docId: string) {
     return this.call("historyState", { docId })
   }

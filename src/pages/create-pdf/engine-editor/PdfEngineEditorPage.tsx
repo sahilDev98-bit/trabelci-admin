@@ -26,6 +26,7 @@ import { CrossPageDragGhost } from "./CrossPageDragGhost"
 import { findFreeSpot, newImageSize, type Box } from "./placement"
 import { readImageSize } from "./imageFile"
 import { PdfAssetPanel } from "./PdfAssetPanel"
+import { PdfLayersPanel } from "./PdfLayersPanel"
 import { PdfEngineWorkspace } from "./PdfEngineWorkspace"
 import { PdfProductPanel } from "./PdfProductPanel"
 import { PdfEditorLoadingScreen } from "../PdfEditorLoadingScreen"
@@ -155,7 +156,16 @@ export function PdfEngineEditorPage() {
    * width of the page would make the panel not worth opening.
    */
   const [assetPanelOpen, setAssetPanelOpen] = useState(false)
-  const [productPanelOpen, setProductPanelOpen] = useState(false)
+  /**
+   * Which panel the RIGHT side is showing, if any.
+   *
+   * One at a time rather than a third column: the page is what this screen is
+   * for, and every panel open at once leaves it a strip in the middle. The
+   * asset library keeps the left side because the brief puts it there, and
+   * because you reach for artwork and product data at different moments.
+   */
+  const [rightPanel, setRightPanel] = useState<"product" | "layers" | null>(null)
+  const productPanelOpen = rightPanel === "product"
   const [product, setProduct] = useState<CatalogProduct | null>(null)
   /**
    * Where the last detail added from the panel went, so the next one can go
@@ -1044,7 +1054,11 @@ export function PdfEngineEditorPage() {
           assetPanelOpen,
           onToggleAssetPanel: () => setAssetPanelOpen((open) => !open),
           productPanelOpen,
-          onToggleProductPanel: () => setProductPanelOpen((open) => !open),
+          onToggleProductPanel: () =>
+            setRightPanel((p) => (p === "product" ? null : "product")),
+          layersPanelOpen: rightPanel === "layers",
+          onToggleLayersPanel: () =>
+            setRightPanel((p) => (p === "layers" ? null : "layers")),
           onOpenOrganizer: (mode) => void openOrganizer(mode),
           onEditSelectedText: () => {
             if (selection?.kind !== "text") return
@@ -1092,13 +1106,32 @@ export function PdfEngineEditorPage() {
             onClose={() => setAssetPanelOpen(false)}
           />
         ) : undefined}
-        panel={productPanelOpen ? (
+        panel={rightPanel === "product" ? (
           <PdfProductPanel
             product={product}
             onPickProduct={setProduct}
             mode={productFieldMode}
             onApply={applyProductField}
-            onClose={() => setProductPanelOpen(false)}
+            onClose={() => setRightPanel(null)}
+          />
+        ) : rightPanel === "layers" ? (
+          <PdfLayersPanel
+            // The page in view, so the list is about what is on screen
+            // rather than always page one.
+            pageIndex={selection?.pageIndex ?? visiblePageIndex()}
+            revision={doc.revision}
+            loadLayers={doc.listLayers}
+            onReorder={(kind, index, toPosition) => {
+              const page = selection?.pageIndex ?? visiblePageIndex()
+              void doc.reorderLayer(page, kind, index, toPosition)
+                .catch((err: unknown) => toast.error(err instanceof Error ? err.message : String(err)))
+              // The moved object is renumbered by the move, so holding the old
+              // selection would point at whatever took its place.
+              setSelection(null)
+            }}
+            selection={selection}
+            onSelect={setSelection}
+            onClose={() => setRightPanel(null)}
           />
         ) : undefined}
       />

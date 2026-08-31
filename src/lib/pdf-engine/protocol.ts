@@ -93,6 +93,18 @@ export interface TextOverlayRequest {
   font?: "regular" | "bold" | "hebrew"
 }
 
+export interface EnginePageLayer {
+  kind: "text" | "image" | "vector"
+  /** Index within its own kind — what every other engine call takes. */
+  index: number
+  /** How many page objects this layer is made of; a line of text is often
+   * several and a piece of artwork often dozens. */
+  objectCount: number
+  /** The words, for text layers, so a panel can show them. */
+  text?: string
+  bbox: PdfRect | null
+}
+
 export interface ImageOverlayRequest {
   x: number
   y: number
@@ -287,6 +299,21 @@ export interface EngineMethods {
       undoDepth: number
       redoDepth: number
     }
+  }
+  /** Everything on a page in painting order, BOTTOM first — the only notion
+   * of "layer" a PDF has. */
+  listLayers: {
+    params: { docId: string; pageIndex: number }
+    result: { layers: EnginePageLayer[] }
+  }
+  /** Move one layer to a new position in that order. */
+  reorderLayer: {
+    params: {
+      docId: string; pageIndex: number
+      kind: "text" | "image" | "vector"; index: number
+      toPosition: number
+    }
+    result: { ok: boolean; newPosition: number }
   }
   historyState: {
     params: { docId: string }

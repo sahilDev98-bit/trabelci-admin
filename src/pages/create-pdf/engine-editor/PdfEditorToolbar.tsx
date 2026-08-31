@@ -1,7 +1,7 @@
 import {
   AlignCenterIcon, AlignLeftIcon, AlignRightIcon, ArrowUpDownIcon,
   BoldIcon, CopyIcon, DownloadIcon, FlipHorizontalIcon, FlipVerticalIcon,
-  ArrowLeftIcon, ImageIcon, ImagePlusIcon, ItalicIcon, LibraryIcon, Loader2Icon,
+  ArrowLeftIcon, ImageIcon, ImagePlusIcon, ItalicIcon, LayersIcon, LibraryIcon, Loader2Icon,
   MinusIcon, PackageSearchIcon, PlusIcon, RedoIcon, RotateCcwIcon, RotateCwIcon,
   ScanSearchIcon, Trash2Icon, TypeIcon, TypeOutlineIcon, UndoIcon, XIcon,
 } from "lucide-react"
@@ -53,6 +53,10 @@ interface PdfEditorToolbarProps {
    * through a layout needs it back. */
   productPanelOpen: boolean
   onToggleProductPanel: () => void
+  /** The layers list. Shares the right-hand side with the product panel, so
+   * opening one closes the other. */
+  layersPanelOpen: boolean
+  onToggleLayersPanel: () => void
   onOpenOrganizer: (mode: PdfOrganizerMode) => void
   /** Step the document back and forward. Disabled rather than hidden when
    * there is nowhere to go: a control that disappears is one you have to
@@ -126,7 +130,8 @@ export function PdfEditorToolbar({
   documentName,
   onZoomToSelection, selection, contentMode, onToggleContentMode,
   onAddText, onAddImage, assetPanelOpen, onToggleAssetPanel,
-  productPanelOpen, onToggleProductPanel, onOpenOrganizer,
+  productPanelOpen, onToggleProductPanel,
+  layersPanelOpen, onToggleLayersPanel, onOpenOrganizer,
   canUndo, canRedo, onUndo, onRedo,
   onEditSelectedText, onReplaceSelectedImage, onReplaceSelectedVector,
   textStyle, onToggleBold, onToggleItalic, onTextColor, onScaleText, onAlignText,
@@ -241,6 +246,19 @@ export function PdfEditorToolbar({
               <span className="text-xs">{t("pdfTemplates.engineProductShort", "Product")}</span>
             </Button>
           </div>
+            <Button
+              type="button"
+              size="sm"
+              variant={layersPanelOpen ? "secondary" : "ghost"}
+              onClick={onToggleLayersPanel}
+              aria-pressed={layersPanelOpen}
+              className="h-8 shrink-0 gap-1.5 px-2"
+              aria-label={t("pdfTemplates.layersPanelTitle", "Layers")}
+              title={t("pdfTemplates.layersPanelTitle", "Layers")}
+            >
+              <LayersIcon className="size-4" />
+              <span className="text-xs">{t("pdfTemplates.engineLayersShort", "Layers")}</span>
+            </Button>
           <Divider />
           {/* Undo sits with the DOCUMENT tools, not the selection's: it
               applies to the last thing that happened whether or not anything

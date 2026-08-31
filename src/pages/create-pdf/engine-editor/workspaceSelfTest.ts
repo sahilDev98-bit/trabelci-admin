@@ -189,6 +189,7 @@ export async function runWorkspaceSelfTest(): Promise<WorkspaceTestResult> {
       assetPanelOpen: false,
       onToggleAssetPanel: () => {},
       canUndo: false, canRedo: false, onUndo: () => {}, onRedo: () => {},
+      layersPanelOpen: false, onToggleLayersPanel: () => {},
       productPanelOpen: false,
       onToggleProductPanel: () => {},
       onOpenOrganizer: () => {},

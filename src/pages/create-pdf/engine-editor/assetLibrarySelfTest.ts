@@ -586,6 +586,7 @@ export async function showWorkspaceForDrag(pageCount = 12): Promise<void> {
     onAddText: () => {}, onAddImage: () => {},
     assetPanelOpen: true, onToggleAssetPanel: () => {},
     canUndo: false, canRedo: false, onUndo: () => {}, onRedo: () => {},
+    layersPanelOpen: false, onToggleLayersPanel: () => {},
     productPanelOpen: false, onToggleProductPanel: () => {},
     onOpenOrganizer: () => {}, onEditSelectedText: () => {},
     onReplaceSelectedImage: () => {}, onReplaceSelectedVector: () => {},
