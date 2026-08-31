@@ -70,7 +70,11 @@ export interface UsePdfEngineDocumentResult {
   loadPageText: (pageIndex: number) => Promise<void>
   loadPageImages: (pageIndex: number) => Promise<void>
   renderPage: (pageIndex: number, scale: number) => Promise<{ width: number; height: number; rgba: ArrayBuffer } | null>
-  editText: (pageIndex: number, lineIndex: number, newText: string, options?: EditTextOptions) => Promise<void>
+  /** Resolves to what happened to the TYPEFACE: whether the page's own font
+   * was kept, and which characters (if any) no available font could draw. */
+  editText: (
+    pageIndex: number, lineIndex: number, newText: string, options?: EditTextOptions,
+  ) => Promise<{ usedDocumentFont: boolean; fellBackBecause: string | null; unsupportedCharacters: string | null }>
   removeText: (pageIndex: number, lineIndex: number) => Promise<void>
   /** Shift a line. dy is PDF-space, so positive moves it up the page. */
   /** All four movers resolve to the object's NEW index, or -1. */
@@ -89,6 +93,11 @@ export interface UsePdfEngineDocumentResult {
   lastChange: { pageIndex: number; rect: PdfRect; revision: number } | null
   loadPageVectors: (pageIndex: number) => Promise<void>
   removeVector: (pageIndex: number, vectorIndex: number) => Promise<void>
+  /** Turn or mirror a line of text, exactly as an image turns. */
+  transformText: (
+    pageIndex: number, lineIndex: number,
+    op: "rotate-left" | "rotate-right" | "flip-horizontal" | "flip-vertical",
+  ) => Promise<number>
   /** Turn or mirror artwork, exactly as an image turns. */
   transformVector: (
     pageIndex: number, vectorIndex: number,
@@ -125,6 +134,27 @@ export interface UsePdfEngineDocumentResult {
   setImageRect: (
     pageIndex: number, imageIndex: number,
     rect: { x: number; y: number; width: number; height: number },
+  ) => Promise<number>
+  /** Trim a picture to a region of itself, in fractions from its bottom-left. */
+  cropImage: (
+    pageIndex: number, imageIndex: number,
+    region: { left: number; bottom: number; right: number; top: number },
+  ) => Promise<void>
+  /** Shift several slots together by the same amount, in one operation. */
+  translateSlots: (
+    pageIndex: number,
+    slots: { kind: "text" | "image" | "vector"; index: number }[],
+    dxPts: number, dyPts: number,
+  ) => Promise<void>
+  /** Copy a slot. Resolves to the copy's index on the page it landed on, or
+   * -1 if it could not be made. */
+  duplicateSlot: (
+    pageIndex: number, kind: "text" | "image" | "vector", index: number, toPageIndex?: number,
+  ) => Promise<number>
+  /** Insert a blank page after `afterPageIndex`. Without a size it matches
+   * that page's. Resolves to the new page's index. */
+  addBlankPage: (
+    afterPageIndex: number, size?: { widthPts: number; heightPts: number },
   ) => Promise<number>
   /** Everything on a page in painting order, TOP first. Loaded on demand:
    * only the layers panel wants it, and it changes with every edit. */
@@ -437,7 +467,13 @@ export function usePdfEngineDocument(templateId: string | null | undefined): Use
   const editText = useCallback(async (
     pageIndex: number, lineIndex: number, newText: string, options?: EditTextOptions,
   ) => {
-    await mutate(pageIndex, (id) => getEngine().editTextLine(id, pageIndex, lineIndex, newText, options).then(() => undefined))
+    const r = await mutate(pageIndex, (id) =>
+      getEngine().editTextLine(id, pageIndex, lineIndex, newText, options))
+    return {
+      usedDocumentFont: r?.usedDocumentFont ?? false,
+      fellBackBecause: r?.fellBackBecause ?? null,
+      unsupportedCharacters: r?.unsupportedCharacters ?? null,
+    }
   }, [getEngine, mutate])
 
   /** Bold / italic / colour, applied without rebuilding the text — so the
@@ -478,6 +514,15 @@ export function usePdfEngineDocument(templateId: string | null | undefined): Use
       getEngine().setVectorGroupRect(id, pageIndex, vectorIndex, rect))
     return r?.newIndex ?? -1
   }, [mutate, getEngine])
+
+  const transformText = useCallback(async (
+    pageIndex: number, lineIndex: number,
+    op: "rotate-left" | "rotate-right" | "flip-horizontal" | "flip-vertical",
+  ) => {
+    const r = await mutate(pageIndex, (id) =>
+      getEngine().transformTextLine(id, pageIndex, lineIndex, op))
+    return r?.newIndex ?? -1
+  }, [getEngine, mutate])
 
   const transformVector = useCallback(async (
     pageIndex: number, vectorIndex: number,
@@ -630,6 +675,72 @@ export function usePdfEngineDocument(templateId: string | null | undefined): Use
     }
   }, [getEngine])
 
+  /**
+   * A new blank page, the same size as the one it follows.
+   *
+   * Sized from its neighbour rather than from a constant: a catalogue is not
+   * always A4, and a blank page of the wrong size is visible immediately in
+   * the thumbnail strip and again at the printer.
+   */
+  const addBlankPage = useCallback(async (
+    afterPageIndex: number, size?: { widthPts: number; heightPts: number },
+  ) => {
+    const id = docIdRef.current
+    if (!id) return -1
+    const template = pages[afterPageIndex] ?? pages[0]
+    const widthPts = size?.widthPts ?? template?.widthPts ?? 595
+    const heightPts = size?.heightPts ?? template?.heightPts ?? 842
+    const at = afterPageIndex + 1
+    setBusy(true)
+    try {
+      const result = await getEngine().addBlankPage(id, at, widthPts, heightPts)
+      setHistory({ canUndo: true, canRedo: false })
+      setPages(result.pages)
+      // Every cached per-page list is keyed by page NUMBER, and inserting a
+      // page shifts every number above it. Cleared rather than shifted:
+      // rebuilding is cheap and cannot be subtly wrong.
+      setPageText({})
+      setPageImages({})
+      setPageVectors({})
+      setLastChange(null)
+      setRevision((r) => r + 1)
+      return at
+    } finally {
+      setBusy(false)
+    }
+  }, [getEngine, pages])
+
+  const cropImage = useCallback(async (
+    pageIndex: number, imageIndex: number,
+    region: { left: number; bottom: number; right: number; top: number },
+  ) => {
+    await mutate(pageIndex, (id) =>
+      getEngine().cropImage(id, pageIndex, imageIndex, region).then(() => undefined))
+  }, [getEngine, mutate])
+
+  const translateSlots = useCallback(async (
+    pageIndex: number,
+    slots: { kind: "text" | "image" | "vector"; index: number }[],
+    dxPts: number, dyPts: number,
+  ) => {
+    await mutate(pageIndex, (id) =>
+      getEngine().translateSlots(id, pageIndex, slots, dxPts, dyPts).then(() => undefined))
+  }, [getEngine, mutate])
+
+  const duplicateSlot = useCallback(async (
+    pageIndex: number, kind: "text" | "image" | "vector", index: number, toPageIndex?: number,
+  ) => {
+    // Both pages refreshed when the copy lands elsewhere: the source is
+    // unchanged but the target gained an object, and a stale list there would
+    // leave the copy unselectable.
+    const pages = toPageIndex === undefined || toPageIndex === pageIndex
+      ? pageIndex
+      : [pageIndex, toPageIndex]
+    const r = await mutate(pages, (id) =>
+      getEngine().duplicateSlot(id, pageIndex, kind, index, toPageIndex))
+    return r?.newIndex ?? -1
+  }, [getEngine, mutate])
+
   const listLayers = useCallback(async (pageIndex: number) => {
     const id = docIdRef.current
     if (!id) return []
@@ -677,19 +788,19 @@ export function usePdfEngineDocument(templateId: string | null | undefined): Use
     phase, error, downloadPercent, pages, docId, pageText, pageImages,
     loadPageText, loadPageImages, loadPageVectors, pageVectors,
     renderCleanPatch, renderImagePreview, renderPageRegion, lastChange,
-    removeVector, replaceVector, setVectorRect, transformVector, styleText, scaleText, alignText, transformImage, renderPage, editText, moveText, moveTextToPage, moveImageToPage, removeText,
+    removeVector, replaceVector, setVectorRect, transformVector, transformText, styleText, scaleText, alignText, transformImage, renderPage, editText, moveText, moveTextToPage, moveImageToPage, removeText,
     replaceImage, removeImage, setImageRect, addTextOverlay, addImageOverlay, applyPagePlan,
     canUndo: history.canUndo, canRedo: history.canRedo, undo, redo,
-    listLayers, reorderLayer,
+    listLayers, reorderLayer, addBlankPage, duplicateSlot, translateSlots, cropImage,
     save, busy, revision,
   }), [
     phase, error, downloadPercent, pages, docId, pageText, pageImages,
     loadPageText, loadPageImages, loadPageVectors, pageVectors,
     renderCleanPatch, renderImagePreview, renderPageRegion, lastChange,
-    removeVector, replaceVector, setVectorRect, transformVector, styleText, scaleText, alignText, transformImage,
+    removeVector, replaceVector, setVectorRect, transformVector, transformText, styleText, scaleText, alignText, transformImage,
     renderPage, editText, moveText, moveTextToPage, moveImageToPage, removeText,
     replaceImage, removeImage, setImageRect, addTextOverlay, addImageOverlay,
     applyPagePlan, save, busy, revision, history, undo, redo,
-    listLayers, reorderLayer,
+    listLayers, reorderLayer, addBlankPage, duplicateSlot, translateSlots, cropImage,
   ])
 }

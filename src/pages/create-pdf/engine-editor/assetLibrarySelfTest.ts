@@ -249,6 +249,12 @@ async function measurePageDrops(out: AssetLibraryTestResult): Promise<AssetLibra
     root.render(createElement(PdfEnginePage, {
       page,
       pageIndex: 0,
+      // Nothing is locked in these measurements.
+      locks: new Set<string>(),
+    alsoSelected: [],
+    cropping: null,
+    onCropCancel: () => {},
+    onCropCommit: () => {},
       displayWidth: DISPLAY_WIDTH,
       text: { loaded: true, lines: [] },
       images: { loaded: true, images: [IMAGE] },
@@ -579,20 +585,28 @@ export async function showWorkspaceForDrag(pageCount = 12): Promise<void> {
     drag: null, onMoveStart: () => {}, originPatch: null, imagePreview: null,
     onEditLine: () => {}, onReplaceImage: () => {}, onReplaceVector: () => {},
     onDropOnImage: () => {}, onDropOnPage: () => {}, onDropAssetOnPage: () => {},
-    onTransformImage: () => {}, onTransformVector: () => {}, onResizeText: () => {},
+    locks: new Set<string>(),
+    alsoSelected: [],
+    cropping: null,
+    onCropCancel: () => {},
+    onCropCommit: () => {},
+    onTransformText: () => {}, onTransformImage: () => {}, onTransformVector: () => {}, onResizeText: () => {},
   }
   const toolbar = {
     selection: null, contentMode: "text" as const, onToggleContentMode: () => {},
     onAddText: () => {}, onAddImage: () => {},
     assetPanelOpen: true, onToggleAssetPanel: () => {},
     canUndo: false, canRedo: false, onUndo: () => {}, onRedo: () => {},
+    onAddPage: () => {}, selectionLocked: false, onToggleLock: () => {},
+      onDuplicate: () => {},
+      cropping: false, onToggleCrop: () => {}, onSetFont: () => {},
     layersPanelOpen: false, onToggleLayersPanel: () => {},
     productPanelOpen: false, onToggleProductPanel: () => {},
     onOpenOrganizer: () => {}, onEditSelectedText: () => {},
     onReplaceSelectedImage: () => {}, onReplaceSelectedVector: () => {},
     onDeleteSelected: () => {}, textStyle: null, onToggleBold: () => {},
     onToggleItalic: () => {}, onTextColor: () => {}, onScaleText: () => {},
-    onAlignText: () => {}, onTransformImage: () => {}, onTransformVector: () => {},
+    onAlignText: () => {}, onTransformText: () => {}, onTransformImage: () => {}, onTransformVector: () => {},
     onDeselect: () => {}, onDownload: () => {}, downloading: false, busy: false,
   }
 

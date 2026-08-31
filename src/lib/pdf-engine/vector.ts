@@ -175,29 +175,6 @@ export function setVectorGroupRect(
  * GROUP stays where it is. Every path gets that one matrix, so the pieces of
  * a logo turn together instead of each spinning about its own middle.
  */
-export function transformVectorGroup(
-  pdfium: WrappedPdfiumModule,
-  page: number,
-  handles: number[],
-  bbox: { left: number; bottom: number; right: number; top: number },
-  op: "rotate-left" | "rotate-right" | "flip-horizontal" | "flip-vertical",
-): { ok: boolean; error?: string } {
-  if (handles.length === 0) return { ok: false, error: "the artwork has no paths to turn" }
-  const cx = (bbox.left + bbox.right) / 2
-  const cy = (bbox.bottom + bbox.top) / 2
-  const m = op === "rotate-left" ? { a: 0, b: 1, c: -1, d: 0 }
-    : op === "rotate-right" ? { a: 0, b: -1, c: 1, d: 0 }
-      : op === "flip-horizontal" ? { a: -1, b: 0, c: 0, d: 1 }
-        : { a: 1, b: 0, c: 0, d: -1 }
-  const e = cx - (m.a * cx + m.c * cy)
-  const f = cy - (m.b * cx + m.d * cy)
-  for (const handle of handles) {
-    pdfium.FPDFPageObj_TransformClipPath(handle, m.a, m.b, m.c, m.d, e, f)
-    pdfium.FPDFPageObj_Transform(handle, m.a, m.b, m.c, m.d, e, f)
-  }
-  return { ok: pdfium.FPDFPage_GenerateContent(page) }
-}
-
 export function removeVectorGroup(
   pdfium: WrappedPdfiumModule, page: number, handles: number[],
 ): { ok: boolean; error?: string } {

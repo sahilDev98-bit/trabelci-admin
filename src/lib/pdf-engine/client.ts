@@ -136,6 +136,14 @@ export class PdfEngineClient {
   }
 
   /** Turn or mirror artwork, exactly as an image turns. */
+  /** Turn or mirror a line of text. */
+  transformTextLine(
+    docId: string, pageIndex: number, lineIndex: number,
+    op: "rotate-left" | "rotate-right" | "flip-horizontal" | "flip-vertical",
+  ): Promise<EngineMethods["transformTextLine"]["result"]> {
+    return this.call("transformTextLine", { docId, pageIndex, lineIndex, op })
+  }
+
   transformVectorGroup(
     docId: string, pageIndex: number, vectorIndex: number,
     op: "rotate-left" | "rotate-right" | "flip-horizontal" | "flip-vertical",
@@ -230,6 +238,38 @@ export class PdfEngineClient {
    * false when there was nowhere to go. */
   stepHistory(docId: string, direction: "undo" | "redo") {
     return this.call("stepHistory", { docId, direction })
+  }
+
+  /** Trim a picture to a region of itself, in fractions from its
+   * bottom-left. */
+  cropImage(
+    docId: string, pageIndex: number, imageIndex: number,
+    region: { left: number; bottom: number; right: number; top: number },
+  ) {
+    return this.call("cropImage", { docId, pageIndex, imageIndex, region })
+  }
+
+  /** Shift several slots by the same amount, in one operation. */
+  translateSlots(
+    docId: string, pageIndex: number,
+    slots: { kind: "text" | "image" | "vector"; index: number }[],
+    dxPts: number, dyPts: number,
+  ) {
+    return this.call("translateSlots", { docId, pageIndex, slots, dxPts, dyPts })
+  }
+
+  /** Copy a slot, onto the same page or another one. */
+  duplicateSlot(
+    docId: string, pageIndex: number,
+    kind: "text" | "image" | "vector", index: number,
+    toPageIndex?: number,
+  ) {
+    return this.call("duplicateSlot", { docId, pageIndex, kind, index, toPageIndex })
+  }
+
+  /** Insert a blank page at `atIndex`, sized in PDF points. */
+  addBlankPage(docId: string, atIndex: number, widthPts: number, heightPts: number) {
+    return this.call("addBlankPage", { docId, atIndex, widthPts, heightPts })
   }
 
   /** Everything on a page in painting order, TOP first. */

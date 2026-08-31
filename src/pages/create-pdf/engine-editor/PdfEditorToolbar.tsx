@@ -3,7 +3,8 @@ import {
   BoldIcon, CopyIcon, DownloadIcon, FlipHorizontalIcon, FlipVerticalIcon,
   ArrowLeftIcon, ImageIcon, ImagePlusIcon, ItalicIcon, LayersIcon, LibraryIcon, Loader2Icon,
   MinusIcon, PackageSearchIcon, PlusIcon, RedoIcon, RotateCcwIcon, RotateCwIcon,
-  ScanSearchIcon, Trash2Icon, TypeIcon, TypeOutlineIcon, UndoIcon, XIcon,
+  ScanSearchIcon, Trash2Icon, TypeIcon, TypeOutlineIcon, UndoIcon,
+  FilePlusIcon, LockIcon, LockOpenIcon, CopyPlusIcon, CropIcon, XIcon,
 } from "lucide-react"
 import { useTranslation } from "react-i18next"
 
@@ -65,6 +66,18 @@ interface PdfEditorToolbarProps {
   canRedo: boolean
   onUndo: () => void
   onRedo: () => void
+  /** Insert a blank page after the one in view. */
+  onAddPage: () => void
+  /** Whether the SELECTED slot is locked, and the toggle for it. Locks are a
+   * property of this editing session; a PDF has nowhere to store one. */
+  selectionLocked: boolean
+  onToggleLock: () => void
+  /** Copy the selected slot, offset from the original. */
+  onDuplicate: () => void
+  /** Trim the selected picture. Pictures only — there is nothing to trim on
+   * a line of text or a path. */
+  cropping: boolean
+  onToggleCrop: () => void
   onEditSelectedText: () => void
   onReplaceSelectedImage: () => void
   onReplaceSelectedVector: () => void
@@ -76,7 +89,21 @@ interface PdfEditorToolbarProps {
   onToggleItalic: () => void
   onTextColor: (color: { r: number; g: number; b: number }) => void
   onScaleText: (factor: number) => void
+  /**
+   * Redraw the selected line in a chosen typeface.
+   *
+   * "document" keeps the page's own — the default, and the thing that stops
+   * a heading changing when you edit it. The rest are the faces bundled with
+   * the editor, for when you deliberately want something different.
+   */
+  onSetFont: (face: "document" | "regular" | "bold" | "hebrew") => void
   onAlignText: (alignment: "left" | "center" | "right") => void
+  /** Turn or mirror the selected line of text. Text had none of these while
+   * pictures and artwork had all four, so a sideways caption — a catalogue
+   * spine, a vertical label — could not be made at all. */
+  onTransformText: (
+    op: "rotate-left" | "rotate-right" | "flip-horizontal" | "flip-vertical",
+  ) => void
   onTransformImage: (
     op: "rotate-left" | "rotate-right" | "flip-horizontal" | "flip-vertical",
   ) => void
@@ -132,10 +159,11 @@ export function PdfEditorToolbar({
   onAddText, onAddImage, assetPanelOpen, onToggleAssetPanel,
   productPanelOpen, onToggleProductPanel,
   layersPanelOpen, onToggleLayersPanel, onOpenOrganizer,
-  canUndo, canRedo, onUndo, onRedo,
+  canUndo, canRedo, onUndo, onRedo, onAddPage,
+  selectionLocked, onToggleLock, onDuplicate, cropping, onToggleCrop,
   onEditSelectedText, onReplaceSelectedImage, onReplaceSelectedVector,
-  textStyle, onToggleBold, onToggleItalic, onTextColor, onScaleText, onAlignText,
-  onTransformImage, onTransformVector,
+  textStyle, onToggleBold, onToggleItalic, onTextColor, onScaleText, onSetFont, onAlignText,
+  onTransformText, onTransformImage, onTransformVector,
   onDeselect, onExit, onDownload, downloading, busy,
 }: PdfEditorToolbarProps) {
   const { t } = useTranslation()
@@ -276,6 +304,11 @@ export function PdfEditorToolbar({
             disabled={!canRedo}
           />
           <Divider />
+          <ToolButton
+            label={t("pdfTemplates.engineAddPage", "Add blank page")}
+            icon={FilePlusIcon}
+            onClick={onAddPage}
+          />
           <ToolButton label={t("pdfTemplates.railCopyPage", "Duplicate pages")} icon={CopyIcon} onClick={() => onOpenOrganizer("copy")} />
           <ToolButton label={t("pdfTemplates.railMovePage", "Reorder pages")} icon={ArrowUpDownIcon} onClick={() => onOpenOrganizer("move")} />
           <ToolButton label={t("pdfTemplates.railDeletePages", "Delete pages")} icon={Trash2Icon} onClick={() => onOpenOrganizer("delete")} danger />
@@ -337,9 +370,41 @@ export function PdfEditorToolbar({
                       icon={PlusIcon}
                       onClick={() => onScaleText(1.15)}
                     />
+                    {/* Typeface. A native select rather than a styled menu:
+                        it is four options that change rarely, and it stays
+                        the same height as the buttons beside it, which the
+                        toolbar's fixed row depends on. */}
+                    <select
+                      data-pdf-font-select
+                      defaultValue="document"
+                      onChange={(e) => {
+                        onSetFont(e.target.value as "document" | "regular" | "bold" | "hebrew")
+                        // Reset, because this is an ACTION rather than a
+                        // setting: the control cannot know what the line is
+                        // drawn in after an undo, and a stale value shown as
+                        // if it were the truth is worse than none.
+                        e.target.value = "document"
+                      }}
+                      aria-label={t("pdfTemplates.engineFont", "Typeface")}
+                      title={t("pdfTemplates.engineFont", "Typeface")}
+                      className="h-8 shrink-0 rounded-md border bg-background px-1 text-xs"
+                    >
+                      <option value="document">{t("pdfTemplates.engineFontDocument", "Page's own font")}</option>
+                      <option value="regular">{t("pdfTemplates.engineFontRegular", "Standard")}</option>
+                      <option value="bold">{t("pdfTemplates.engineFontBold", "Standard bold")}</option>
+                      <option value="hebrew">{t("pdfTemplates.engineFontHebrew", "Hebrew")}</option>
+                    </select>
                     <ToolButton label={t("pdfTemplates.engineAlignLeft", "Align left")} icon={AlignLeftIcon} onClick={() => onAlignText("left")} />
                     <ToolButton label={t("pdfTemplates.engineAlignCenter", "Centre")} icon={AlignCenterIcon} onClick={() => onAlignText("center")} />
                     <ToolButton label={t("pdfTemplates.engineAlignRight", "Align right")} icon={AlignRightIcon} onClick={() => onAlignText("right")} />
+                    {/* The same four a picture has. Turning text moves the
+                        glyphs; it does not re-wrap the words down the page,
+                        which is what "rotate" means for something already
+                        drawn. */}
+                    <ToolButton label={t("pdfTemplates.engineRotateLeft", "Rotate left")} icon={RotateCcwIcon} onClick={() => onTransformText("rotate-left")} />
+                    <ToolButton label={t("pdfTemplates.engineRotateRight", "Rotate right")} icon={RotateCwIcon} onClick={() => onTransformText("rotate-right")} />
+                    <ToolButton label={t("pdfTemplates.engineFlipH", "Flip horizontally")} icon={FlipHorizontalIcon} onClick={() => onTransformText("flip-horizontal")} />
+                    <ToolButton label={t("pdfTemplates.engineFlipV", "Flip vertically")} icon={FlipVerticalIcon} onClick={() => onTransformText("flip-vertical")} />
                     <label
                       className="flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-md border"
                       title={t("pdfTemplates.engineTextColor", "Text colour")}
@@ -372,6 +437,12 @@ export function PdfEditorToolbar({
                     </Button>
                     {/* Turning and flipping are matrix changes, so the picture is
                         never re-encoded and loses no quality. */}
+                    <ToolButton
+                      label={t("pdfTemplates.engineCrop", "Crop")}
+                      icon={CropIcon}
+                      onClick={onToggleCrop}
+                      active={cropping}
+                    />
                     <ToolButton label={t("pdfTemplates.engineRotateLeft", "Rotate left")} icon={RotateCcwIcon} onClick={() => onTransformImage("rotate-left")} />
                     <ToolButton label={t("pdfTemplates.engineRotateRight", "Rotate right")} icon={RotateCwIcon} onClick={() => onTransformImage("rotate-right")} />
                     <ToolButton label={t("pdfTemplates.engineFlipH", "Flip horizontally")} icon={FlipHorizontalIcon} onClick={() => onTransformImage("flip-horizontal")} />
@@ -394,6 +465,21 @@ export function PdfEditorToolbar({
                     <ToolButton label={t("pdfTemplates.engineFlipV", "Flip vertically")} icon={FlipVerticalIcon} onClick={() => onTransformVector("flip-vertical")} />
                   </>
                 )}
+                {/* Both apply to text, pictures and artwork alike, so they
+                    sit outside the per-kind blocks above. */}
+                <ToolButton
+                  label={t("pdfTemplates.engineDuplicate", "Duplicate")}
+                  icon={CopyPlusIcon}
+                  onClick={onDuplicate}
+                />
+                <ToolButton
+                  label={selectionLocked
+                    ? t("pdfTemplates.engineUnlock", "Unlock")
+                    : t("pdfTemplates.engineLock", "Lock in place")}
+                  icon={selectionLocked ? LockIcon : LockOpenIcon}
+                  onClick={onToggleLock}
+                  active={selectionLocked}
+                />
                 {/* No delete here on purpose. A "Delete" sitting a few pixels
                     from "Delete pages" is a genuinely dangerous confusion — one
                     removes a caption, the other removes whole pages. Deleting a

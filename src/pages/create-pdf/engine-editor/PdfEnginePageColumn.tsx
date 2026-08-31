@@ -2,6 +2,7 @@ import type { EngineTextLine } from "@/lib/pdf-engine"
 import type { PdfContentMode } from "../pdfEditorTypes"
 import { PdfEnginePage } from "./PdfEnginePage"
 import type { UsePdfEngineDocumentResult } from "./usePdfEngineDocument"
+import type { LockSet } from "./locks"
 import type { CrossPageDragState } from "./useCrossPageDrag"
 
 export type SlotSelection =
@@ -28,7 +29,7 @@ interface PdfEnginePageColumnProps {
   columnRef?: React.Ref<HTMLDivElement>
   contentMode: PdfContentMode
   selection: SlotSelection
-  onSelect: (selection: SlotSelection) => void
+  onSelect: (selection: SlotSelection, additive: boolean) => void
   drag: CrossPageDragState | null
   onMoveStart: React.ComponentProps<typeof PdfEnginePage>["onMoveStart"]
   originPatch: { pageIndex: number; kind: "text" | "image"; index: number; url: string } | null
@@ -39,6 +40,16 @@ interface PdfEnginePageColumnProps {
   onDropOnImage: (pageIndex: number, imageIndex: number, file: File) => void
   onDropOnPage: (pageIndex: number, file: File, xPts: number, yFromTopPts: number) => void
   onDropAssetOnPage: (pageIndex: number, assetId: string, xPts: number, yFromTopPts: number) => void
+  locks: LockSet
+  cropping: { pageIndex: number; imageIndex: number } | null
+  onCropCancel: () => void
+  onCropCommit: (
+    pageIndex: number, imageIndex: number,
+    region: { left: number; bottom: number; right: number; top: number },
+  ) => void
+  /** Slots being moved ALONGSIDE the selected one — a temporary group made
+   * with Shift-click. They are drawn as selected because they are. */
+  alsoSelected: { pageIndex: number; kind: "text" | "image" | "vector"; index: number }[]
   onTransformImage: (
     pageIndex: number, imageIndex: number,
     rect: { x: number; y: number; width: number; height: number },
@@ -69,7 +80,8 @@ export function PdfEnginePageColumn({
   doc, displayWidth, gutter, columnRef, contentMode, selection, onSelect,
   drag, onMoveStart, originPatch, imagePreview,
   onEditLine, onReplaceImage, onReplaceVector,
-  onDropOnImage, onDropOnPage, onDropAssetOnPage,
+  onDropOnImage, onDropOnPage, onDropAssetOnPage, locks, alsoSelected,
+  cropping, onCropCancel, onCropCommit,
   onTransformImage, onTransformVector, onResizeText,
 }: PdfEnginePageColumnProps) {
   return (
@@ -108,6 +120,11 @@ export function PdfEnginePageColumn({
             onDropOnImage={onDropOnImage}
             onDropOnPage={onDropOnPage}
             onDropAssetOnPage={onDropAssetOnPage}
+            locks={locks}
+            alsoSelected={alsoSelected}
+            cropping={cropping}
+            onCropCancel={onCropCancel}
+            onCropCommit={onCropCommit}
             onTransformImage={onTransformImage}
             onTransformVector={onTransformVector}
             onResizeText={onResizeText}

@@ -77,8 +77,15 @@ export interface EditTextOptions {
   lineHeightRatio?: number
   minFontScale?: number
   align?: TextAlign
-  /** Which bundled fallback face to draw with. */
+  /** Which bundled fallback face to draw with. Naming one turns OFF the
+   * default of keeping the page's own typeface. */
   font?: "regular" | "bold" | "hebrew"
+  /**
+   * Forces the bundled face even when the page's own font could draw the
+   * text — for someone who deliberately wants a different typeface rather
+   * than the document's.
+   */
+  useBundledFont?: boolean
 }
 
 export interface TextOverlayRequest {
@@ -129,7 +136,19 @@ export interface EngineMethods {
   listTextLines: { params: { docId: string; pageIndex: number }; result: { lines: EngineTextLine[] } }
   editTextLine: {
     params: { docId: string; pageIndex: number; lineIndex: number; newText: string; options?: EditTextOptions }
-    result: { ok: boolean; lines: string[]; fontSize: number; shrunk: boolean; overflows: boolean }
+    result: {
+      ok: boolean; lines: string[]; fontSize: number
+      shrunk: boolean; overflows: boolean
+      /** Whether the page's own typeface was kept. False means a bundled
+       * face was used and `fellBackBecause` says why — usually that the
+       * embedded font is a subset with no glyph for a character typed. */
+      usedDocumentFont?: boolean
+      fellBackBecause?: string | null
+      /** Characters neither the page's font nor the bundled fallback can
+       * draw. They will not appear; naming them is the difference between a
+       * message and a mystery. */
+      unsupportedCharacters?: string | null
+    }
   }
   listImages: { params: { docId: string; pageIndex: number }; result: { images: EngineImage[] } }
   /**
@@ -174,6 +193,15 @@ export interface EngineMethods {
       rect: { x: number; y: number; width: number; height: number }
     }
     result: { ok: boolean; newIndex: number; changedRect?: PdfRect }
+  }
+  /** Turn or mirror a line of text, exactly as a picture or artwork turns.
+   * Moves the glyphs; it does not re-lay the text out sideways. */
+  transformTextLine: {
+    params: {
+      docId: string; pageIndex: number; lineIndex: number
+      op: "rotate-left" | "rotate-right" | "flip-horizontal" | "flip-vertical"
+    }
+    result: { ok: boolean; newIndex: number }
   }
   transformVectorGroup: {
     params: {
@@ -299,6 +327,61 @@ export interface EngineMethods {
       undoDepth: number
       redoDepth: number
     }
+  }
+  /**
+   * Trim a picture to a region of itself.
+   *
+   * The region is in fractions of the picture, measured from its BOTTOM-left
+   * — the same convention as the rest of PDF. The kept part stays exactly
+   * where it was on the page.
+   */
+  cropImage: {
+    params: {
+      docId: string; pageIndex: number; imageIndex: number
+      region: { left: number; bottom: number; right: number; top: number }
+    }
+    result: { ok: boolean; width: number; height: number }
+  }
+  /**
+   * Shift several slots by the same amount, in one operation.
+   *
+   * One call rather than several, because a slot's index is its POSITION:
+   * moving the first of a group renumbers the rest, so a second call using
+   * the numbers read before the first would move the wrong things. Every
+   * object here is resolved to a handle before anything is touched.
+   */
+  translateSlots: {
+    params: {
+      docId: string; pageIndex: number
+      slots: { kind: "text" | "image" | "vector"; index: number }[]
+      dxPts: number; dyPts: number
+    }
+    result: { ok: boolean; moved: number }
+  }
+  /**
+   * Copy one slot, offset slightly from the original.
+   *
+   * `toPageIndex` lets the copy land on a different page, which is what makes
+   * paste-onto-another-page the same operation as duplicate.
+   */
+  duplicateSlot: {
+    params: {
+      docId: string; pageIndex: number
+      kind: "text" | "image" | "vector"; index: number
+      toPageIndex?: number
+      dxPts?: number; dyPts?: number
+    }
+    result: { ok: boolean; newIndex: number }
+  }
+  /**
+   * Insert a blank page.
+   *
+   * Separate from applyPagePlan, which rearranges pages that already exist by
+   * source index and so has nothing to point at for a page that never existed.
+   */
+  addBlankPage: {
+    params: { docId: string; atIndex: number; widthPts: number; heightPts: number }
+    result: { pages: EnginePage[] }
   }
   /** Everything on a page in painting order, BOTTOM first — the only notion
    * of "layer" a PDF has. */

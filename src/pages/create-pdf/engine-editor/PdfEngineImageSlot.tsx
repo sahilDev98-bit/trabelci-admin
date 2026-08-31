@@ -11,12 +11,25 @@ interface PdfEngineImageSlotProps {
   scale: number
   pageHeightPts: number
   selected: boolean
+  /** Locked slots can be selected — you have to be able to reach one to
+   * unlock it — but not moved or resized, and they show no handles. */
+  /** Its index within its own kind, published on the element so a group
+   * drag can find the other members' boxes — their on-screen positions
+   * exist nowhere but the DOM. */
+  slotIndex: number
+  locked?: boolean
+  /** Alignment: nudges the live rect and draws the guides. Supplied by the
+   * page, which is the only thing that knows what else is on it. */
+  snap?: (rect: BoxRectPx, kind: string, altKey: boolean) => BoxRectPx
+  onGestureEnd?: () => void
   dropTarget: boolean
   /** True while THIS image is the one being carried across the document. */
   dragging: boolean
   /** The page rendered without this slot, laid over it while in flight. */
   originPatchUrl: string | null
-  onSelect: () => void
+  /** `additive` is true when Shift was held: the caller adds this slot to
+   * the current selection rather than replacing it. */
+  onSelect: (additive: boolean) => void
   onReplace: () => void
   /** Fired once on gesture release, in PDF points (y measured from the
    * bottom, as PDF stores it). */
@@ -58,11 +71,13 @@ const HANDLES: { key: ResizeHandle; className: string; cursor: string }[] = [
  */
 export function PdfEngineImageSlot({
   rect, pageWidthPx, pageHeightPx, scale, pageHeightPts,
-  selected, dropTarget, dragging, originPatchUrl, onSelect, onReplace, onTransform, onMoveStart,
+  selected, locked, slotIndex, dropTarget, dragging, originPatchUrl, onSelect, onReplace, onTransform, onMoveStart, snap, onGestureEnd,
 }: PdfEngineImageSlotProps) {
   const { t } = useTranslation()
 
   const transform = useBoxTransform({
+    snap,
+    onGestureEnd,
     rect,
     pageWidth: pageWidthPx,
     pageHeight: pageHeightPx,
@@ -92,7 +107,7 @@ export function PdfEngineImageSlot({
             ? "ring-2 ring-sky-500"
             : "ring-1 ring-amber-500/70 hover:ring-2 hover:ring-amber-600"
       } ${selected ? "cursor-move" : "cursor-pointer"}`}
-      data-pdf-image-slot
+      data-pdf-image-slot={slotIndex}
       // The area around it is pinned to physical left-to-right for its
       // scroll maths; "auto" lets this slot's tooltip take its direction
       // from the words in it, so a Hebrew hint still reads as Hebrew.
@@ -104,11 +119,17 @@ export function PdfEngineImageSlot({
         // the same press would select this slot and then immediately
         // deselect it again as the event bubbled.
         e.stopPropagation()
-        if (!selected) { onSelect(); return }
+        // Shift always reports, even on an already-selected slot, so a
+        // shift-click can take one back OUT of a group.
+        if (e.shiftKey) { onSelect(true); return }
+        if (!selected) { onSelect(false); return }
+        // A locked slot still selects, so it can be unlocked, but the press
+        // never becomes a move.
+        if (locked) return
         onMoveStart(e, e.currentTarget.getBoundingClientRect())
       }}
-      onDoubleClick={(e) => { e.stopPropagation(); onReplace() }}
-      title={t("pdfTemplates.engineImageHint", "Double-click to replace. Drag to move it anywhere in the document, corners to resize.")}
+      onDoubleClick={(e) => { e.stopPropagation(); if (!locked) onReplace() }}
+      title={`${t("pdfTemplates.engineImageHint", "Double-click to replace. Drag to move it anywhere in the document, corners to resize.")} ${t("pdfTemplates.engineGroupHint", "Shift-click to move several things together.")} ${t("pdfTemplates.engineSnapHint", "Hold Alt while dragging to ignore alignment.")}`}
     >
       {/* Nothing floats over the artwork: no toolbar, and no delete button
           either. On a dense catalogue page the boxes sit shoulder to
@@ -131,7 +152,21 @@ export function PdfEngineImageSlot({
         />
       )}
 
-      {selected && HANDLES.map((handle) => (
+      {locked && (
+        // Shown whether or not it is selected: the point of a lock is that
+        // you can see at a glance why something will not move.
+        <span
+          data-pdf-slot-locked
+          aria-hidden
+          className="pointer-events-none absolute -top-2 -right-2 flex size-4 items-center justify-center rounded-full bg-slate-700 text-white shadow"
+        >
+          <svg viewBox="0 0 24 24" className="size-2.5" fill="currentColor">
+            <path d="M12 1a5 5 0 0 0-5 5v3H6a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-9a2 2 0 0 0-2-2h-1V6a5 5 0 0 0-5-5zm-3 5a3 3 0 1 1 6 0v3H9V6z"/>
+          </svg>
+        </span>
+      )}
+
+      {selected && !locked && HANDLES.map((handle) => (
         <span
           key={handle.key}
           role="presentation"

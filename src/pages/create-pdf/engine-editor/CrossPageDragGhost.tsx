@@ -20,6 +20,20 @@ export function CrossPageDragGhost({ drag }: { drag: CrossPageDragState | null }
 
   return (
     <>
+      {/* The rest of the group, drawn as plain outlines.
+          Outlines rather than full previews on purpose: rendering each
+          member's own pixels means one engine render per member per frame,
+          and what the eye needs here is only "these are coming too, in this
+          arrangement". The box being carried keeps its real preview. */}
+      {drag.companions.map((c, i) => (
+        <div
+          key={i}
+          data-engine-drag-companion
+          aria-hidden
+          className="pointer-events-none fixed z-50 rounded-[2px] bg-blue-500/15 ring-2 ring-blue-600/60"
+          style={{ left: c.left, top: c.top, width: c.width, height: c.height }}
+        />
+      ))}
       <div
         data-engine-drag-ghost
         // pointer-events off: the ghost sits directly under the cursor, so

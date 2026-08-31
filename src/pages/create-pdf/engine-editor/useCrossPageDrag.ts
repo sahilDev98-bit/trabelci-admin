@@ -95,6 +95,41 @@ export interface CrossPageDragState {
    * preview even though only the photo would move. The preview has to show
    * exactly what the drop will do. */
   preview: string | null
+  /**
+   * The OTHER members of a group, travelling alongside the one under the
+   * pointer.
+   *
+   * Held as live viewport rectangles, recomputed each frame from the same
+   * delta as the primary, so the whole group is visible in flight. Before
+   * this only the box actually grabbed had a ghost, and the rest sat still
+   * until the drop — which read as "the others are not coming".
+   */
+  companions: GhostRect[]
+  /** Where each companion sits relative to the box being dragged, fixed when
+   * the gesture began. Offsets rather than positions: the group keeps its
+   * shape, so one delta moves all of them and nothing is re-measured. */
+  companionOffsets: { dx: number; dy: number; width: number; height: number }[]
+}
+
+/**
+ * The rectangle enclosing the dragged box and everything travelling with it.
+ *
+ * What a group aligns by. Snapping the grabbed box alone would leave the rest
+ * of the group off the line it just snapped to.
+ */
+function groupBounds(
+  ghost: GhostRect,
+  companions: { dx: number; dy: number; width: number; height: number }[],
+): GhostRect {
+  let left = ghost.left, top = ghost.top
+  let right = ghost.left + ghost.width, bottom = ghost.top + ghost.height
+  for (const c of companions) {
+    left = Math.min(left, ghost.left + c.dx)
+    top = Math.min(top, ghost.top + c.dy)
+    right = Math.max(right, ghost.left + c.dx + c.width)
+    bottom = Math.max(bottom, ghost.top + c.dy + c.height)
+  }
+  return { left, top, width: right - left, height: bottom - top }
 }
 
 /** How close to the viewport edge the pointer must get before the document
@@ -202,10 +237,33 @@ export interface UseCrossPageDragResult {
   drag: CrossPageDragState | null
   /** Begin dragging a slot. `rect` is its CURRENT viewport rect, which is
    * what keeps the ghost exactly under the grab point. */
-  start: (e: React.PointerEvent, item: CrossPageDragItem, rect: DOMRect) => void
+  /** `companions` are the other members of a group, as their current
+   * viewport rectangles, so the whole group can be seen in flight and can
+   * align as one. Omitted for an ordinary single-slot drag. */
+  start: (
+    e: React.PointerEvent, item: CrossPageDragItem, rect: DOMRect,
+    companions?: { left: number; top: number; width: number; height: number }[],
+  ) => void
 }
 
-export function useCrossPageDrag(onDrop: (drop: CrossPageDrop) => void): UseCrossPageDragResult {
+/**
+ * Nudges the dragged ghost into alignment with the page under it.
+ *
+ * Takes and returns VIEWPORT coordinates, because that is what the ghost is
+ * positioned in; converting to the page's own space and back is the caller's
+ * job, since only it knows what is on that page. Returning null means
+ * "nothing was near" and leaves the ghost alone.
+ */
+export type SnapGhost = (
+  ghost: { left: number; top: number; width: number; height: number },
+  targetPageIndex: number,
+  altKey: boolean,
+) => { left: number; top: number } | null
+
+export function useCrossPageDrag(
+  onDrop: (drop: CrossPageDrop) => void,
+  snapGhost?: SnapGhost,
+): UseCrossPageDragResult {
   const [drag, setDrag] = useState<CrossPageDragState | null>(null)
   /** Mirrors `drag` so the gesture's end can read the final position
    * without doing it inside a state updater — an updater must be pure, and
@@ -216,6 +274,20 @@ export function useCrossPageDrag(onDrop: (drop: CrossPageDrop) => void): UseCros
    * corner to it. */
   const grabOffset = useRef({ x: 0, y: 0 })
   const pointer = useRef({ x: 0, y: 0 })
+  /** Whether Alt was held on the last pointer event — read inside the
+   * animation frame that repositions the ghost, which has no event of its
+   * own. */
+  const altKey = useRef(false)
+  /**
+   * Nudges the ghost into alignment with what is on the page under it, and
+   * draws the guide lines. Held in a ref so changing it never re-attaches
+   * the pointer listeners mid-drag, which would drop events.
+   */
+  const snapGhostRef = useRef<SnapGhost | null>(null)
+  // Kept current in an effect rather than assigned while rendering: a ref
+  // written during render is read back before React has committed, and the
+  // same rule the zoom level follows in the workspace.
+  useEffect(() => { snapGhostRef.current = snapGhost ?? null }, [snapGhost])
   /** Where the press started, so a release can say how far it travelled. */
   const origin = useRef({ x: 0, y: 0 })
   const scroller = useRef<Element | null>(null)
@@ -240,15 +312,43 @@ export function useCrossPageDrag(onDrop: (drop: CrossPageDrop) => void): UseCros
     const current = dragRef.current
     if (!current) return
     const { x, y } = pointer.current
+    const targetPageIndex = pageAt(x, y)
+    const ghost = {
+      left: x - grabOffset.current.x,
+      top: y - grabOffset.current.y,
+      width: current.ghost.width,
+      height: current.ghost.height,
+    }
+
+    // Alignment happens HERE, on the ghost, and this is the only place it
+    // can. Moving a slot does not go through useBoxTransform — that hook
+    // handles resizing — so snapping wired into it never fired while
+    // something was being dragged, which is the common case and the one
+    // anybody would notice. The ghost is what the eye follows and what the
+    // drop position is taken from, so snapping it snaps both.
+    //
+    // With a group, the whole group's outer rectangle is what aligns, not the
+    // one box under the pointer. Aligning only that one would leave the
+    // others hanging off the guide line, which is the opposite of the point.
+    const bounds = groupBounds(ghost, current.companionOffsets)
+    const snapped = snapGhostRef.current && targetPageIndex !== null
+      ? snapGhostRef.current(bounds, targetPageIndex, altKey.current)
+      : null
+    if (snapped) {
+      // The delta the snap applied to the group's outer box, applied to the
+      // box actually being carried.
+      ghost.left += snapped.left - bounds.left
+      ghost.top += snapped.top - bounds.top
+    }
+
     apply({
       ...current,
-      ghost: {
-        left: x - grabOffset.current.x,
-        top: y - grabOffset.current.y,
-        width: current.ghost.width,
-        height: current.ghost.height,
-      },
-      targetPageIndex: pageAt(x, y),
+      ghost,
+      targetPageIndex,
+      companions: current.companionOffsets.map((c) => ({
+        left: ghost.left + c.dx, top: ghost.top + c.dy,
+        width: c.width, height: c.height,
+      })),
     })
   }, [apply])
 
@@ -313,12 +413,16 @@ export function useCrossPageDrag(onDrop: (drop: CrossPageDrop) => void): UseCros
 
     const onMove = (e: PointerEvent) => {
       pointer.current = { x: e.clientX, y: e.clientY }
+      // Alt suspends alignment, exactly as it does for a resize.
+      altKey.current = e.altKey
       reposition()
       runAutoScroll()
     }
 
     const onUp = () => {
       stopAutoScroll()
+      // The guides belong to the gesture, so they go when it does.
+      snapGhostRef.current?.({ left: 0, top: 0, width: 0, height: 0 }, -1, true)
       const current = dragRef.current
       apply(null)
       if (!current || current.targetPageIndex === null) return
@@ -367,17 +471,30 @@ export function useCrossPageDrag(onDrop: (drop: CrossPageDrop) => void): UseCros
     }
   }, [active, reposition, runAutoScroll, stopAutoScroll, apply])
 
-  const start = useCallback((e: React.PointerEvent, item: CrossPageDragItem, rect: DOMRect) => {
+  const start = useCallback((
+    e: React.PointerEvent, item: CrossPageDragItem, rect: DOMRect,
+    companions?: { left: number; top: number; width: number; height: number }[],
+  ) => {
     e.preventDefault()
     e.stopPropagation()
     warnOnDuplicatePages()
     pointer.current = { x: e.clientX, y: e.clientY }
     origin.current = { x: e.clientX, y: e.clientY }
     grabOffset.current = { x: e.clientX - rect.left, y: e.clientY - rect.top }
+    // Copied into offsets immediately rather than held: the caller's array
+    // describes where things were at this instant, and keeping a reference to
+    // it would tie the gesture to something it does not own.
+    const offsets = (companions ?? []).map((c) => ({
+      dx: c.left - rect.left, dy: c.top - rect.top, width: c.width, height: c.height,
+    }))
     scroller.current = scrollParentOf(e.currentTarget as Element)
     apply({
       item,
       ghost: { left: rect.left, top: rect.top, width: rect.width, height: rect.height },
+      companionOffsets: offsets,
+      companions: offsets.map((c) => ({
+        left: rect.left + c.dx, top: rect.top + c.dy, width: c.width, height: c.height,
+      })),
       targetPageIndex: item.pageIndex,
       // Prepared when the slot was selected, so it is ready by the time a
       // drag begins. Text carries no picture at all — its words are drawn

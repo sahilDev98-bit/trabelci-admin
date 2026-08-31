@@ -153,6 +153,11 @@ async function runDirection(direction: "ltr" | "rtl"): Promise<RtlCase> {
         onEditLine: () => {}, onReplaceImage: () => {}, onReplaceVector: () => {},
         onDropOnImage: () => {}, onDropOnPage: () => {}, onTransformImage: () => {},
         onDropAssetOnPage: () => {},
+        locks: new Set<string>(),
+    alsoSelected: [],
+    cropping: null,
+    onCropCancel: () => {},
+    onCropCommit: () => {},
         onResizeText: () => {},
       } as never,
       toolbar: {

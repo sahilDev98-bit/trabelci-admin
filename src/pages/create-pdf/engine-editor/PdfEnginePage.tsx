@@ -10,6 +10,13 @@ import { PdfEngineImageSlot } from "./PdfEngineImageSlot"
 import { PdfEngineTextSlot } from "./PdfEngineTextSlot"
 import { PdfEngineVectorSlot } from "./PdfEngineVectorSlot"
 import { assetIdFromDrag, dragCarriesAsset } from "./assetDrag"
+import { isLocked, lockKeyFor, type LockSet } from "./locks"
+import {
+  buildSnapTargets, edgesForHandle, MOVE_EDGES, paintGuides, snapRect,
+  type SnapTarget,
+} from "./snapping"
+import type { BoxRectPx } from "./useBoxTransform"
+import { PdfCropOverlay } from "./PdfCropOverlay"
 
 interface PdfEnginePageProps {
   page: EnginePage
@@ -63,6 +70,20 @@ interface PdfEnginePageProps {
    * There is no on-IMAGE counterpart on purpose: an asset always adds, never
    * replaces. See the image slot's drop handler for why. */
   onDropAssetOnPage: (pageIndex: number, assetId: string, xPts: number, yFromTopPts: number) => void
+  /** Slots the user has locked against being moved. Keyed by position — see
+   * locks.ts for why an index would not survive an edit. */
+  locks: LockSet
+  /** The picture being trimmed, if any. While one is open the overlay covers
+   * it so the ordinary drag and resize cannot fire. */
+  cropping: { pageIndex: number; imageIndex: number } | null
+  onCropCancel: () => void
+  onCropCommit: (
+    pageIndex: number, imageIndex: number,
+    region: { left: number; bottom: number; right: number; top: number },
+  ) => void
+  /** Slots being moved ALONGSIDE the selected one — a temporary group made
+   * with Shift-click. They are drawn as selected because they are. */
+  alsoSelected: { pageIndex: number; kind: "text" | "image" | "vector"; index: number }[]
   /** Committed once a move/resize gesture ends, in PDF points. */
   onTransformImage: (
     pageIndex: number, imageIndex: number,
@@ -79,7 +100,13 @@ interface PdfEnginePageProps {
    * state, two pages could each show handles at once, and a keyboard
    * delete would have no way to tell which one was meant. */
   selection: { pageIndex: number; kind: "text" | "image" | "vector"; index: number } | null
-  onSelect: (selection: { pageIndex: number; kind: "text" | "image" | "vector"; index: number } | null) => void
+  /** `additive` is true when Shift was held — the caller adds to the current
+   * selection rather than replacing it, which is how several things get
+   * moved together. */
+  onSelect: (
+    selection: { pageIndex: number; kind: "text" | "image" | "vector"; index: number } | null,
+    additive: boolean,
+  ) => void
   /** Starts a document-wide move of a slot on this page. */
   onMoveStart: (
     e: React.PointerEvent,
@@ -169,11 +196,14 @@ export function PdfEnginePage({
   page, pageIndex, displayWidth, text, images, vectors, contentMode, revision,
   renderPage, renderPageRegion, lastChange, loadPageText, loadPageImages, loadPageVectors,
   onSelectLine, onReplaceImage, onReplaceVector,
-  onDropOnImage, onDropOnPage, onDropAssetOnPage,
+  onDropOnImage, onDropOnPage, onDropAssetOnPage, locks, alsoSelected,
+  cropping, onCropCancel, onCropCommit,
   onTransformImage, onTransformVector, onResizeText,
   selection, onSelect, onMoveStart, draggingSlot, dropTargetPage, originPatchUrl, imagePreviewUrl,
 }: PdfEnginePageProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  /** Where the alignment guides are drawn, by hand, during a gesture. */
+  const guideLayerRef = useRef<HTMLDivElement>(null)
   /**
    * What is currently ON the canvas: which revision, at which raster scale.
    *
@@ -191,10 +221,6 @@ export function PdfEnginePage({
   const [dropSlot, setDropSlot] = useState<number | null>(null)
   /** True while a file hovers the page but not over any slot. */
   const [dropPage, setDropPage] = useState(false)
-  const selectedImage = selection?.pageIndex === pageIndex && selection.kind === "image" ? selection.index : null
-  const selectedVector = selection?.pageIndex === pageIndex && selection.kind === "vector" ? selection.index : null
-  const selectedText = selection?.pageIndex === pageIndex && selection.kind === "text" ? selection.index : null
-
   const displayHeight = page.heightPts > 0 ? (displayWidth * page.heightPts) / page.widthPts : 0
   // PDF points -> CSS pixels, for placing hotspot boxes over the canvas.
   const scale = page.widthPts > 0 ? displayWidth / page.widthPts : 1
@@ -362,6 +388,62 @@ export function PdfEnginePage({
     height: Math.max(4, (bbox.top - bbox.bottom) * scale),
   })
 
+  /**
+   * Where everything on this page currently sits, in CSS pixels.
+   *
+   * Rebuilt on each render rather than memoised: it depends on every slot's
+   * box and on the zoom, so a stale copy would snap to where things used to
+   * be — which is worse than not snapping at all, because it looks
+   * deliberate.
+   */
+  const snapBoxesFor = (exclude: { kind: "text" | "image" | "vector"; index: number }): SnapTarget[] => {
+    const boxes: SnapTarget[] = []
+    const add = (bbox: { left: number; bottom: number; right: number; top: number } | null) => {
+      if (!bbox) return
+      const r = boxStyle(bbox)
+      boxes.push({ left: r.left, top: r.top, right: r.left + r.width, bottom: r.top + r.height })
+    }
+    text?.lines.forEach((line, i) => {
+      if (exclude.kind === "text" && exclude.index === i) return
+      add(line.bbox)
+    })
+    images?.images.forEach((image, i) => {
+      if (exclude.kind === "image" && exclude.index === i) return
+      add(image.bbox)
+    })
+    vectors?.groups.forEach((group, i) => {
+      if (exclude.kind === "vector" && exclude.index === i) return
+      add(group.bbox)
+    })
+    return boxes
+  }
+
+  /**
+   * The snap handler handed to each slot's gesture.
+   *
+   * Alt suspends it — you sometimes need a thing three pixels off a line on
+   * purpose, and a snap you cannot escape is worse than no snap.
+   */
+  const snapFor = (exclude: { kind: "text" | "image" | "vector"; index: number }) =>
+    (rect: BoxRectPx, kind: string, altKey: boolean): BoxRectPx => {
+      if (altKey) { paintGuides(guideLayerRef.current, []); return rect }
+      const targets = buildSnapTargets(displayWidth, displayHeight, snapBoxesFor(exclude))
+      const edges = kind === "move"
+        ? MOVE_EDGES
+        : edgesForHandle(kind as "nw" | "ne" | "sw" | "se")
+      const result = snapRect(rect, targets, edges)
+      paintGuides(guideLayerRef.current, result.guides)
+      return result.rect
+    }
+
+  const clearGuides = () => paintGuides(guideLayerRef.current, [])
+
+  /** True for the primary selection and for anything Shift-clicked into the
+   * group with it — both are being moved, so both are drawn as selected. */
+  const inSelection = (kind: "text" | "image" | "vector", index: number) =>
+    (selection?.kind === kind && selection.index === index && selection.pageIndex === pageIndex)
+    || alsoSelected.some((s) => s.kind === kind && s.index === index && s.pageIndex === pageIndex)
+
   /** Page-level drop = add a NEW image exactly where it landed. Slots stop
    * propagation, so anything reaching here is genuinely bare page. */
   const handlePageDrop = (e: React.DragEvent<HTMLDivElement>) => {
@@ -414,7 +496,7 @@ export function PdfEnginePage({
       }}
       onDrop={handlePageDrop}
       onPointerDown={() => {
-        onSelect(null)
+        onSelect(null, false)
         // Clicking bare paper on a page that never got its contents is the
         // one moment we know someone is trying to use it, so it is the right
         // moment to ask again. Everything is normally loaded the instant a
@@ -431,6 +513,15 @@ export function PdfEnginePage({
         ref={canvasRef}
         className="block h-full w-full"
         style={{ width: displayWidth, height: displayHeight }}
+      />
+
+      {/* Alignment guides, drawn straight into this element by the gesture
+          rather than rendered from state — see snapping.ts for why. */}
+      <div
+        ref={guideLayerRef}
+        data-pdf-guide-layer
+        aria-hidden
+        className="pointer-events-none absolute inset-0 z-20"
       />
 
       {painting && (
@@ -491,13 +582,24 @@ export function PdfEnginePage({
               if (file) onDropOnImage(pageIndex, image.imageIndex, file)
             }}
           >
+            {cropping?.pageIndex === pageIndex && cropping.imageIndex === image.imageIndex && (
+              <PdfCropOverlay
+                rect={boxStyle(image.bbox)}
+                onCancel={onCropCancel}
+                onCommit={(region) => onCropCommit(pageIndex, image.imageIndex, region)}
+              />
+            )}
             <PdfEngineImageSlot
+              slotIndex={image.imageIndex}
+              snap={snapFor({ kind: "image", index: image.imageIndex })}
+              onGestureEnd={clearGuides}
+              locked={isLocked(locks, lockKeyFor(pageIndex, "image", image.bbox))}
               rect={boxStyle(image.bbox)}
               pageWidthPx={displayWidth}
               pageHeightPx={displayHeight}
               scale={scale}
               pageHeightPts={page.heightPts}
-              selected={selectedImage === image.imageIndex}
+              selected={inSelection("image", image.imageIndex)}
               dropTarget={dropSlot === image.imageIndex}
               dragging={
                 draggingSlot?.kind === "image"
@@ -515,7 +617,7 @@ export function PdfEnginePage({
                 },
                 r,
               )}
-              onSelect={() => onSelect({ pageIndex, kind: "image", index: image.imageIndex })}
+              onSelect={(additive) => onSelect({ pageIndex, kind: "image", index: image.imageIndex }, additive)}
               onReplace={() => onReplaceImage(pageIndex, image.imageIndex)}
               onTransform={(rect) => onTransformImage(pageIndex, image.imageIndex, rect)}
             />
@@ -529,13 +631,17 @@ export function PdfEnginePage({
       {vectors?.groups.map((group) => (
         <PdfEngineVectorSlot
           key={`v-${pageIndex}-${group.vectorIndex}`}
+          slotIndex={group.vectorIndex}
+          snap={snapFor({ kind: "vector", index: group.vectorIndex })}
+          onGestureEnd={clearGuides}
+          locked={isLocked(locks, lockKeyFor(pageIndex, "vector", group.bbox))}
           rect={boxStyle(group.bbox)}
           pageWidthPx={displayWidth}
           pageHeightPx={displayHeight}
           scale={scale}
           pageHeightPts={page.heightPts}
-          selected={selectedVector === group.vectorIndex}
-          onSelect={() => onSelect({ pageIndex, kind: "vector", index: group.vectorIndex })}
+          selected={inSelection("vector", group.vectorIndex)}
+          onSelect={(additive) => onSelect({ pageIndex, kind: "vector", index: group.vectorIndex }, additive)}
           onReplace={() => onReplaceVector(pageIndex, group.vectorIndex)}
           onTransform={(rect) => onTransformVector(pageIndex, group.vectorIndex, rect)}
         />
@@ -544,19 +650,22 @@ export function PdfEnginePage({
       {contentMode === "text" && text?.lines.map((line) => (
         <PdfEngineTextSlot
           key={`t-${pageIndex}-${line.lineIndex}`}
+          snap={snapFor({ kind: "text", index: line.lineIndex })}
+          onGestureEnd={clearGuides}
+          locked={isLocked(locks, lockKeyFor(pageIndex, "text", line.bbox))}
           line={line}
           rect={boxStyle(line.bbox)}
           pageWidthPx={displayWidth}
           pageHeightPx={displayHeight}
           scale={scale}
-          selected={selectedText === line.lineIndex}
+          selected={inSelection("text", line.lineIndex)}
           dragging={
             draggingSlot?.kind === "text"
             && draggingSlot.pageIndex === pageIndex
             && draggingSlot.index === line.lineIndex
           }
           originPatchUrl={originPatchUrl}
-          onSelect={() => onSelect({ pageIndex, kind: "text", index: line.lineIndex })}
+          onSelect={(additive) => onSelect({ pageIndex, kind: "text", index: line.lineIndex }, additive)}
           onEdit={() => onSelectLine(pageIndex, line)}
           onMoveStart={(e, r) => onMoveStart(
             e,

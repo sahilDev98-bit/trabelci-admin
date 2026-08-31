@@ -182,6 +182,12 @@ export async function runDragDropSelfTest(): Promise<DragDropTestResult> {
       // Dropping from the asset LIBRARY is a separate gesture with its own
       // payload; what this file measures is dropping a file off the desktop.
       onDropAssetOnPage: () => {},
+      // Nothing is locked in these measurements.
+      locks: new Set<string>(),
+    alsoSelected: [],
+    cropping: null,
+    onCropCancel: () => {},
+    onCropCommit: () => {},
       onTransformImage: (_pageIndex, _imageIndex, rect) => { captured.transforms.push(rect) },
       onTransformVector: () => {},
       selection,
@@ -393,6 +399,11 @@ export async function runCrossPageDragSelfTest(): Promise<CrossPageTestResult> {
                   onDropOnImage: () => {},
             onDropOnPage: () => {},
             onDropAssetOnPage: () => {},
+            locks: new Set<string>(),
+    alsoSelected: [],
+    cropping: null,
+    onCropCancel: () => {},
+    onCropCommit: () => {},
             onTransformImage: () => {},
             onTransformVector: () => {},
             onResizeText: () => {},

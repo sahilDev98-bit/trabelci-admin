@@ -18,7 +18,7 @@ import { getPdfium, getFallbackFont, type FallbackFontKey } from "./loader"
 import {
   openDocument, listTextObjects, rebuildGroupWithWrappedText, renderPageToRGBA,
   type TextObjectInfo,
-  saveDocument, translateTextGroup, removeTextGroup, moveTextGroupToPage, DocumentFonts,
+  saveDocument, translateTextGroup, removeTextGroup, moveTextGroupToPage, DocumentFonts, getFontData
 } from "./text"
 import { groupIntoLines, effectiveFontSize, isRtlText } from "./grouping"
 import { flattenFormsIfLossless } from "./flatten"
@@ -27,15 +27,19 @@ import {
   moveImageObjectToPage, renderImageObject, transformImageObject,
 } from "./image"
 import {
-  listVectorGroups, removeVectorGroup, setVectorGroupRect, transformVectorGroup,
+  listVectorGroups, removeVectorGroup, setVectorGroupRect,
 } from "./vector"
 import { renderRegion, renderRegionWithout } from "./patch"
 import { applyTextStyle, readTextStyle, scaleTextSize, alignTextGroup } from "./textStyle"
 import { listPages, buildDocumentFromPlan } from "./pages"
 import { addTextOverlay, addImageOverlay } from "./overlay"
-import { loadFontMetrics, type FontMetrics } from "./layout"
+import { loadFontMetrics, measureTextWidth, type FontMetrics } from "./layout"
 import { DocumentHistory } from "./history"
 import { listPageLayers, reorderLayer } from "./layers"
+import { clonePageObject, DUPLICATE_OFFSET_PTS } from "./duplicate"
+import { cropImageObject } from "./crop"
+import { transformObjectGroup } from "./objectGroup"
+import { probeFontCoverage } from "./fontProbe"
 import type {
   EngineMethods, EngineMethodName, EngineRequest, EngineResponse,
   EnginePage, EngineTextLine, EngineImage,
@@ -72,8 +76,8 @@ const MUTATING_METHODS = new Set<EngineMethodName>([
   "replaceImage", "removeImage", "setImageRect", "transformImage",
   "moveImageToPage", "addImageOverlay", "addTextOverlay",
   "replaceVectorGroupWithImage", "removeVectorGroup", "reorderLayer",
-  "setVectorGroupRect", "transformVectorGroup",
-  "applyPagePlan",
+  "setVectorGroupRect", "transformVectorGroup", "transformTextLine",
+  "applyPagePlan", "addBlankPage", "duplicateSlot", "translateSlots", "cropImage",
 ])
 
 const docs = new Map<string, OpenDoc>()
@@ -335,6 +339,199 @@ const handlers: {
 
   historyState: ({ docId }) => requireDoc(docId).history.state(),
 
+  /**
+   * Copy a slot, onto this page or another one.
+   *
+   * Three kinds, two strategies. Pictures and artwork are rebuilt from what
+   * can be read off the original (see duplicate.ts). TEXT is redrawn through
+   * the same overlay call every new line goes through, because that call
+   * already owns fonts, wrapping and right-to-left — duplicating text any
+   * other way would be a second implementation of the hardest part of this
+   * editor, and the two would drift.
+   *
+   * The copy is offset from the original rather than placed exactly on top:
+   * a copy you cannot see is indistinguishable from nothing having happened.
+   */
+  cropImage: ({ docId, pageIndex, imageIndex, region }, { pdfium }) => {
+    const doc = requireDoc(docId)
+    return withPage(pdfium, doc.handle, pageIndex, (page) => {
+      const image = listImageObjects(pdfium, page, doc.scratch)[imageIndex]
+      if (!image) throw new Error(`No picture at index ${imageIndex} on page ${pageIndex}`)
+      const r = cropImageObject(pdfium, image.handle, region, doc.scratch)
+      if (!r.ok) throw new Error(r.error ?? "could not trim that picture")
+      pdfium.FPDFPage_GenerateContent(page)
+      return { ok: true, width: r.width ?? 0, height: r.height ?? 0 }
+    })
+  },
+
+  translateSlots: ({ docId, pageIndex, slots, dxPts, dyPts }, { pdfium }) => {
+    const doc = requireDoc(docId)
+    return withPage(pdfium, doc.handle, pageIndex, (page) => {
+      // EVERY handle is resolved before ANY object moves. A slot index is a
+      // position, and moving one object renumbers the others — resolving as
+      // we go would translate whatever had inherited the next number.
+      const handles: number[] = []
+      const textLines = groupIntoLines(
+        listTextObjects(pdfium, page, doc.scratch).filter(isEditableText))
+      const images = listImageObjects(pdfium, page, doc.scratch)
+      const groups = listVectorGroups(pdfium, page, doc.scratch)
+
+      for (const slot of slots) {
+        if (slot.kind === "text") {
+          const line = textLines[slot.index]
+          if (line) handles.push(...line.objects.map((o) => o.handle))
+        } else if (slot.kind === "image") {
+          const image = images[slot.index]
+          if (image) handles.push(image.handle)
+        } else {
+          const group = groups[slot.index]
+          if (group) handles.push(...group.handles)
+        }
+      }
+      if (handles.length === 0) return { ok: false, moved: 0 }
+
+      for (const handle of handles) {
+        pdfium.FPDFPageObj_Transform(handle, 1, 0, 0, 1, dxPts, dyPts)
+        // The clip travels with the object, or a shape-clipped photo would
+        // slide out from behind its own mask.
+        pdfium.FPDFPageObj_TransformClipPath(handle, 1, 0, 0, 1, dxPts, dyPts)
+      }
+      pdfium.FPDFPage_GenerateContent(page)
+      return { ok: true, moved: handles.length }
+    })
+  },
+
+  duplicateSlot: async ({ docId, pageIndex, kind, index, toPageIndex, dxPts, dyPts }, { pdfium }) => {
+    const doc = requireDoc(docId)
+    const dx = dxPts ?? DUPLICATE_OFFSET_PTS
+    const dy = dyPts ?? -DUPLICATE_OFFSET_PTS
+    const target = toPageIndex ?? pageIndex
+
+    if (kind === "text") {
+      // Read on the source page, drawn on the target one — they are often the
+      // same page, but pasting across pages is the same operation.
+      const line = withPage(pdfium, doc.handle, pageIndex, (page) => {
+        const objs = listTextObjects(pdfium, page, doc.scratch).filter(isEditableText)
+        return groupIntoLines(objs)[index] ?? null
+      })
+      if (!line) throw new Error(`No text line at index ${index} on page ${pageIndex}`)
+
+      const anchor = line.anchor
+      // effectiveFontSize, not the matrix alone. A text object carries its
+      // size in TWO places — the font size on the object and the scale in its
+      // matrix — and which one holds it depends on where the object came
+      // from. Text read from the original PDF usually has it in the matrix;
+      // text this editor has written has matrix scale 1 and the size on the
+      // object. Reading only the matrix therefore gave 1pt for anything that
+      // had been edited or added, and the copy came out unreadably small
+      // while copying untouched text looked perfect.
+      const size = effectiveFontSize(anchor)
+      const { bytes, metrics } = await font(isRtlText(line.text) ? "hebrew" : "regular")
+
+      /**
+       * How wide to make the copy's box.
+       *
+       * The original's own width is the starting point, but it cannot be the
+       * answer on its own: the copy is redrawn in a bundled face whose
+       * letters measure slightly differently, so a box sized to the original's
+       * exact ink WRAPPED the copy — "Added line" came out as "Added" over
+       * "line". A line is one line by definition, and its copy must be too.
+       *
+       * So the box is widened to whatever this text actually needs, when that
+       * is more. Only when: a box made needlessly wide would push a
+       * right-to-left copy to the wrong side, since right-aligned text sits
+       * against the box's right edge.
+       */
+      const originalWidth = line.objects.reduce((w, o) => Math.max(w, o.bounds?.right ?? 0), 0)
+        - Math.min(...line.objects.map((o) => o.bounds?.left ?? 0))
+      const needed = measureTextWidth(metrics, line.text, size)
+      const width = Math.max(1, originalWidth || size * 8, needed + 1)
+
+      return withPage(pdfium, doc.handle, target, (page) => {
+        const r = addTextOverlay(pdfium, doc.handle, page, {
+          text: line.text,
+          x: anchor.matrix.e + dx,
+          y: anchor.matrix.f + dy,
+          width,
+          fontSize: size,
+          // The overlay wants r/g/b only; the alpha the source carries is
+          // not something a new line can express.
+          color: { r: anchor.fill.r, g: anchor.fill.g, b: anchor.fill.b },
+        }, bytes, metrics, doc.scratch, doc.fonts)
+        if (!r.ok) throw new Error(r.error ?? "could not copy that text")
+        pdfium.FPDFPage_GenerateContent(page)
+        const after = groupIntoLines(
+          listTextObjects(pdfium, page, doc.scratch).filter(isEditableText))
+        // Identified by position, the same way any freshly added line is.
+        let newIndex = -1
+        let best = Infinity
+        after.forEach((candidate, i) => {
+          const left = Math.min(...candidate.objects.map((o) => o.bounds?.left ?? 0))
+          const bottom = Math.min(...candidate.objects.map((o) => o.bounds?.bottom ?? 0))
+          const distance = Math.hypot(left - (anchor.matrix.e + dx), bottom - (anchor.matrix.f + dy))
+          if (distance < best) { best = distance; newIndex = i }
+        })
+        return { ok: true, newIndex }
+      })
+    }
+
+    return withPage(pdfium, doc.handle, pageIndex, (sourcePage) => {
+      const handles = kind === "image"
+        ? (() => {
+          const image = listImageObjects(pdfium, sourcePage, doc.scratch)[index]
+          if (!image) throw new Error(`No picture at index ${index} on page ${pageIndex}`)
+          return [image.handle]
+        })()
+        : (() => {
+          const group = listVectorGroups(pdfium, sourcePage, doc.scratch)[index]
+          if (!group) throw new Error(`No artwork at index ${index} on page ${pageIndex}`)
+          return group.handles
+        })()
+
+      const drawOn = (page: number) => {
+        let made = 0
+        for (const handle of handles) {
+          const r = clonePageObject(pdfium, doc.handle, page, handle, doc.scratch, dx, dy)
+          if (r.ok) made += 1
+        }
+        if (made === 0) throw new Error("nothing could be copied")
+        pdfium.FPDFPage_GenerateContent(page)
+        return made
+      }
+
+      if (target === pageIndex) {
+        drawOn(sourcePage)
+        const newIndex = kind === "image"
+          ? listImageObjects(pdfium, sourcePage, doc.scratch).length - 1
+          : listVectorGroups(pdfium, sourcePage, doc.scratch).length - 1
+        return { ok: true, newIndex }
+      }
+
+      return withPage(pdfium, doc.handle, target, (targetPage) => {
+        drawOn(targetPage)
+        const newIndex = kind === "image"
+          ? listImageObjects(pdfium, targetPage, doc.scratch).length - 1
+          : listVectorGroups(pdfium, targetPage, doc.scratch).length - 1
+        return { ok: true, newIndex }
+      })
+    })
+  },
+
+  addBlankPage: ({ docId, atIndex, widthPts, heightPts }, { pdfium }) => {
+    const doc = requireDoc(docId)
+    const count = pdfium.FPDF_GetPageCount(doc.handle)
+    // Clamped rather than trusted: PDFium takes an index without checking it,
+    // and an out-of-range one is undefined behaviour rather than an error.
+    const at = Math.max(0, Math.min(count, Math.round(atIndex)))
+    const page = pdfium.FPDFPage_New(doc.handle, at, widthPts, heightPts)
+    if (!page) throw new Error("could not add a page")
+    // A page with no content stream is not a valid page; generating one on an
+    // empty page produces the empty stream it needs.
+    pdfium.FPDFPage_GenerateContent(page)
+    pdfium.FPDF_ClosePage(page)
+    return { pages: toEnginePages(pdfium, doc.handle) }
+  },
+
   listLayers: ({ docId, pageIndex }, { pdfium }) => {
     const doc = requireDoc(docId)
     return withPage(pdfium, doc.handle, pageIndex, (page) => ({
@@ -408,11 +605,71 @@ const handlers: {
 
   editTextLine: async ({ docId, pageIndex, lineIndex, newText, options }, { pdfium }) => {
     const doc = requireDoc(docId)
-    const { bytes, metrics } = await font(options?.font ?? (isRtlText(newText) ? "hebrew" : "regular"))
+    const fallback = await font(options?.font ?? (isRtlText(newText) ? "hebrew" : "regular"))
     return withPage(pdfium, doc.handle, pageIndex, (page) => {
       const objs = listTextObjects(pdfium, page, doc.scratch).filter(isEditableText)
       const line = groupIntoLines(objs)[lineIndex]
       if (!line) throw new Error(`No text line at index ${lineIndex} on page ${pageIndex}`)
+
+      /**
+       * Keep the page's OWN typeface when it can actually draw the new words.
+       *
+       * This is what stops a heading changing appearance the moment it is
+       * edited, which every earlier version of this editor did. It is also
+       * where the obvious implementation is dangerous: a font embedded in a
+       * PDF is almost always a SUBSET carrying only the glyphs the document
+       * originally used, so a line reading "Carnaby" edited to "Yash" once
+       * rendered as "ash" — the Y simply did not exist.
+       *
+       * So the font is checked against the exact characters being written
+       * before it is trusted, using the same coverage probe built for that
+       * bug. Anything not fully covered falls back to a bundled face and
+       * SAYS so, rather than dropping letters silently.
+       */
+      let chosen = fallback
+      let usedDocumentFont = false
+      let fellBackBecause: string | null = null
+      const wantsDocumentFont = options?.font === undefined && !options?.useBundledFont
+
+      if (wantsDocumentFont && line.anchor.fontHandle) {
+        const embedded = getFontData(pdfium, line.anchor.fontHandle, doc.scratch)
+        if (embedded.length === 0) {
+          fellBackBecause = "the page's font is not embedded in the file"
+        } else {
+          const coverage = probeFontCoverage(embedded, newText)
+          if (!coverage.parsed) {
+            fellBackBecause = "the page's font could not be read"
+          } else if (!coverage.allSafe) {
+            const missing = coverage.chars.filter((c) => !c.safe).map((c) => c.char).join("")
+            fellBackBecause = `the page's font has no ${missing.length > 1 ? "glyphs" : "glyph"} for ${missing}`
+          } else {
+            chosen = { bytes: embedded, metrics: loadFontMetrics(embedded) }
+            usedDocumentFont = true
+          }
+        }
+      }
+      /**
+       * The fallback is checked too, and this is not belt-and-braces.
+       *
+       * Falling back is only a rescue if the face fallen back TO can draw the
+       * characters. The bundled faces are Latin and Hebrew; a degree sign, a
+       * trademark mark or a Cyrillic name is in neither, so the letters would
+       * simply not appear — which is the same silent loss the fallback exists
+       * to prevent, arrived at one step later.
+       *
+       * Nothing is refused: the user asked for those words and gets what can
+       * be drawn of them. But the ones that cannot be drawn are NAMED, so it
+       * is a message rather than a mystery.
+       */
+      let unsupported = ""
+      if (!usedDocumentFont) {
+        const fallbackCoverage = probeFontCoverage(chosen.bytes, newText)
+        if (fallbackCoverage.parsed && !fallbackCoverage.allSafe) {
+          unsupported = fallbackCoverage.chars.filter((c) => !c.safe).map((c) => c.char).join("")
+        }
+      }
+
+      const { bytes, metrics } = chosen
       const r = rebuildGroupWithWrappedText(
         pdfium, doc.handle, page, line.objects, newText, bytes, metrics, doc.scratch,
         {
@@ -432,6 +689,9 @@ const handlers: {
         fontSize: r.layout?.fontSize ?? 0,
         shrunk: r.layout?.shrunk ?? false,
         overflows: r.layout?.overflows ?? false,
+        usedDocumentFont,
+        fellBackBecause,
+        unsupportedCharacters: unsupported || null,
       }
     })
   },
@@ -587,13 +847,54 @@ const handlers: {
     })
   },
 
+  /**
+   * Turn or mirror a line of TEXT, exactly as a picture or a piece of artwork
+   * turns.
+   *
+   * A line is several objects — one per run of identical styling — so they are
+   * transformed together about the line's own centre. Turning each piece about
+   * its own centre would scatter the words.
+   *
+   * Note what this does NOT do: it moves the glyphs, it does not re-lay the
+   * text out sideways. That is the same thing that happens to a rotated
+   * picture, and it is what "rotate" means for something already drawn.
+   */
+  transformTextLine: ({ docId, pageIndex, lineIndex, op }, { pdfium }) => {
+    const doc = requireDoc(docId)
+    return withPage(pdfium, doc.handle, pageIndex, (page) => {
+      const objs = listTextObjects(pdfium, page, doc.scratch).filter(isEditableText)
+      const line = groupIntoLines(objs)[lineIndex]
+      if (!line) throw new Error(`No text line at index ${lineIndex} on page ${pageIndex}`)
+
+      const boxes = line.objects.map((o) => o.bounds).filter((b): b is NonNullable<typeof b> => b !== null)
+      if (boxes.length === 0) throw new Error("that text has no measurable box to turn about")
+      const bbox = {
+        left: Math.min(...boxes.map((b) => b.left)),
+        bottom: Math.min(...boxes.map((b) => b.bottom)),
+        right: Math.max(...boxes.map((b) => b.right)),
+        top: Math.max(...boxes.map((b) => b.top)),
+      }
+
+      const r = transformObjectGroup(
+        pdfium, page, line.objects.map((o) => o.handle), bbox, op)
+      if (!r.ok) throw new Error(r.error ?? "could not turn that text")
+
+      // Lines are numbered by POSITION, and turning one moves it, so its
+      // number can change. Reported back the same way every other mover does.
+      const after = groupIntoLines(
+        listTextObjects(pdfium, page, doc.scratch).filter(isEditableText))
+      const newIndex = after.findIndex((l) => l.text === line.text)
+      return { ok: true, newIndex }
+    })
+  },
+
   transformVectorGroup: ({ docId, pageIndex, vectorIndex, op }, { pdfium }) => {
     const doc = requireDoc(docId)
     return withPage(pdfium, doc.handle, pageIndex, (page) => {
       const target = listVectorGroups(pdfium, page, doc.scratch)[vectorIndex]
       if (!target) throw new Error(`No artwork at index ${vectorIndex} on page ${pageIndex}`)
       const beforeRect = target.bbox
-      const r = transformVectorGroup(pdfium, page, target.handles, target.bbox, op)
+      const r = transformObjectGroup(pdfium, page, target.handles, target.bbox, op)
       if (!r.ok) throw new Error(r.error ?? "could not turn the artwork")
       const after = listVectorGroups(pdfium, page, doc.scratch)
       const newIndex = after.findIndex((g) => g.handles[0] === target.handles[0])

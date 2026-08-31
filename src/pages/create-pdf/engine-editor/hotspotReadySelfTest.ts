@@ -106,6 +106,12 @@ async function observe(pageCount: number): Promise<string[]> {
       onEditLine: () => {}, onReplaceImage: () => {}, onReplaceVector: () => {},
       onDropOnImage: () => {}, onDropOnPage: () => {}, onTransformImage: () => {},
       onDropAssetOnPage: () => {},
+      // Nothing is locked in these measurements.
+      locks: new Set<string>(),
+    alsoSelected: [],
+    cropping: null,
+    onCropCancel: () => {},
+    onCropCommit: () => {},
       onTransformVector: () => {},
       onResizeText: () => {},
     }))

@@ -10,7 +10,20 @@ interface PdfEngineVectorSlotProps {
   scale: number
   pageHeightPts: number
   selected: boolean
-  onSelect: () => void
+  /** Locked slots can be selected — you have to be able to reach one to
+   * unlock it — but not moved or resized, and they show no handles. */
+  /** Its index within its own kind, published on the element so a group
+   * drag can find the other members' boxes — their on-screen positions
+   * exist nowhere but the DOM. */
+  slotIndex: number
+  locked?: boolean
+  /** Alignment: nudges the live rect and draws the guides. Supplied by the
+   * page, which is the only thing that knows what else is on it. */
+  snap?: (rect: BoxRectPx, kind: string, altKey: boolean) => BoxRectPx
+  onGestureEnd?: () => void
+  /** `additive` is true when Shift was held: the caller adds this slot to
+   * the current selection rather than replacing it. */
+  onSelect: (additive: boolean) => void
   /** Double-click: swap this artwork for an uploaded image. */
   onReplace: () => void
   /** Fired once on gesture release, in PDF points (y from the bottom). */
@@ -47,11 +60,13 @@ const HANDLES: { key: ResizeHandle; className: string; cursor: string }[] = [
  */
 export function PdfEngineVectorSlot({
   rect, pageWidthPx, pageHeightPx, scale, pageHeightPts,
-  selected, onSelect, onReplace, onTransform,
+  selected, locked, slotIndex, onSelect, onReplace, onTransform, snap, onGestureEnd,
 }: PdfEngineVectorSlotProps) {
   const { t } = useTranslation()
 
   const transform = useBoxTransform({
+    snap,
+    onGestureEnd,
     rect,
     pageWidth: pageWidthPx,
     pageHeight: pageHeightPx,
@@ -79,7 +94,7 @@ export function PdfEngineVectorSlot({
           ? "ring-2 ring-sky-500"
           : "ring-1 ring-amber-500/70 hover:ring-2 hover:ring-amber-600"
       } ${selected ? "cursor-move" : "cursor-pointer"}`}
-      data-pdf-vector-slot
+      data-pdf-vector-slot={slotIndex}
       // The area around it is pinned to physical left-to-right for its
       // scroll maths; "auto" lets this slot's tooltip read in the user's
       // own language.
@@ -90,15 +105,30 @@ export function PdfEngineVectorSlot({
         // pointerdown, and without this the same press would select this
         // slot and then immediately deselect it as the event bubbled.
         e.stopPropagation()
-        if (!selected) onSelect()
+        if (e.shiftKey) { onSelect(true); return }
+        if (!selected) onSelect(false)
       }}
-      onDoubleClick={(e) => { e.stopPropagation(); onReplace() }}
+      onDoubleClick={(e) => { e.stopPropagation(); if (!locked) onReplace() }}
       title={t(
         "pdfTemplates.engineVectorHint",
         "Logo or icon drawn as artwork. Double-click to replace it with an image, drag to move it, corners to resize.",
       )}
     >
-      {selected && HANDLES.map((handle) => (
+      {locked && (
+        // Shown whether or not it is selected: the point of a lock is that
+        // you can see at a glance why something will not move.
+        <span
+          data-pdf-slot-locked
+          aria-hidden
+          className="pointer-events-none absolute -top-2 -right-2 flex size-4 items-center justify-center rounded-full bg-slate-700 text-white shadow"
+        >
+          <svg viewBox="0 0 24 24" className="size-2.5" fill="currentColor">
+            <path d="M12 1a5 5 0 0 0-5 5v3H6a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-9a2 2 0 0 0-2-2h-1V6a5 5 0 0 0-5-5zm-3 5a3 3 0 1 1 6 0v3H9V6z"/>
+          </svg>
+        </span>
+      )}
+
+      {selected && !locked && HANDLES.map((handle) => (
         <span
           key={handle.key}
           data-resize-handle={handle.key}

@@ -42,6 +42,19 @@ interface UseBoxTransformOptions {
   /** Called once, on release, with the final rect. */
   onCommit: (rect: BoxRectPx) => void
   disabled?: boolean
+  /**
+   * Nudges the live rect into alignment and draws the guide lines.
+   *
+   * Given by the page, because alignment is about the OTHER things on the
+   * page and a slot knows nothing about its neighbours. Returns the rect to
+   * use; returning the input unchanged simply means nothing was near.
+   *
+   * Called on every pointer move, so it must not set React state — see
+   * snapping.ts, which paints the guides straight into the DOM.
+   */
+  snap?: (rect: BoxRectPx, kind: GestureKind, altKey: boolean) => BoxRectPx
+  /** Called once when a gesture ends, so the guides can be cleared. */
+  onGestureEnd?: () => void
 }
 
 export interface UseBoxTransformResult {
@@ -54,7 +67,7 @@ export interface UseBoxTransformResult {
 }
 
 export function useBoxTransform({
-  rect, pageWidth, pageHeight, onCommit, disabled,
+  rect, pageWidth, pageHeight, onCommit, disabled, snap, onGestureEnd,
 }: UseBoxTransformOptions): UseBoxTransformResult {
   const [live, setLive] = useState<BoxRectPx | null>(null)
   /** Mirrors `live` so the end of a gesture can read the final rect without
@@ -81,12 +94,13 @@ export function useBoxTransform({
     const final = liveRef.current
     gesture.current = null
     applyLive(null)
+    onGestureEnd?.()
     // Called AFTER the state update, never inside its updater: an updater
     // must be pure, and onCommit sets state on the parent — doing it in
     // there makes React warn about updating one component while rendering
     // another, and is a real correctness hazard rather than noise.
     if (g && final) onCommit(final)
-  }, [onCommit, applyLive])
+  }, [onCommit, applyLive, onGestureEnd])
 
   useEffect(() => {
     if (!gesture.current) return
@@ -100,12 +114,13 @@ export function useBoxTransform({
       // A whole-box drag keeps its size and only changes where it starts;
       // the clamping below then keeps it on the paper.
       if (g.kind === "move") {
-        applyLive({
+        const moved = {
           left: Math.min(Math.max(0, o.left + dx), pageWidth - o.width),
           top: Math.min(Math.max(0, o.top + dy), pageHeight - o.height),
           width: o.width,
           height: o.height,
-        })
+        }
+        applyLive(snap ? snap(moved, g.kind, e.altKey) : moved)
         return
       }
 
@@ -134,7 +149,8 @@ export function useBoxTransform({
       top = Math.min(Math.max(0, top), pageHeight - MIN_SIZE_PX)
       width = Math.min(width, pageWidth - left)
       height = Math.min(height, pageHeight - top)
-      applyLive({ left, top, width, height })
+      const resized = { left, top, width, height }
+      applyLive(snap ? snap(resized, g.kind, e.altKey) : resized)
     }
 
     const onUp = () => finish()
@@ -146,7 +162,7 @@ export function useBoxTransform({
       window.removeEventListener("pointerup", onUp)
       window.removeEventListener("pointercancel", onUp)
     }
-  }, [live, pageWidth, pageHeight, finish, applyLive])
+  }, [live, pageWidth, pageHeight, finish, applyLive, snap])
 
   const begin = (e: React.PointerEvent, kind: GestureKind) => {
     if (disabled) return

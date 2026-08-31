@@ -40,6 +40,19 @@ interface PdfPageOrganizerProps {
  * delete dialog nothing rotates, in the rotate dialog nothing is deleted. */
 const DRAG_MODES: readonly PdfOrganizerMode[] = ["copy", "move"]
 
+/**
+ * The horizontal room between two thumbnails.
+ *
+ * In the drag modes this is the resting width of the drop strip that sits
+ * between every pair of pages — the spacing there is a side effect of the
+ * strips existing. The click-only modes have no strips, so they take the same
+ * number as a plain column gap. One constant, because the whole point is that
+ * the four modes are the same grid: if these were two numbers they would
+ * drift, and Delete would go back to showing its pages jammed edge to edge
+ * while Copy breathes.
+ */
+const PAGE_GAP_PX = 14
+
 export function PdfPageOrganizer({ mode, pages, thumbnails, onApply, onCancel }: PdfPageOrganizerProps) {
   const { t } = useTranslation()
 
@@ -168,7 +181,7 @@ export function PdfPageOrganizer({ mode, pages, thumbnails, onApply, onCancel }:
         }}
         onDrop={(e) => { e.preventDefault(); handleDrop(index) }}
         className="flex shrink-0 items-center justify-center self-stretch transition-all"
-        style={{ width: isActive ? 34 : 14 }}
+        style={{ width: isActive ? 34 : PAGE_GAP_PX }}
       >
         <div
           className="h-full rounded-full transition-all"
@@ -199,7 +212,23 @@ export function PdfPageOrganizer({ mode, pages, thumbnails, onApply, onCancel }:
         </header>
 
         <div className="min-h-0 flex-1 overflow-y-auto p-6">
-          <div className="flex flex-wrap items-stretch gap-y-6">
+          <div
+            data-organizer-row
+            className="flex flex-wrap items-stretch gap-y-6"
+            // The drag modes get their horizontal spacing from the drop
+            // strips between pages, so adding a gap there would double it.
+            // The click-only modes take the same distance as a real gap.
+            //
+            // The leading pad matches it for the same reason: in the drag
+            // modes every row opens with a strip (the "insert before page 1"
+            // target), so without this the first page would sit 14px further
+            // out in Delete than in Copy and the grid would visibly shift
+            // when you switch tools. Logical properties, so it mirrors in
+            // Hebrew.
+            style={isDragMode
+              ? undefined
+              : { columnGap: PAGE_GAP_PX, paddingInlineStart: PAGE_GAP_PX }}
+          >
             {draft.map((page, index) => {
               const rotated = page.rotation === 90 || page.rotation === 270
               return (
@@ -209,6 +238,7 @@ export function PdfPageOrganizer({ mode, pages, thumbnails, onApply, onCancel }:
                   <div className="flex flex-col items-center gap-2">
                     <button
                       type="button"
+                      data-organizer-page={index}
                       draggable={isDragMode}
                       onDragStart={isDragMode ? () => setDraggingKey(page.key) : undefined}
                       onDragEnd={isDragMode ? () => { setDraggingKey(null); setDropIndex(null) } : undefined}

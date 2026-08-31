@@ -27,6 +27,10 @@ import { findFreeSpot, newImageSize, type Box } from "./placement"
 import { readImageSize } from "./imageFile"
 import { PdfAssetPanel } from "./PdfAssetPanel"
 import { PdfLayersPanel } from "./PdfLayersPanel"
+import { PdfAddPageDialog } from "./PdfAddPageDialog"
+import { isLocked, lockKeyFor, toggleLock } from "./locks"
+import { buildSnapTargets, MOVE_EDGES, paintGuides, snapRect, type SnapTarget } from "./snapping"
+import { applySelection, selectedSlots } from "./selectionOps"
 import { PdfEngineWorkspace } from "./PdfEngineWorkspace"
 import { PdfProductPanel } from "./PdfProductPanel"
 import { PdfEditorLoadingScreen } from "../PdfEditorLoadingScreen"
@@ -165,6 +169,34 @@ export function PdfEngineEditorPage() {
    * because you reach for artwork and product data at different moments.
    */
   const [rightPanel, setRightPanel] = useState<"product" | "layers" | null>(null)
+  /**
+   * Slots locked against being moved.
+   *
+   * Held here and nowhere else, and deliberately NOT sent to the engine: a
+   * PDF has nowhere to store a lock, so this lasts for the editing session
+   * and no longer. Keyed by position rather than by index — see locks.ts for
+   * why an index would silently transfer the lock to another object after
+   * almost any edit.
+   */
+  const [locks, setLocks] = useState<ReadonlySet<string>>(() => new Set())
+  /**
+   * The OTHER things being moved along with the selected one.
+   *
+   * A temporary group, held only here and never written to the file — a PDF
+   * has no way to record that two objects belong together, and a group that
+   * silently vanished on reopening would be worse than none.
+   *
+   * Only slots on the SAME page as the primary selection are kept: a group
+   * spanning pages could not be moved by one delta, since the pages have
+   * their own coordinate spaces.
+   */
+  /** The picture being trimmed, if any. */
+  const [cropping, setCropping] = useState<{ pageIndex: number; imageIndex: number } | null>(null)
+  /** Which page a new blank one would follow, while the size is being chosen. */
+  const [addingPageAfter, setAddingPageAfter] = useState<number | null>(null)
+  const [alsoSelected, setAlsoSelected] = useState<
+    { pageIndex: number; kind: "text" | "image" | "vector"; index: number }[]
+  >([])
   const productPanelOpen = rightPanel === "product"
   const [product, setProduct] = useState<CatalogProduct | null>(null)
   /**
@@ -176,6 +208,16 @@ export function PdfEngineEditorPage() {
    * number nobody looks at would be a waste.
    */
   const productRunAnchor = useRef<{ pageIndex: number; x: number; baselineY: number } | null>(null)
+  /**
+   * What is currently being carried, so alignment can leave it out of its own
+   * targets.
+   *
+   * A ref rather than the drag state, because the snap callback has to be
+   * built BEFORE useCrossPageDrag — it is an argument to it — and reading the
+   * state it returns from inside it would be circular. Set as the gesture
+   * begins and cleared when it ends.
+   */
+  const draggedItem = useRef<{ pageIndex: number; kind: string; index: number } | null>(null)
 
   const [newTextDraft, setNewTextDraft] = useState<{ pageIndex: number; text: string } | null>(null)
   /** The one selected slot across the whole document. Held here rather
@@ -195,6 +237,17 @@ export function PdfEngineEditorPage() {
    * off the bottom of whatever they are now looking at.
    */
   useEffect(() => { productRunAnchor.current = null }, [selection, product])
+
+  /** Overlays land on the first page currently in view, so "Add text" adds
+   * it where the user is looking rather than always on page 1. */
+  const visiblePageIndex = () => {
+    const els = document.querySelectorAll<HTMLElement>("[data-engine-page-index]")
+    for (const el of els) {
+      const rect = el.getBoundingClientRect()
+      if (rect.bottom > 120) return Number(el.dataset.enginePageIndex ?? 0)
+    }
+    return 0
+  }
 
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   /** Which slot a pending file-picker result belongs to. A ref, not state:
@@ -363,6 +416,34 @@ export function PdfEngineEditorPage() {
     return () => cancelAnimationFrame(id)
   }, [selected])
 
+  /**
+   * Says what happened to the TYPEFACE, when it is not what you would expect.
+   *
+   * Silence is right when the page's own font was kept, which is the normal
+   * case. It is wrong in the other two: a heading that quietly changes face,
+   * or a character that quietly does not appear, are both things you would
+   * otherwise discover in print.
+   */
+  const reportFontOutcome = useCallback((r: {
+    usedDocumentFont: boolean; fellBackBecause: string | null; unsupportedCharacters: string | null
+  }) => {
+    if (r.unsupportedCharacters) {
+      toast.error(t(
+        "pdfTemplates.engineFontMissingChars",
+        "These characters cannot be drawn by any available font and will not appear: {{chars}}",
+        { chars: r.unsupportedCharacters },
+      ))
+      return
+    }
+    if (!r.usedDocumentFont && r.fellBackBecause) {
+      toast.warning(t(
+        "pdfTemplates.engineFontFellBack",
+        "This text was redrawn in a standard font — {{reason}}.",
+        { reason: r.fellBackBecause },
+      ))
+    }
+  }, [t])
+
   const commitEdit = async () => {
     if (!selected) return
     const { pageIndex, line } = selected
@@ -370,11 +451,81 @@ export function PdfEngineEditorPage() {
     setSelected(null)
     if (newText === line.text) return
     try {
-      await doc.editText(pageIndex, line.lineIndex, newText)
+      reportFontOutcome(await doc.editText(pageIndex, line.lineIndex, newText))
     } catch (err) {
       toast.error(err instanceof Error ? err.message : String(err))
     }
   }
+
+  // ── Cropping ──────────────────────────────────────────────────────────────
+
+  /**
+   * Commit a trim.
+   *
+   * The picture's pixels are genuinely cut, not masked — this build of PDFium
+   * offers no way to set a clip path — so the result is one more generation
+   * of encoding for a photograph. Worth knowing, and the reason the crop is
+   * confirmed with a Done button rather than applied live as you drag.
+   */
+  const commitCrop = useCallback((
+    pageIndex: number, imageIndex: number,
+    region: { left: number; bottom: number; right: number; top: number },
+  ) => {
+    setCropping(null)
+    void doc.cropImage(pageIndex, imageIndex, region)
+      .catch((err: unknown) => toast.error(err instanceof Error ? err.message : String(err)))
+  }, [doc])
+
+  // ── Selecting several things ──────────────────────────────────────────────
+
+  /**
+   * Clicking a slot, with or without Shift.
+   *
+   * The rule itself is a pure function in selectionOps — deliberately, and
+   * not for tidiness. It used to live inside a `setSelection` updater and
+   * call `setAlsoSelected` from within it. React runs updaters twice in
+   * StrictMode to catch exactly that, so every Shift-click added the slot and
+   * then immediately removed it again: shift-clicking did nothing at all, and
+   * the group feature looked unimplemented.
+   *
+   * Both pieces of state are now written independently, from one answer
+   * computed before either is touched.
+   */
+  const handleSelect = useCallback((
+    next: { pageIndex: number; kind: "text" | "image" | "vector"; index: number } | null,
+    additive: boolean,
+  ) => {
+    const result = applySelection({ primary: selection, also: alsoSelected }, next, additive)
+    setSelection(result.primary)
+    setAlsoSelected(result.also)
+  }, [selection, alsoSelected])
+
+  /** Everything currently being moved, primary first.
+   *
+   * Memoised because moveGroupBy depends on it: a fresh array every render
+   * would give that callback a new identity every render, and it is handed to
+   * gesture handlers that should not be rebuilt mid-drag. */
+  const selectedGroup = useMemo(
+    () => selectedSlots({ primary: selection, also: alsoSelected }),
+    [selection, alsoSelected],
+  )
+
+  /**
+   * Moves a whole group by the delta the dragged slot travelled.
+   *
+   * Sent as ONE engine call. A slot's index is its position, so moving the
+   * first of a group renumbers the rest — a second call using the numbers
+   * read before the first would move the wrong things.
+   */
+  const moveGroupBy = useCallback((pageIndex: number, dxPts: number, dyPts: number) => {
+    if (selectedGroup.length < 2) return false
+    void doc.translateSlots(pageIndex, selectedGroup.map(({ kind, index }) => ({ kind, index })), dxPts, dyPts)
+      .catch((err: unknown) => toast.error(err instanceof Error ? err.message : String(err)))
+    // Indices are renumbered by the move, so nothing may be held afterwards.
+    setSelection(null)
+    setAlsoSelected([])
+    return true
+  }, [selectedGroup, doc])
 
   /**
    * A move gesture has ended somewhere in the document.
@@ -386,6 +537,7 @@ export function PdfEngineEditorPage() {
    * rebuilt from a substitute.
    */
   const handleDrop = async (drop: CrossPageDrop) => {
+    draggedItem.current = null
     const { item, targetPageIndex } = drop
     const sourcePage = doc.pages[item.pageIndex]
     const targetPage = doc.pages[targetPageIndex]
@@ -423,6 +575,8 @@ export function PdfEngineEditorPage() {
         if (!line) return
         if (samePage) {
           const { dx, dy } = textMoveDelta(line, sourcePage, xPts, yFromTopPts)
+          // A group travels together, by the same delta, in one call.
+          if (moveGroupBy(item.pageIndex, dx, dy)) return
           const newIndex = await doc.moveText(item.pageIndex, item.index, dx, dy)
           reselect(item.pageIndex, newIndex)
           return
@@ -435,6 +589,14 @@ export function PdfEngineEditorPage() {
 
       const rect = imagePlacement(targetPage, xPts, yFromTopPts, widthPts, heightPts)
       if (samePage) {
+        // A group travels together. This was only wired into the RESIZE
+        // commit, and a picture is moved through this path instead — so
+        // Shift-selecting several and dragging moved only the one under the
+        // pointer.
+        const before = item.kind === "image"
+          ? doc.pageImages[item.pageIndex]?.images[item.index]?.bbox
+          : doc.pageVectors[item.pageIndex]?.groups[item.index]?.bbox
+        if (before && moveGroupBy(item.pageIndex, rect.x - before.left, rect.y - before.bottom)) return
         const newIndex = await doc.setImageRect(item.pageIndex, item.index, rect)
         reselect(item.pageIndex, newIndex)
         return
@@ -446,7 +608,64 @@ export function PdfEngineEditorPage() {
     }
   }
 
-  const { drag, start: startDrag } = useCrossPageDrag((drop) => void handleDrop(drop))
+  /**
+   * Alignment while something is being DRAGGED across the document.
+   *
+   * Snapping was first wired into useBoxTransform, which turned out to
+   * handle only resizing — a move goes through useCrossPageDrag instead. So
+   * nothing snapped while dragging, which is the case anyone would notice
+   * first. This is the missing half.
+   *
+   * Works in the target page's own CSS pixels: the ghost is positioned in
+   * viewport coordinates, so it is converted in and back out here, which is
+   * also the only place that knows which page is underneath.
+   */
+  const snapGhost = useCallback((
+    ghost: { left: number; top: number; width: number; height: number },
+    targetPageIndex: number,
+    altKey: boolean,
+  ) => {
+    const surface = document.querySelector<HTMLElement>(
+      `[data-engine-page-index="${targetPageIndex}"]`)
+    const layer = surface?.querySelector<HTMLElement>("[data-pdf-guide-layer]") ?? null
+    // A negative page index is the gesture ending: clear and stop.
+    if (altKey || targetPageIndex < 0 || !surface) { paintGuides(layer, []); return null }
+
+    const page = doc.pages[targetPageIndex]
+    if (!page || page.widthPts <= 0) return null
+    const box = surface.getBoundingClientRect()
+    const scale = box.width / page.widthPts
+
+    // Everything on that page except whatever is being carried.
+    const moving = draggedItem.current
+    const others: SnapTarget[] = []
+    const add = (bbox: { left: number; bottom: number; right: number; top: number } | null) => {
+      if (!bbox) return
+      others.push({
+        left: bbox.left * scale,
+        right: bbox.right * scale,
+        top: (page.heightPts - bbox.top) * scale,
+        bottom: (page.heightPts - bbox.bottom) * scale,
+      })
+    }
+    const skip = (kind: string, index: number) =>
+      moving !== null && moving.pageIndex === targetPageIndex
+      && moving.kind === kind && moving.index === index
+    doc.pageText[targetPageIndex]?.lines.forEach((l, i) => { if (!skip("text", i)) add(l.bbox) })
+    doc.pageImages[targetPageIndex]?.images.forEach((im, i) => { if (!skip("image", i)) add(im.bbox) })
+    doc.pageVectors[targetPageIndex]?.groups.forEach((g, i) => { if (!skip("vector", i)) add(g.bbox) })
+
+    const local = {
+      left: ghost.left - box.left, top: ghost.top - box.top,
+      width: ghost.width, height: ghost.height,
+    }
+    const result = snapRect(local, buildSnapTargets(box.width, box.height, others), MOVE_EDGES)
+    paintGuides(layer, result.guides)
+    return { left: result.rect.left + box.left, top: result.rect.top + box.top }
+  }, [doc])
+
+  const { drag, start: startDrag } = useCrossPageDrag(
+    (drop) => void handleDrop(drop), snapGhost)
 
   /**
    * Escape means "cancel what I am doing", one layer at a time.
@@ -541,6 +760,16 @@ export function PdfEngineEditorPage() {
     pageIndex: number, imageIndex: number,
     rect: { x: number; y: number; width: number; height: number },
   ) => {
+    // Dragging one member of a group moves the whole group by the same
+    // amount, in one operation — see moveGroupBy for why it cannot be
+    // several. A RESIZE is left alone: stretching a group is a different
+    // feature with its own questions, and the brief does not ask for it.
+    const before = doc.pageImages[pageIndex]?.images[imageIndex]?.bbox
+    if (before) {
+      const sameSize = Math.abs((before.right - before.left) - rect.width) < 0.5
+        && Math.abs((before.top - before.bottom) - rect.height) < 0.5
+      if (sameSize && moveGroupBy(pageIndex, rect.x - before.left, rect.y - before.bottom)) return
+    }
     try {
       await doc.setImageRect(pageIndex, imageIndex, rect)
     } catch (err) {
@@ -555,6 +784,12 @@ export function PdfEngineEditorPage() {
     pageIndex: number, vectorIndex: number,
     rect: { x: number; y: number; width: number; height: number },
   ) => {
+    const before = doc.pageVectors[pageIndex]?.groups[vectorIndex]?.bbox
+    if (before) {
+      const sameSize = Math.abs((before.right - before.left) - rect.width) < 0.5
+        && Math.abs((before.top - before.bottom) - rect.height) < 0.5
+      if (sameSize && moveGroupBy(pageIndex, rect.x - before.left, rect.y - before.bottom)) return
+    }
     try {
       const next = await doc.setVectorRect(pageIndex, vectorIndex, rect)
       if (next >= 0) setSelection({ pageIndex, kind: "vector", index: next })
@@ -598,6 +833,117 @@ export function PdfEngineEditorPage() {
       toast.error(err instanceof Error ? err.message : String(err))
     }
   }
+
+  // ── Duplicate, copy and paste ─────────────────────────────────────────────
+
+  /**
+   * What Ctrl+C put on the clipboard.
+   *
+   * A REFERENCE to a slot, not its contents. The engine copies straight from
+   * the original object, which is the only way a copy can carry everything —
+   * an embedded typeface, an image's exact pixels, a path's colours. Storing
+   * a description here instead would mean rebuilding from that description,
+   * and every property nobody thought to include would be quietly lost.
+   *
+   * The cost is that the copied slot has to still exist when you paste. That
+   * is checked at paste time and reported, rather than pasting something
+   * else that has since taken its index.
+   */
+  const clipboard = useRef<
+    { pageIndex: number; kind: "text" | "image" | "vector"; index: number; label: string } | null
+  >(null)
+
+  const duplicateSelection = useCallback(async (toPageIndex?: number) => {
+    if (!selection) return
+    const { pageIndex, kind, index } = selection
+    try {
+      const target = toPageIndex ?? pageIndex
+      const newIndex = await doc.duplicateSlot(pageIndex, kind, index, toPageIndex)
+      if (newIndex >= 0) setSelection({ pageIndex: target, kind, index: newIndex })
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : String(err))
+    }
+  }, [selection, doc])
+
+  /**
+   * Ctrl+C / Ctrl+V / Ctrl+D.
+   *
+   * Paste puts the copy on the page currently IN VIEW rather than the page it
+   * was copied from — copying a caption on page 2 and pasting it on page 7 is
+   * the reason paste exists at all, and pasting it back onto page 2 while you
+   * are looking at page 7 would be useless.
+   *
+   * Ignored while typing, so these keys keep their ordinary meaning inside a
+   * text field.
+   */
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (!e.ctrlKey && !e.metaKey) return
+      const key = e.key.toLowerCase()
+      if (key !== "c" && key !== "v" && key !== "d") return
+      const el = document.activeElement
+      const typing = el instanceof HTMLElement
+        && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)
+      if (typing) return
+
+      if (key === "c") {
+        if (!selection) return
+        e.preventDefault()
+        const line = selection.kind === "text"
+          ? doc.pageText[selection.pageIndex]?.lines[selection.index]
+          : null
+        clipboard.current = {
+          ...selection,
+          label: line?.text?.trim().slice(0, 30)
+            || (selection.kind === "image" ? "picture" : "artwork"),
+        }
+        toast.success(t("pdfTemplates.engineCopied", "Copied"))
+        return
+      }
+
+      if (key === "d") {
+        if (!selection) return
+        e.preventDefault()
+        void duplicateSelection()
+        return
+      }
+
+      const held = clipboard.current
+      if (!held) return
+      e.preventDefault()
+      const onto = visiblePageIndex()
+      void doc.duplicateSlot(held.pageIndex, held.kind, held.index, onto)
+        .then((newIndex) => {
+          if (newIndex >= 0) setSelection({ pageIndex: onto, kind: held.kind, index: newIndex })
+        })
+        .catch(() => {
+          // The most likely reason is that the copied slot was edited or
+          // deleted after it was copied, so its index now means something
+          // else — said plainly rather than pasting whatever inherited it.
+          toast.error(t(
+            "pdfTemplates.enginePasteGone",
+            "That copy is no longer available — the item it came from has changed.",
+          ))
+          clipboard.current = null
+        })
+    }
+    window.addEventListener("keydown", onKeyDown)
+    return () => window.removeEventListener("keydown", onKeyDown)
+  }, [selection, doc, duplicateSelection, t])
+
+  // ── Locking ───────────────────────────────────────────────────────────────
+
+  /** The lock key for whatever is selected, or null when nothing is. */
+  const selectionLockKey = (() => {
+    if (!selection) return null
+    const { pageIndex, kind, index } = selection
+    const bbox = kind === "text"
+      ? doc.pageText[pageIndex]?.lines[index]?.bbox
+      : kind === "image"
+        ? doc.pageImages[pageIndex]?.images[index]?.bbox
+        : doc.pageVectors[pageIndex]?.groups[index]?.bbox
+    return lockKeyFor(pageIndex, kind, bbox ?? null)
+  })()
 
   // ── Undo / redo ───────────────────────────────────────────────────────────
 
@@ -718,17 +1064,6 @@ export function PdfEngineEditorPage() {
 
   // ── Overlays ──────────────────────────────────────────────────────────────
 
-  /** Overlays land on the first page currently in view, so "Add text" adds
-   * it where the user is looking rather than always on page 1. */
-  const visiblePageIndex = () => {
-    const els = document.querySelectorAll<HTMLElement>("[data-engine-page-index]")
-    for (const el of els) {
-      const rect = el.getBoundingClientRect()
-      if (rect.bottom > 120) return Number(el.dataset.enginePageIndex ?? 0)
-    }
-    return 0
-  }
-
   const commitNewText = async () => {
     if (!newTextDraft) return
     const { pageIndex, text } = newTextDraft
@@ -801,6 +1136,7 @@ export function PdfEngineEditorPage() {
     // see what landed in it.
     if (line.text === value) return
     void doc.editText(pageIndex, index, value)
+      .then(reportFontOutcome)
       .catch((err: unknown) => toast.error(err instanceof Error ? err.message : String(err)))
   }
 
@@ -967,9 +1303,38 @@ export function PdfEngineEditorPage() {
   const pageColumnProps = {
     contentMode,
     selection,
-    onSelect: setSelection,
+    onSelect: handleSelect,
+    alsoSelected,
+    cropping,
+    onCropCancel: () => setCropping(null),
+    onCropCommit: commitCrop,
     drag,
-    onMoveStart: startDrag,
+    onMoveStart: ((e, item, rect) => {
+      draggedItem.current = item
+      // The rest of the group travels with it, so its boxes go along too —
+      // measured from the DOM, which is the only place their on-screen
+      // positions exist. Only members on the same page as the one grabbed:
+      // a group cannot span pages, and a slot on another page has no
+      // meaningful offset from this one.
+      const companions = selectedGroup
+        .filter((slot) => !(slot.kind === item.kind && slot.index === item.index)
+          && slot.pageIndex === item.pageIndex)
+        .map((slot) => {
+          const surface = document.querySelector<HTMLElement>(
+            `[data-engine-page-index="${slot.pageIndex}"]`)
+          const el = surface?.querySelector<HTMLElement>(
+            slot.kind === "text"
+              ? `[data-pdf-text-slot="${slot.index}"]`
+              : slot.kind === "image"
+                ? `[data-pdf-image-slot="${slot.index}"]`
+                : `[data-pdf-vector-slot="${slot.index}"]`)
+          if (!el) return null
+          const r = el.getBoundingClientRect()
+          return { left: r.left, top: r.top, width: r.width, height: r.height }
+        })
+        .filter((r): r is NonNullable<typeof r> => r !== null)
+      startDrag(e, item, rect, companions)
+    }) as typeof startDrag,
     originPatch,
     imagePreview,
     onEditLine: openLine,
@@ -992,6 +1357,7 @@ export function PdfEngineEditorPage() {
     ) => void handleTransformVector(pageIndex, vectorIndex, rect),
     onResizeText: (pageIndex: number, lineIndex: number, fontSize: number, maxWidth: number) =>
       void handleResizeText(pageIndex, lineIndex, fontSize, maxWidth),
+    locks,
   }
 
   // Reached only on a cold load — opening a template from the list hands the
@@ -1047,6 +1413,19 @@ export function PdfEngineEditorPage() {
           onToggleContentMode: () => setContentMode((m) => (m === "text" ? "images" : "text")),
           onAddText: () => setNewTextDraft({ pageIndex: visiblePageIndex(), text: "" }),
           onAddImage: () => openFilePicker({ kind: "overlay", pageIndex: visiblePageIndex() }),
+          onDuplicate: () => void duplicateSelection(),
+          cropping: cropping !== null,
+          onToggleCrop: () => {
+            if (cropping) { setCropping(null); return }
+            if (selection?.kind !== "image") return
+            setCropping({ pageIndex: selection.pageIndex, imageIndex: selection.index })
+          },
+          selectionLocked: isLocked(locks, selectionLockKey),
+          onToggleLock: () => {
+            if (!selectionLockKey) return
+            setLocks((current) => toggleLock(current, selectionLockKey))
+          },
+          onAddPage: () => setAddingPageAfter(selection?.pageIndex ?? visiblePageIndex()),
           canUndo: doc.canUndo,
           canRedo: doc.canRedo,
           onUndo: () => void runHistory("undo"),
@@ -1087,10 +1466,24 @@ export function PdfEngineEditorPage() {
           onToggleBold: () => restyle({ bold: !(selectedLine?.bold ?? false) }),
           onToggleItalic: () => restyle({ italic: !(selectedLine?.italic ?? false) }),
           onTextColor: (color) => restyle({ color }),
+          onSetFont: (face) => {
+            if (selection?.kind !== "text") return
+            const { pageIndex, index } = selection
+            const line = doc.pageText[pageIndex]?.lines[index]
+            if (!line) return
+            // Redrawn with the same words — the typeface is the only thing
+            // changing, so the text is passed back through unaltered.
+            void doc.editText(pageIndex, index, line.text,
+              face === "document" ? {} : { font: face, useBundledFont: true })
+              .then(reportFontOutcome)
+              .catch((err: unknown) => toast.error(err instanceof Error ? err.message : String(err)))
+          },
           onScaleText: (factor) =>
             runOnSelection("text", (p, i) => doc.scaleText(p, i, factor)),
           onAlignText: (alignment) =>
             runOnSelection("text", (p, i) => doc.alignText(p, i, alignment)),
+          onTransformText: (op) =>
+            runOnSelection("text", (p, i) => doc.transformText(p, i, op)),
           onTransformImage: (op) =>
             runOnSelection("image", (p, i) => doc.transformImage(p, i, op)),
           onTransformVector: (op) =>
@@ -1148,6 +1541,24 @@ export function PdfEngineEditorPage() {
         accept="image/*"
         className="hidden"
         onChange={(e) => void handleFileChosen(e.target.files?.[0])}
+      />
+
+      <PdfAddPageDialog
+        open={addingPageAfter !== null}
+        afterPage={addingPageAfter !== null ? doc.pages[addingPageAfter] ?? null : null}
+        afterPageNumber={(addingPageAfter ?? 0) + 1}
+        onCancel={() => setAddingPageAfter(null)}
+        onAdd={(size) => {
+          const after = addingPageAfter ?? 0
+          setAddingPageAfter(null)
+          void doc.addBlankPage(after, size)
+            .then(() => {
+              // Nothing on a blank page to keep selected, and the old
+              // selection now points at a renumbered page.
+              setSelection(null)
+            })
+            .catch((err: unknown) => toast.error(err instanceof Error ? err.message : String(err)))
+        }}
       />
 
       {organizerMode && (
