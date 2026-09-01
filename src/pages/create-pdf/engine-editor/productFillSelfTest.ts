@@ -173,7 +173,8 @@ function harness() {
         product,
         onPickProduct: setProduct,
         mode,
-        onApply: (value: string) => { fills.push(value) },
+        onPlaceProduct: () => {},
+    onApply: (value: string) => { fills.push(value) },
         onClose: () => {},
       })
     }

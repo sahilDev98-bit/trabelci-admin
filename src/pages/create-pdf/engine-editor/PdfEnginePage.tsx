@@ -4,12 +4,14 @@ import {
   drawRenderedPage, drawPagePatch,
   type EnginePage, type EngineTextLine, type PdfRect,
 } from "@/lib/pdf-engine"
+import type { CatalogProduct } from "@/features/catalogProducts/types"
 import type { PdfContentMode } from "../pdfEditorTypes"
 import type { PageTextState, PageImageState, PageVectorState } from "./usePdfEngineDocument"
 import { PdfEngineImageSlot } from "./PdfEngineImageSlot"
 import { PdfEngineTextSlot } from "./PdfEngineTextSlot"
 import { PdfEngineVectorSlot } from "./PdfEngineVectorSlot"
 import { assetIdFromDrag, dragCarriesAsset } from "./assetDrag"
+import { dragCarriesProduct, productFromDrag } from "./productDrag"
 import { isLocked, lockKeyFor, type LockSet } from "./locks"
 import {
   buildSnapTargets, edgesForHandle, MOVE_EDGES, paintGuides, snapRect,
@@ -70,6 +72,14 @@ interface PdfEnginePageProps {
    * There is no on-IMAGE counterpart on purpose: an asset always adds, never
    * replaces. See the image slot's drop handler for why. */
   onDropAssetOnPage: (pageIndex: number, assetId: string, xPts: number, yFromTopPts: number) => void
+  /** A product dropped on bare paper: becomes a product block — its photo with
+   * its key details beneath — at the point it was released. */
+  onDropProductOnPage: (
+    pageIndex: number, product: CatalogProduct, xPts: number, yFromTopPts: number,
+  ) => void
+  /** A product dropped onto an existing picture: that picture becomes the
+   * product's photo, keeping the slot's position, size and shape. */
+  onDropProductOnImage: (pageIndex: number, imageIndex: number, product: CatalogProduct) => void
   /** Slots the user has locked against being moved. Keyed by position — see
    * locks.ts for why an index would not survive an edit. */
   locks: LockSet
@@ -171,7 +181,8 @@ function imageFromDrag(dt: DataTransfer | null): File | null {
 
 /**
  * Whether a drag is carrying something this page can accept — a file from the
- * operating system, or an asset from the library.
+ * operating system, an asset from the library, or a product from the product
+ * panel.
  *
  * Deliberately answers during dragover, when the drag's DATA cannot be read
  * and only its shape is known. That is what decides whether the page lights up
@@ -180,6 +191,7 @@ function imageFromDrag(dt: DataTransfer | null): File | null {
 function dragCarriesDroppable(dt: DataTransfer | null): boolean {
   if (!dt) return false
   if (dragCarriesAsset(dt)) return true
+  if (dragCarriesProduct(dt)) return true
   return Array.from(dt.items ?? []).some((i) => i.kind === "file")
 }
 
@@ -196,7 +208,8 @@ export function PdfEnginePage({
   page, pageIndex, displayWidth, text, images, vectors, contentMode, revision,
   renderPage, renderPageRegion, lastChange, loadPageText, loadPageImages, loadPageVectors,
   onSelectLine, onReplaceImage, onReplaceVector,
-  onDropOnImage, onDropOnPage, onDropAssetOnPage, locks, alsoSelected,
+  onDropOnImage, onDropOnPage, onDropAssetOnPage,
+  onDropProductOnPage, onDropProductOnImage, locks, alsoSelected,
   cropping, onCropCancel, onCropCommit,
   onTransformImage, onTransformVector, onResizeText,
   selection, onSelect, onMoveStart, draggingSlot, dropTargetPage, originPatchUrl, imagePreviewUrl,
@@ -455,9 +468,14 @@ export function PdfEnginePage({
     const xPts = (e.clientX - rect.left) / scale
     const yFromTopPts = (e.clientY - rect.top) / scale
 
-    // An asset from the library is checked FIRST. A drag out of the panel
-    // carries no file at all, so asking for one would simply come back empty
-    // and the drop would be silently ignored.
+    // The panel drags are checked FIRST. Neither carries a file at all, so
+    // asking for one would simply come back empty and the drop would be
+    // silently ignored.
+    const product = productFromDrag(e.dataTransfer)
+    if (product) {
+      onDropProductOnPage(pageIndex, product, xPts, yFromTopPts)
+      return
+    }
     const assetId = assetIdFromDrag(e.dataTransfer)
     if (assetId) {
       onDropAssetOnPage(pageIndex, assetId, xPts, yFromTopPts)
@@ -578,6 +596,16 @@ export function PdfEnginePage({
               e.stopPropagation()
               setDropSlot(null)
               setDropPage(false)
+              // A PRODUCT replaces the picture, unlike an asset above. That is
+              // the difference between the two: a logo goes on top of a photo,
+              // but a product's photo IS the photo — dropping one onto a tile
+              // means "this tile now shows that product", which is the single
+              // commonest act in building a catalogue page.
+              const product = productFromDrag(e.dataTransfer)
+              if (product) {
+                onDropProductOnImage(pageIndex, image.imageIndex, product)
+                return
+              }
               const file = imageFromDrag(e.dataTransfer)
               if (file) onDropOnImage(pageIndex, image.imageIndex, file)
             }}

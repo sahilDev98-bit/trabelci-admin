@@ -14,6 +14,9 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import type { EngineTextLine, PagePlanRequest } from "@/lib/pdf-engine"
 import type { CatalogProduct } from "@/features/catalogProducts/types"
+import { fetchProductCoverFile } from "@/features/catalogProducts/api"
+import { toProductFieldLanguage } from "./productFields"
+import { PRODUCT_BLOCK_FIELD_IDS, planProductBlock, productBlockLines } from "./productBlock"
 import { fetchPdfAssetFile } from "@/features/pdfAssets/api"
 import type { PdfAsset } from "@/features/pdfAssets/types"
 
@@ -106,7 +109,7 @@ interface SelectedLine {
 }
 
 export function PdfEngineEditorPage() {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   const navigate = useNavigate()
   const { templateId } = useParams({ strict: false }) as { templateId?: string }
   const templateQuery = usePdfTemplateQuery(templateId ?? "")
@@ -834,6 +837,136 @@ export function PdfEngineEditorPage() {
     }
   }
 
+  // ── Products dropped onto a page ──────────────────────────────────────────
+
+  /**
+   * A product dropped onto bare paper becomes a BLOCK: its photo, with its key
+   * details beneath it, as one unit.
+   *
+   * Why a block rather than just the photo — the client's document is explicit
+   * that a dropped product must be understood as a product and not "simply an
+   * image", and a catalogue tile is a picture with its name, code, size and
+   * price under it. Dropping the photo alone would leave every one of those to
+   * be added by hand, six clicks at a time.
+   *
+   * The geometry is worked out in full BEFORE anything is written (see
+   * planProductBlock), because placing a block is several engine calls and a
+   * half-placed block cannot be undone as one thing.
+   */
+  const handleDropProductOnPage = async (
+    pageIndex: number, product: CatalogProduct, xPts: number, yFromTopPts: number,
+  ) => {
+    const page = doc.pages[pageIndex]
+    if (!page) return
+
+    const language = toProductFieldLanguage(i18n.language)
+    const lines = productBlockLines(product, language)
+
+    // The photo is fetched first, and a failure here must not stop the block:
+    // a product with no picture — or one whose picture cannot be read — still
+    // has details worth placing. Its absence is reported once, quietly.
+    let file: File | null = null
+    let imagePx: { width: number; height: number } | null = null
+    if (product.coverUrl) {
+      try {
+        file = await fetchProductCoverFile(product)
+        imagePx = await readImageSize(file)
+      } catch (err) {
+        file = null
+        imagePx = null
+        toast.error(err instanceof Error ? err.message : String(err))
+      }
+    }
+
+    if (!file && lines.length === 0) {
+      toast.error(t("pdfTemplates.productBlockEmpty", "This product has no photo and no details to place."))
+      return
+    }
+
+    const plan = planProductBlock(lines, {
+      page,
+      dropXPts: xPts,
+      dropYFromTopPts: yFromTopPts,
+      imagePx,
+      imageWidthPts: NEW_IMAGE_WIDTH_PTS,
+      fontSizePts: NEW_TEXT_SIZE_PTS,
+      lineStepPts: PRODUCT_STACK_STEP_PTS,
+      marginPts: NEW_OVERLAY_INSET_PTS / 2,
+    })
+
+    try {
+      if (plan.image && file) {
+        await doc.addImageOverlay(pageIndex, plan.image, file)
+      }
+      for (const line of plan.lines) {
+        await doc.addTextOverlay(pageIndex, {
+          text: line.text,
+          x: line.x,
+          y: line.baselineY,
+          width: line.width,
+          fontSize: line.fontSize,
+          color: { r: 17, g: 17, b: 17 },
+        })
+      }
+      // A run of details added from the panel stacks under the last one
+      // placed. A dropped block ends that run — the next detail clicked should
+      // not land under a block that was positioned by hand somewhere else.
+      productRunAnchor.current = null
+      // Text is only shown in text mode, so a block dropped while looking at
+      // the images layer would otherwise appear to have lost its details.
+      if (plan.lines.length > 0) setContentMode("text")
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : String(err))
+    }
+  }
+
+  /**
+   * Clicked rather than dragged.
+   *
+   * Kept alongside dragging for the same reason the asset library keeps both:
+   * dragging chooses the exact spot, but clicking is faster when the block
+   * will be nudged into place anyway, and it is the only route available from
+   * a keyboard.
+   *
+   * Placed in a clear space rather than at a fixed corner, so placing three
+   * products one after another does not stack them on top of each other.
+   */
+  const placeProductOnVisiblePage = () => {
+    if (!product) return
+    const pageIndex = visiblePageIndex()
+    const page = doc.pages[pageIndex]
+    if (!page) return
+    // Roughly what a block occupies, which is all findFreeSpot needs to keep
+    // it clear of what is already on the page.
+    const size = {
+      width: NEW_IMAGE_WIDTH_PTS,
+      height: NEW_IMAGE_WIDTH_PTS + PRODUCT_STACK_STEP_PTS * PRODUCT_BLOCK_FIELD_IDS.length,
+    }
+    const spot = findFreeSpot(page, occupiedBoxes(pageIndex), size)
+    // findFreeSpot reports a box in PDF coordinates, whose y is its BOTTOM
+    // edge from the bottom of the page; the drop handler wants the block's TOP
+    // edge measured from the top.
+    void handleDropProductOnPage(
+      pageIndex, product, spot.x, page.heightPts - spot.y - size.height)
+  }
+
+  /** A product dropped onto an existing picture: that picture becomes the
+   * product's photo, keeping the slot's position, size and shape. */
+  const handleDropProductOnImage = async (
+    pageIndex: number, imageIndex: number, product: CatalogProduct,
+  ) => {
+    if (!product.coverUrl) {
+      toast.error(t("pdfTemplates.productNoPhoto", "This product has no photo."))
+      return
+    }
+    try {
+      const file = await fetchProductCoverFile(product)
+      await doc.replaceImage(pageIndex, imageIndex, file)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : String(err))
+    }
+  }
+
   // ── Duplicate, copy and paste ─────────────────────────────────────────────
 
   /**
@@ -1347,6 +1480,10 @@ export function PdfEngineEditorPage() {
     onDropOnPage: (pageIndex: number, file: File, x: number, y: number) =>
       void handleDropOnPage(pageIndex, file, x, y),
     onDropAssetOnPage: handleDropAssetOnPage,
+    onDropProductOnPage: (pageIndex: number, dropped: CatalogProduct, x: number, y: number) =>
+      void handleDropProductOnPage(pageIndex, dropped, x, y),
+    onDropProductOnImage: (pageIndex: number, imageIndex: number, dropped: CatalogProduct) =>
+      void handleDropProductOnImage(pageIndex, imageIndex, dropped),
     onTransformImage: (
       pageIndex: number, imageIndex: number,
       rect: { x: number; y: number; width: number; height: number },
@@ -1505,6 +1642,7 @@ export function PdfEngineEditorPage() {
             onPickProduct={setProduct}
             mode={productFieldMode}
             onApply={applyProductField}
+            onPlaceProduct={placeProductOnVisiblePage}
             onClose={() => setRightPanel(null)}
           />
         ) : rightPanel === "layers" ? (

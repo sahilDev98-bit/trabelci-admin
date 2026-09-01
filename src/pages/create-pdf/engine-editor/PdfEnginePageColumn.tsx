@@ -1,4 +1,5 @@
 import type { EngineTextLine } from "@/lib/pdf-engine"
+import type { CatalogProduct } from "@/features/catalogProducts/types"
 import type { PdfContentMode } from "../pdfEditorTypes"
 import { PdfEnginePage } from "./PdfEnginePage"
 import type { UsePdfEngineDocumentResult } from "./usePdfEngineDocument"
@@ -40,6 +41,10 @@ interface PdfEnginePageColumnProps {
   onDropOnImage: (pageIndex: number, imageIndex: number, file: File) => void
   onDropOnPage: (pageIndex: number, file: File, xPts: number, yFromTopPts: number) => void
   onDropAssetOnPage: (pageIndex: number, assetId: string, xPts: number, yFromTopPts: number) => void
+  onDropProductOnPage: (
+    pageIndex: number, product: CatalogProduct, xPts: number, yFromTopPts: number,
+  ) => void
+  onDropProductOnImage: (pageIndex: number, imageIndex: number, product: CatalogProduct) => void
   locks: LockSet
   cropping: { pageIndex: number; imageIndex: number } | null
   onCropCancel: () => void
@@ -80,7 +85,8 @@ export function PdfEnginePageColumn({
   doc, displayWidth, gutter, columnRef, contentMode, selection, onSelect,
   drag, onMoveStart, originPatch, imagePreview,
   onEditLine, onReplaceImage, onReplaceVector,
-  onDropOnImage, onDropOnPage, onDropAssetOnPage, locks, alsoSelected,
+  onDropOnImage, onDropOnPage, onDropAssetOnPage,
+  onDropProductOnPage, onDropProductOnImage, locks, alsoSelected,
   cropping, onCropCancel, onCropCommit,
   onTransformImage, onTransformVector, onResizeText,
 }: PdfEnginePageColumnProps) {
@@ -120,6 +126,8 @@ export function PdfEnginePageColumn({
             onDropOnImage={onDropOnImage}
             onDropOnPage={onDropOnPage}
             onDropAssetOnPage={onDropAssetOnPage}
+            onDropProductOnPage={onDropProductOnPage}
+            onDropProductOnImage={onDropProductOnImage}
             locks={locks}
             alsoSelected={alsoSelected}
             cropping={cropping}

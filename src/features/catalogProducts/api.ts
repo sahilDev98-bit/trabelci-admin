@@ -112,6 +112,31 @@ export async function searchCatalogProducts(term: string): Promise<CatalogProduc
 }
 
 /**
+ * A product's cover photo as a File, ready to embed.
+ *
+ * Goes through OUR API rather than straight at the image's own URL, and that
+ * is not a preference — it was measured. R2 serves product images without CORS
+ * headers, so from the admin's origin a fetch of `coverUrl` fails outright
+ * while the same fetch against a permissive host succeeds. The browser will
+ * still happily DISPLAY the image, which is why the panel's thumbnail points
+ * an <img> straight at coverUrl and needs none of this; embedding needs the
+ * bytes, and only the server can get them.
+ *
+ * There is no client-side way around it: drawing a cross-origin image to a
+ * canvas taints the canvas and reading it back throws.
+ */
+export async function fetchProductCoverFile(product: CatalogProduct): Promise<File> {
+  const blob = await apiFetch<Blob>(
+    `${API_ENDPOINTS.CATALOG_PRODUCTS}/${encodeURIComponent(product.id)}/image`,
+    { responseType: "blob" },
+  )
+  const type = blob.type === "image/png" ? "image/png" : "image/jpeg"
+  const extension = type === "image/png" ? "png" : "jpg"
+  // Named after the SKU so the file is recognisable if it is ever inspected.
+  return new File([blob], `product-${product.sku}.${extension}`, { type })
+}
+
+/**
  * Search results for the editor's product panel.
  *
  * `keepPreviousData` on purpose: the caller debounces keystrokes, so without

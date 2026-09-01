@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
-import { Loader2Icon, PackageSearchIcon, SearchIcon, XIcon } from "lucide-react"
+import {
+  ImageOffIcon, ImagePlusIcon, Loader2Icon, PackageSearchIcon, SearchIcon, XIcon,
+} from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -10,6 +12,7 @@ import {
   PRODUCT_FIELD_GROUPS, productDisplayName, resolveProductFields,
   toProductFieldLanguage, type ResolvedProductField,
 } from "./productFields"
+import { setProductDragData } from "./productDrag"
 
 /**
  * The product side of the editor: find a product, then pour its details into
@@ -54,6 +57,10 @@ interface PdfProductPanelProps {
    */
   mode: "replace" | "add"
   onApply: (value: string) => void
+  /** Places the whole product — photo plus its key details — on the page in
+   * view. The click equivalent of dragging the card, and the only route
+   * available from a keyboard. */
+  onPlaceProduct: () => void
   onClose: () => void
 }
 
@@ -67,7 +74,7 @@ function useDebounced<T>(value: T, delayMs: number): T {
 }
 
 export function PdfProductPanel({
-  product, onPickProduct, mode, onApply, onClose,
+  product, onPickProduct, mode, onApply, onPlaceProduct, onClose,
 }: PdfProductPanelProps) {
   const { t, i18n } = useTranslation()
   const [search, setSearch] = useState("")
@@ -201,11 +208,63 @@ export function PdfProductPanel({
 
       {product && (
         <>
+          {/* The chosen product, as a card you can pick up.
+              Draggable as a whole rather than by a separate handle: the card
+              IS the product, and a handle would be one more thing to find.
+              The click alternative below it matters as much — dragging is not
+              available from a keyboard. */}
+          <div
+            data-pdf-product-card
+            draggable
+            onDragStart={(e) => setProductDragData(e.dataTransfer, product)}
+            className="flex shrink-0 cursor-grab items-center gap-2 border-b px-3 py-2 active:cursor-grabbing"
+            title={t("pdfTemplates.productDragHint", "Drag onto the page to place this product")}
+          >
+            {product.coverUrl ? (
+              // Straight at the image's own URL. Displaying needs no CORS —
+              // only reading the bytes does, which is what the API proxy is
+              // for when the photo is actually placed.
+              <img
+                src={product.coverUrl}
+                alt=""
+                draggable={false}
+                className="size-10 shrink-0 rounded border object-cover"
+              />
+            ) : (
+              <span className="flex size-10 shrink-0 items-center justify-center rounded border bg-muted">
+                <ImageOffIcon className="size-4 text-muted-foreground" />
+              </span>
+            )}
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-sm font-medium">{productDisplayName(product)}</p>
+              <p className="truncate text-xs text-muted-foreground">
+                {[product.sku, product.skuMeta?.supplier ?? product.supplierName]
+                  .filter(Boolean).join(" · ")}
+              </p>
+            </div>
+          </div>
+
           <div className="shrink-0 border-b px-3 py-2">
-            <p className="truncate text-sm font-medium">{productDisplayName(product)}</p>
-            <p className="truncate text-xs text-muted-foreground">
-              {[product.sku, product.skuMeta?.supplier ?? product.supplierName]
-                .filter(Boolean).join(" · ")}
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className="w-full gap-1.5"
+              data-pdf-place-product
+              onClick={onPlaceProduct}
+              title={t(
+                "pdfTemplates.productPlaceHint",
+                "Adds the photo and the main details to the page as one block",
+              )}
+            >
+              <ImagePlusIcon className="size-3.5" />
+              {t("pdfTemplates.productPlace", "Place product on page")}
+            </Button>
+            <p className="mt-1.5 text-xs text-muted-foreground">
+              {t(
+                "pdfTemplates.productDragExplain",
+                "Or drag the card above onto the page. Drop it on a picture to swap that picture for this product's photo.",
+              )}
             </p>
           </div>
 

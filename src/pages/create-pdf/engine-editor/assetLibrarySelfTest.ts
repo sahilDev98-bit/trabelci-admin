@@ -279,7 +279,9 @@ async function measurePageDrops(out: AssetLibraryTestResult): Promise<AssetLibra
         // recognised and the page fell through to "dragged off the desktop".
         out.errors.push("an asset drop was handled as a plain file drop")
       },
-      onDropAssetOnPage: (_pageIndex: number, assetId: string, xPts: number, yFromTopPts: number) => {
+      onDropProductOnPage: () => {},
+    onDropProductOnImage: () => {},
+    onDropAssetOnPage: (_pageIndex: number, assetId: string, xPts: number, yFromTopPts: number) => {
         out.droppedAssetId = assetId
         out.droppedXPts = Math.round(xPts)
         out.droppedYPts = Math.round(yFromTopPts)
@@ -584,7 +586,9 @@ export async function showWorkspaceForDrag(pageCount = 12): Promise<void> {
     contentMode: "text" as const, selection: null, onSelect: () => {},
     drag: null, onMoveStart: () => {}, originPatch: null, imagePreview: null,
     onEditLine: () => {}, onReplaceImage: () => {}, onReplaceVector: () => {},
-    onDropOnImage: () => {}, onDropOnPage: () => {}, onDropAssetOnPage: () => {},
+    onDropOnImage: () => {}, onDropOnPage: () => {}, onDropProductOnPage: () => {},
+    onDropProductOnImage: () => {},
+    onDropAssetOnPage: () => {},
     locks: new Set<string>(),
     alsoSelected: [],
     cropping: null,

@@ -173,7 +173,9 @@ export async function runWorkspaceSelfTest(): Promise<WorkspaceTestResult> {
       onReplaceImage: () => {},
       onReplaceVector: () => {},
       onDropOnImage: () => {},
-      onDropAssetOnPage: () => {},
+      onDropProductOnPage: () => {},
+    onDropProductOnImage: () => {},
+    onDropAssetOnPage: () => {},
       // Nothing is locked in these measurements.
       locks: new Set<string>(),
     alsoSelected: [],
