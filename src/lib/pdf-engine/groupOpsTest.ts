@@ -222,3 +222,155 @@ export async function runNaiveDeleteDemo(pdfUrl = SAMPLE_PDF_URL): Promise<{
     engine.terminate?.()
   }
 }
+
+/**
+ * Does a group survive being operated on?
+ *
+ * The complaint this answers: after rotating a group it deselected itself, so
+ * rotating twice meant re-selecting everything in between. The fix is that
+ * the engine reports where the objects ended up.
+ *
+ * The check that actually matters is not "something is still selected" — it
+ * is that the reported slots are THE SAME OBJECTS. A stale or invented index
+ * would also be "still selected", and would then apply the next operation to
+ * whatever had taken that number, which is worse than deselecting.
+ *
+ * So the objects are identified by their TEXT across the operation, and the
+ * indices that come back are looked up to confirm they name those same words.
+ */
+export interface SelectionSurvivalResult {
+  ok: boolean
+  errors: string[]
+  selectedBefore: string[]
+  reportedAfterRotate: string[]
+  reportedAfterMove: string[]
+  /** Rotating twice in a row without re-selecting — the actual complaint. */
+  rotatedTwice: boolean
+  /** Copying keeps the ORIGINALS selected, so the group can be copied again. */
+  reportedAfterDuplicate: string[]
+  lineCountAfterDuplicate: number
+  boxAfterTwoTurns: string | null
+  boxAfterOneTurn: string | null
+}
+
+export async function runSelectionSurvivalTest(
+  pdfUrl = SAMPLE_PDF_URL,
+): Promise<SelectionSurvivalResult> {
+  const out: SelectionSurvivalResult = {
+    ok: false, errors: [], selectedBefore: [], reportedAfterRotate: [],
+    reportedAfterMove: [], rotatedTwice: false,
+    reportedAfterDuplicate: [], lineCountAfterDuplicate: 0,
+    boxAfterTwoTurns: null, boxAfterOneTurn: null,
+  }
+  const engine = new PdfEngineClient()
+  let docId: string | null = null
+
+  try {
+    const res = await fetch(pdfUrl)
+    const opened = await engine.open(await res.arrayBuffer())
+    docId = opened.docId
+
+    let pageIndex = -1
+    let lines: { text: string }[] = []
+    for (let i = 0; i < opened.pages.length; i++) {
+      const listed = await engine.listTextLines(docId, i)
+      if (listed.lines.length >= 3) { pageIndex = i; lines = listed.lines; break }
+    }
+    if (pageIndex < 0) throw new Error("no page with 3+ text lines")
+
+    const chosen = [0, 1]
+    out.selectedBefore = chosen.map((i) => lines[i].text)
+
+    // ── Rotate, and see what comes back ──────────────────────────────
+    const turned = await engine.transformSlots(
+      docId, pageIndex, chosen.map((index) => ({ kind: "text" as const, index })), "rotate-left")
+
+    if ((turned.slots ?? []).length !== chosen.length) {
+      out.errors.push(
+        `rotating ${chosen.length} things reported ${(turned.slots ?? []).length} back —`
+        + " the selection cannot follow them and will be cleared")
+    }
+
+    const afterRotate = await engine.listTextLines(docId, pageIndex)
+    out.reportedAfterRotate = (turned.slots ?? [])
+      .map((s) => afterRotate.lines[s.index]?.text ?? `<no line at ${s.index}>`)
+
+    // THE check. The reported numbers must name the same words. If they name
+    // something else, the selection is now pointing at objects the user never
+    // chose — and the next rotate would turn those instead.
+    for (const text of out.selectedBefore) {
+      if (!out.reportedAfterRotate.includes(text)) {
+        out.errors.push(
+          `"${text}" was selected and rotated, but the selection now points at`
+          + ` ${JSON.stringify(out.reportedAfterRotate)}`)
+      }
+    }
+
+    const boxOnce = afterRotate.lines[turned.slots[0].index]?.bbox
+    out.boxAfterOneTurn = boxOnce ? `${boxOnce.left.toFixed(0)},${boxOnce.bottom.toFixed(0)}` : null
+
+    // ── Rotate AGAIN using only what came back ───────────────────────
+    // No re-selecting in between: this is exactly what the user could not do.
+    const twice = await engine.transformSlots(docId, pageIndex, turned.slots, "rotate-left")
+    const afterTwice = await engine.listTextLines(docId, pageIndex)
+    const namesAfterTwice = (twice.slots ?? [])
+      .map((s) => afterTwice.lines[s.index]?.text ?? "<missing>")
+    out.rotatedTwice = out.selectedBefore.every((t) => namesAfterTwice.includes(t))
+    if (!out.rotatedTwice) {
+      out.errors.push(
+        `after a second rotate the selection names ${JSON.stringify(namesAfterTwice)},`
+        + ` expected ${JSON.stringify(out.selectedBefore)}`)
+    }
+
+    const boxTwice = afterTwice.lines[twice.slots[0]?.index]?.bbox
+    out.boxAfterTwoTurns = boxTwice ? `${boxTwice.left.toFixed(0)},${boxTwice.bottom.toFixed(0)}` : null
+    // Two quarter-turns is a half-turn, so it must have actually moved again
+    // rather than the second call quietly doing nothing.
+    if (out.boxAfterOneTurn === out.boxAfterTwoTurns) {
+      out.errors.push("the second rotate changed nothing — it did not act on the reported slots")
+    }
+
+    // ── And the same for moving ──────────────────────────────────────
+    const moved = await engine.translateSlots(docId, pageIndex, twice.slots, 10, -10)
+    const afterMove = await engine.listTextLines(docId, pageIndex)
+    out.reportedAfterMove = (moved.slots ?? [])
+      .map((s) => afterMove.lines[s.index]?.text ?? `<no line at ${s.index}>`)
+    for (const text of out.selectedBefore) {
+      if (!out.reportedAfterMove.includes(text)) {
+        out.errors.push(
+          `after moving the group, the selection points at`
+          + ` ${JSON.stringify(out.reportedAfterMove)} instead of the things that moved`)
+      }
+    }
+    // ── And for copying ─────────────────────────────────────────────
+    // The originals must stay selected: that is what lets a group be copied
+    // twice, or dragged away leaving the copies behind.
+    const before = (await engine.listTextLines(docId, pageIndex)).lines.length
+    const duplicated = await engine.duplicateSlots(docId, pageIndex, moved.slots)
+    const afterDup = await engine.listTextLines(docId, pageIndex)
+    out.lineCountAfterDuplicate = afterDup.lines.length
+    out.reportedAfterDuplicate = (duplicated.slots ?? [])
+      .map((s) => afterDup.lines[s.index]?.text ?? `<no line at ${s.index}>`)
+
+    if (out.lineCountAfterDuplicate !== before + moved.slots.length) {
+      out.errors.push(
+        `copying ${moved.slots.length} lines took the page from ${before} to`
+        + ` ${out.lineCountAfterDuplicate}; expected ${before + moved.slots.length}`)
+    }
+    for (const text of out.selectedBefore) {
+      if (!out.reportedAfterDuplicate.includes(text)) {
+        out.errors.push(
+          `after copying, the selection points at ${JSON.stringify(out.reportedAfterDuplicate)}`
+          + ` instead of the originals ${JSON.stringify(out.selectedBefore)}`)
+      }
+    }
+  } catch (err) {
+    out.errors.push(String(err))
+  } finally {
+    if (docId) { try { await engine.close(docId) } catch { /* best effort */ } }
+    engine.terminate?.()
+  }
+
+  out.ok = out.errors.length === 0
+  return out
+}

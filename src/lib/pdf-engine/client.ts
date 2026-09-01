@@ -267,6 +267,15 @@ export class PdfEngineClient {
     return this.call("removeSlots", { docId, pageIndex, slots })
   }
 
+  /** Copy several slots at once. Resolves with where the ORIGINALS ended up,
+   * so they can stay selected. */
+  duplicateSlots(
+    docId: string, pageIndex: number,
+    slots: { kind: "text" | "image" | "vector"; index: number }[],
+  ) {
+    return this.call("duplicateSlots", { docId, pageIndex, slots })
+  }
+
   /** Rotate or flip several slots as one unit, about their shared centre. */
   transformSlots(
     docId: string, pageIndex: number,

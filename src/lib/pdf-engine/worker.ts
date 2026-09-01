@@ -78,7 +78,7 @@ const MUTATING_METHODS = new Set<EngineMethodName>([
   "replaceVectorGroupWithImage", "removeVectorGroup", "reorderLayer",
   "setVectorGroupRect", "transformVectorGroup", "transformTextLine",
   "applyPagePlan", "addBlankPage", "duplicateSlot", "translateSlots", "cropImage",
-  "removeSlots", "transformSlots",
+  "removeSlots", "transformSlots", "duplicateSlots",
 ])
 
 const docs = new Map<string, OpenDoc>()
@@ -120,6 +120,109 @@ function withPage<T>(pdfium: WrappedPdfiumModule, handle: number, pageIndex: num
     return fn(page)
   } finally {
     pdfium.FPDF_ClosePage(page)
+  }
+}
+
+/**
+ * Where a set of objects ENDED UP, after an operation renumbered them.
+ *
+ * The point of this is keeping a selection alive. A slot index is a position,
+ * so moving or turning a group renumbers it, and the editor's held indices
+ * become wrong the instant the operation lands. Clearing the selection was
+ * the safe answer and a bad one: after every rotate the user had to
+ * re-select everything to rotate again.
+ *
+ * A HANDLE, unlike an index, is an identity. It survives a transform — the
+ * object is changed in place, never recreated — so the objects can be found
+ * again afterwards and their new numbers reported back.
+ *
+ * Deduplicated, because two selected lines can land on one baseline and be
+ * grouped into a single line by the operation; reporting that line twice
+ * would put a duplicate in the selection.
+ */
+function locateSlots(
+  pdfium: WrappedPdfiumModule, page: number, scratch: OpenDoc["scratch"],
+  anchors: { kind: "text" | "image" | "vector"; handle: number }[],
+): { kind: "text" | "image" | "vector"; index: number }[] {
+  const textLines = groupIntoLines(listTextObjects(pdfium, page, scratch).filter(isEditableText))
+  const images = listImageObjects(pdfium, page, scratch)
+  const groups = listVectorGroups(pdfium, page, scratch)
+
+  const found: { kind: "text" | "image" | "vector"; index: number }[] = []
+  const seen = new Set<string>()
+  for (const anchor of anchors) {
+    let index = -1
+    if (anchor.kind === "text") {
+      index = textLines.findIndex((l) => l.objects.some((o) => o.handle === anchor.handle))
+    } else if (anchor.kind === "image") {
+      index = images.findIndex((i) => i.handle === anchor.handle)
+    } else {
+      index = groups.findIndex((g) => g.handles.includes(anchor.handle))
+    }
+    if (index < 0) continue
+    const key = `${anchor.kind}:${index}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    found.push({ kind: anchor.kind, index })
+  }
+  return found
+}
+
+/**
+ * The same idea as locateSlots, but by BOX rather than by handle.
+ *
+ * Needed because a handle is only an identity WITHIN one page load. Close the
+ * page and open it again and the handles are new — measured: reporting slots
+ * by handle works for turning and moving, which happen inside a single
+ * withPage, and returns the wrong objects entirely after duplicating, which
+ * opens the page several times.
+ *
+ * A box survives that, and it identifies an object exactly as long as the
+ * object has not moved — which is precisely the case this is used for.
+ */
+function locateSlotsByBox(
+  pdfium: WrappedPdfiumModule, page: number, scratch: OpenDoc["scratch"],
+  wanted: { kind: "text" | "image" | "vector"; bbox: PdfRect }[],
+): { kind: "text" | "image" | "vector"; index: number }[] {
+  const textLines = groupIntoLines(listTextObjects(pdfium, page, scratch).filter(isEditableText))
+  const images = listImageObjects(pdfium, page, scratch)
+  const groups = listVectorGroups(pdfium, page, scratch)
+
+  // Tight. A copy lands a visible distance from its original, so this can
+  // never confuse the two; loose enough only for floating-point drift.
+  const near = (a: PdfRect, b: PdfRect) =>
+    Math.abs(a.left - b.left) < 0.5 && Math.abs(a.bottom - b.bottom) < 0.5
+    && Math.abs(a.right - b.right) < 0.5 && Math.abs(a.top - b.top) < 0.5
+
+  const found: { kind: "text" | "image" | "vector"; index: number }[] = []
+  const seen = new Set<string>()
+  for (const { kind, bbox } of wanted) {
+    let index = -1
+    if (kind === "text") {
+      index = textLines.findIndex((line) => near(lineBox(line), bbox))
+    } else if (kind === "image") {
+      index = images.findIndex((i) => i.bounds !== null && near(i.bounds, bbox))
+    } else {
+      index = groups.findIndex((g) => near(g.bbox, bbox))
+    }
+    if (index < 0) continue
+    const key = `${kind}:${index}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    found.push({ kind, index })
+  }
+  return found
+}
+
+/** A grouped line's box: the union of the pieces it was assembled from. */
+function lineBox(line: { objects: { bounds: PdfRect | null }[] }): PdfRect {
+  const boxes = line.objects.map((o) => o.bounds).filter((b): b is PdfRect => b !== null)
+  if (boxes.length === 0) return { left: 0, bottom: 0, right: 0, top: 0 }
+  return {
+    left: Math.min(...boxes.map((b) => b.left)),
+    bottom: Math.min(...boxes.map((b) => b.bottom)),
+    right: Math.max(...boxes.map((b) => b.right)),
+    top: Math.max(...boxes.map((b) => b.top)),
   }
 }
 
@@ -372,6 +475,9 @@ const handlers: {
       // position, and moving one object renumbers the others — resolving as
       // we go would translate whatever had inherited the next number.
       const handles: number[] = []
+      // One per slot, so the moved objects can be found again afterwards and
+      // stay selected — moving renumbers them exactly as turning does.
+      const anchors: { kind: "text" | "image" | "vector"; handle: number }[] = []
       const textLines = groupIntoLines(
         listTextObjects(pdfium, page, doc.scratch).filter(isEditableText))
       const images = listImageObjects(pdfium, page, doc.scratch)
@@ -380,16 +486,22 @@ const handlers: {
       for (const slot of slots) {
         if (slot.kind === "text") {
           const line = textLines[slot.index]
-          if (line) handles.push(...line.objects.map((o) => o.handle))
+          if (!line) continue
+          handles.push(...line.objects.map((o) => o.handle))
+          anchors.push({ kind: "text", handle: line.objects[0].handle })
         } else if (slot.kind === "image") {
           const image = images[slot.index]
-          if (image) handles.push(image.handle)
+          if (!image) continue
+          handles.push(image.handle)
+          anchors.push({ kind: "image", handle: image.handle })
         } else {
           const group = groups[slot.index]
-          if (group) handles.push(...group.handles)
+          if (!group) continue
+          handles.push(...group.handles)
+          anchors.push({ kind: "vector", handle: group.handles[0] })
         }
       }
-      if (handles.length === 0) return { ok: false, moved: 0 }
+      if (handles.length === 0) return { ok: false, moved: 0, slots: [] }
 
       for (const handle of handles) {
         pdfium.FPDFPageObj_Transform(handle, 1, 0, 0, 1, dxPts, dyPts)
@@ -398,7 +510,11 @@ const handlers: {
         pdfium.FPDFPageObj_TransformClipPath(handle, 1, 0, 0, 1, dxPts, dyPts)
       }
       pdfium.FPDFPage_GenerateContent(page)
-      return { ok: true, moved: handles.length }
+      return {
+        ok: true,
+        moved: handles.length,
+        slots: locateSlots(pdfium, page, doc.scratch, anchors),
+      }
     })
   },
 
@@ -467,6 +583,10 @@ const handlers: {
 
       const handles: number[] = []
       const boxes: { left: number; bottom: number; right: number; top: number }[] = []
+      // One handle per SLOT, kept so the same objects can be found again
+      // after the turn has renumbered them — that is what lets the selection
+      // survive the operation.
+      const anchors: { kind: "text" | "image" | "vector"; handle: number }[] = []
 
       for (const slot of slots) {
         if (slot.kind === "text") {
@@ -474,19 +594,24 @@ const handlers: {
           if (!line) continue
           handles.push(...line.objects.map((o) => o.handle))
           for (const o of line.objects) if (o.bounds) boxes.push(o.bounds)
+          anchors.push({ kind: "text", handle: line.objects[0].handle })
         } else if (slot.kind === "image") {
           const image = images[slot.index]
           if (!image) continue
           handles.push(image.handle)
           if (image.bounds) boxes.push(image.bounds)
+          anchors.push({ kind: "image", handle: image.handle })
         } else {
           const group = groups[slot.index]
           if (!group) continue
           handles.push(...group.handles)
           boxes.push(group.bbox)
+          anchors.push({ kind: "vector", handle: group.handles[0] })
         }
       }
-      if (handles.length === 0 || boxes.length === 0) return { ok: false, transformed: 0 }
+      if (handles.length === 0 || boxes.length === 0) {
+        return { ok: false, transformed: 0, slots: [] }
+      }
 
       // ONE box around the whole selection, and every object turned about
       // ITS centre. That is what makes a group rotate as a single unit — the
@@ -501,8 +626,71 @@ const handlers: {
 
       const r = transformObjectGroup(pdfium, page, handles, bbox, op)
       if (!r.ok) throw new Error(r.error ?? "could not turn the selection")
-      return { ok: true, transformed: handles.length }
+      // Reported so the caller can keep the same things selected. Without
+      // this the editor has to drop the selection, and turning something
+      // twice means selecting it all over again in between.
+      return {
+        ok: true,
+        transformed: handles.length,
+        slots: locateSlots(pdfium, page, doc.scratch, anchors),
+      }
     })
+  },
+
+  duplicateSlots: async ({ docId, pageIndex, slots }, ctx) => {
+    const doc = requireDoc(docId)
+    const { pdfium } = ctx
+
+    // The SOURCES are recorded before any copy is inserted, so they can be
+    // found again at the end. Inserting shifts index numbers around — a copy
+    // landing above an original pushes it down — and the selection has to
+    // survive that, or copying a group makes it fall apart.
+    //
+    // By BOX, not by handle. Duplicating opens and closes the page several
+    // times, and a handle is only an identity within ONE page load: recorded
+    // handles came back pointing at completely different lines. The originals
+    // do not move, so their boxes still name them exactly.
+    const sourceBoxes = withPage(pdfium, doc.handle, pageIndex, (page) => {
+      const textLines = groupIntoLines(
+        listTextObjects(pdfium, page, doc.scratch).filter(isEditableText))
+      const images = listImageObjects(pdfium, page, doc.scratch)
+      const groups = listVectorGroups(pdfium, page, doc.scratch)
+      const found: { kind: "text" | "image" | "vector"; bbox: PdfRect }[] = []
+      for (const slot of slots) {
+        if (slot.kind === "text") {
+          const line = textLines[slot.index]
+          if (line) found.push({ kind: "text", bbox: lineBox(line) })
+        } else if (slot.kind === "image") {
+          const image = images[slot.index]
+          if (image?.bounds) found.push({ kind: "image", bbox: image.bounds })
+        } else {
+          const group = groups[slot.index]
+          if (group) found.push({ kind: "vector", bbox: group.bbox })
+        }
+      }
+      return found
+    })
+
+    // LOWEST first. Text lines are numbered top-down by position and a copy
+    // lands below its original, so working upward means each insertion only
+    // renumbers lines that have already been dealt with.
+    const ordered = [...slots].sort((a, b) => b.index - a.index)
+    let copied = 0
+    for (const slot of ordered) {
+      const r = await handlers.duplicateSlot(
+        { docId, pageIndex, kind: slot.kind, index: slot.index }, ctx)
+      if (r.newIndex >= 0) copied++
+    }
+
+    return {
+      ok: copied > 0,
+      copied,
+      // Where the ORIGINALS are now. Keeping them selected — rather than the
+      // copies — means the group can be copied again, or dragged away leaving
+      // the copies behind, which is what "duplicate" is usually for.
+      slots: withPage(pdfium, doc.handle, pageIndex, (page) =>
+        locateSlotsByBox(pdfium, page, doc.scratch, sourceBoxes)),
+    }
   },
 
   duplicateSlot: async ({ docId, pageIndex, kind, index, toPageIndex, dxPts, dyPts }, { pdfium }) => {

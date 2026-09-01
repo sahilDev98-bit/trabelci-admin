@@ -56,6 +56,13 @@ export interface PageImageState {
   loaded: boolean
 }
 
+/** One slot on a page, by kind and position. A position, NOT an identity —
+ * it is only valid until the next edit on that page renumbers things. */
+export interface SlotRef {
+  kind: "text" | "image" | "vector"
+  index: number
+}
+
 export interface UsePdfEngineDocumentResult {
   phase: LoadPhase
   error: string | null
@@ -147,18 +154,23 @@ export interface UsePdfEngineDocumentResult {
     pageIndex: number,
     slots: { kind: "text" | "image" | "vector"; index: number }[],
   ) => Promise<void>
-  /** Rotate or flip several slots as one unit, about their shared centre. */
+  /** Copy several slots at once. Resolves to where the ORIGINALS ended up,
+   * since inserting copies renumbers everything around them. */
+  duplicateSlots: (pageIndex: number, slots: SlotRef[]) => Promise<SlotRef[]>
+  /** Rotate or flip several slots as one unit, about their shared centre.
+   * Resolves to where those slots ENDED UP, since turning renumbers them. */
   transformSlots: (
     pageIndex: number,
-    slots: { kind: "text" | "image" | "vector"; index: number }[],
+    slots: SlotRef[],
     op: "rotate-left" | "rotate-right" | "flip-horizontal" | "flip-vertical",
-  ) => Promise<void>
-  /** Shift several slots together by the same amount, in one operation. */
+  ) => Promise<SlotRef[]>
+  /** Shift several slots together by the same amount, in one operation.
+   * Resolves to where those slots ended up. */
   translateSlots: (
     pageIndex: number,
-    slots: { kind: "text" | "image" | "vector"; index: number }[],
+    slots: SlotRef[],
     dxPts: number, dyPts: number,
-  ) => Promise<void>
+  ) => Promise<SlotRef[]>
   /** Copy a slot. Resolves to the copy's index on the page it landed on, or
    * -1 if it could not be made. */
   duplicateSlot: (
@@ -736,8 +748,14 @@ export function usePdfEngineDocument(templateId: string | null | undefined): Use
     slots: { kind: "text" | "image" | "vector"; index: number }[],
     dxPts: number, dyPts: number,
   ) => {
+    // The engine's answer is RETURNED rather than dropped: it says where the
+    // moved objects ended up, which is what lets the caller keep them
+    // selected instead of clearing the selection after every nudge.
+    let moved: SlotRef[] = []
     await mutate(pageIndex, (id) =>
-      getEngine().translateSlots(id, pageIndex, slots, dxPts, dyPts).then(() => undefined))
+      getEngine().translateSlots(id, pageIndex, slots, dxPts, dyPts)
+        .then((r) => { moved = r.slots ?? [] }))
+    return moved
   }, [getEngine, mutate])
 
   const removeSlots = useCallback(async (
@@ -748,13 +766,26 @@ export function usePdfEngineDocument(templateId: string | null | undefined): Use
       getEngine().removeSlots(id, pageIndex, slots).then(() => undefined))
   }, [getEngine, mutate])
 
+  const duplicateSlots = useCallback(async (
+    pageIndex: number, slots: SlotRef[],
+  ) => {
+    let originals: SlotRef[] = []
+    await mutate(pageIndex, (id) =>
+      getEngine().duplicateSlots(id, pageIndex, slots)
+        .then((r) => { originals = r.slots ?? [] }))
+    return originals
+  }, [getEngine, mutate])
+
   const transformSlots = useCallback(async (
     pageIndex: number,
     slots: { kind: "text" | "image" | "vector"; index: number }[],
     op: "rotate-left" | "rotate-right" | "flip-horizontal" | "flip-vertical",
   ) => {
+    let turned: SlotRef[] = []
     await mutate(pageIndex, (id) =>
-      getEngine().transformSlots(id, pageIndex, slots, op).then(() => undefined))
+      getEngine().transformSlots(id, pageIndex, slots, op)
+        .then((r) => { turned = r.slots ?? [] }))
+    return turned
   }, [getEngine, mutate])
 
   const duplicateSlot = useCallback(async (
@@ -821,7 +852,7 @@ export function usePdfEngineDocument(templateId: string | null | undefined): Use
     removeVector, replaceVector, setVectorRect, transformVector, transformText, styleText, scaleText, alignText, transformImage, renderPage, editText, moveText, moveTextToPage, moveImageToPage, removeText,
     replaceImage, removeImage, setImageRect, addTextOverlay, addImageOverlay, applyPagePlan,
     canUndo: history.canUndo, canRedo: history.canRedo, undo, redo,
-    listLayers, reorderLayer, addBlankPage, duplicateSlot, translateSlots, removeSlots, transformSlots, cropImage,
+    listLayers, reorderLayer, addBlankPage, duplicateSlot, translateSlots, removeSlots, transformSlots, duplicateSlots, cropImage,
     save, busy, revision,
   }), [
     phase, error, downloadPercent, pages, docId, pageText, pageImages,
@@ -831,6 +862,6 @@ export function usePdfEngineDocument(templateId: string | null | undefined): Use
     renderPage, editText, moveText, moveTextToPage, moveImageToPage, removeText,
     replaceImage, removeImage, setImageRect, addTextOverlay, addImageOverlay,
     applyPagePlan, save, busy, revision, history, undo, redo,
-    listLayers, reorderLayer, addBlankPage, duplicateSlot, translateSlots, removeSlots, transformSlots, cropImage,
+    listLayers, reorderLayer, addBlankPage, duplicateSlot, translateSlots, removeSlots, transformSlots, duplicateSlots, cropImage,
   ])
 }

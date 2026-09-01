@@ -356,7 +356,13 @@ export interface EngineMethods {
       slots: { kind: "text" | "image" | "vector"; index: number }[]
       dxPts: number; dyPts: number
     }
-    result: { ok: boolean; moved: number }
+    /** `slots` is where those objects ENDED UP. Moving renumbers them, so
+     * without this the caller has to drop the selection — and a group that
+     * deselects itself every time you nudge it is unusable. */
+    result: {
+      ok: boolean; moved: number
+      slots: { kind: "text" | "image" | "vector"; index: number }[]
+    }
   }
   /**
    * Delete several slots in ONE operation.
@@ -375,6 +381,23 @@ export interface EngineMethods {
     result: { ok: boolean; removed: number }
   }
   /**
+   * Copy several slots in one operation.
+   *
+   * Reports where the ORIGINALS ended up, not the copies: inserting shifts
+   * index numbers around, so without this the caller cannot keep the group
+   * selected and copying it makes the selection fall apart.
+   */
+  duplicateSlots: {
+    params: {
+      docId: string; pageIndex: number
+      slots: { kind: "text" | "image" | "vector"; index: number }[]
+    }
+    result: {
+      ok: boolean; copied: number
+      slots: { kind: "text" | "image" | "vector"; index: number }[]
+    }
+  }
+  /**
    * Rotate or flip several slots as ONE unit.
    *
    * Every object turns about the selection's shared centre, so the group
@@ -387,7 +410,12 @@ export interface EngineMethods {
       slots: { kind: "text" | "image" | "vector"; index: number }[]
       op: "rotate-left" | "rotate-right" | "flip-horizontal" | "flip-vertical"
     }
-    result: { ok: boolean; transformed: number }
+    /** `slots` is where those objects ended up, so the same things can stay
+     * selected and be turned again. */
+    result: {
+      ok: boolean; transformed: number
+      slots: { kind: "text" | "image" | "vector"; index: number }[]
+    }
   }
   /**
    * Copy one slot, offset slightly from the original.

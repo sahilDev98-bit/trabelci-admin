@@ -22,7 +22,7 @@ import type { PdfAsset } from "@/features/pdfAssets/types"
 
 import type { PdfContentMode, PdfOrganizerMode } from "../pdfEditorTypes"
 import { PdfPageOrganizer, type OrganizerPage } from "../PdfPageOrganizer"
-import { usePdfEngineDocument } from "./usePdfEngineDocument"
+import { usePdfEngineDocument, type SlotRef } from "./usePdfEngineDocument"
 import { useCrossPageDrag, type CrossPageDrop } from "./useCrossPageDrag"
 import { dropToPagePoints, textMoveDelta, textPlacementOnPage, imagePlacement } from "./dropGeometry"
 import { CrossPageDragGhost } from "./CrossPageDragGhost"
@@ -538,6 +538,30 @@ export function PdfEngineEditorPage() {
   )
 
   /**
+   * Put the selection back on the same objects after an operation moved them.
+   *
+   * Group operations RENUMBER things — a slot index is a position, and
+   * turning or moving an object changes where it sits. The editor used to
+   * clear the selection for that reason, which was safe and horrible to use:
+   * every rotate had to be followed by selecting everything again before it
+   * could be rotated once more.
+   *
+   * The engine now reports where each object ended up, so the selection can
+   * follow them. It is only cleared when the engine could not find them,
+   * which is better than leaving it pointing somewhere wrong.
+   */
+  const reselect = useCallback((pageIndex: number, slots: SlotRef[]) => {
+    if (slots.length === 0) {
+      setSelection(null)
+      setAlsoSelected([])
+      return
+    }
+    const [first, ...rest] = slots
+    setSelection({ pageIndex, kind: first.kind, index: first.index })
+    setAlsoSelected(rest.map((s) => ({ pageIndex, kind: s.kind, index: s.index })))
+  }, [])
+
+  /**
    * Moves a whole group by the delta the dragged slot travelled.
    *
    * Sent as ONE engine call. A slot's index is its position, so moving the
@@ -547,12 +571,14 @@ export function PdfEngineEditorPage() {
   const moveGroupBy = useCallback((pageIndex: number, dxPts: number, dyPts: number) => {
     if (selectedGroup.length < 2) return false
     void doc.translateSlots(pageIndex, selectedGroup.map(({ kind, index }) => ({ kind, index })), dxPts, dyPts)
+      // The move renumbers everything, so the selection follows the objects
+      // to wherever the engine says they ended up — rather than being
+      // cleared, which used to mean a group came apart the moment you
+      // nudged it and had to be rebuilt to move it again.
+      .then((moved) => reselect(pageIndex, moved))
       .catch((err: unknown) => toast.error(err instanceof Error ? err.message : String(err)))
-    // Indices are renumbered by the move, so nothing may be held afterwards.
-    setSelection(null)
-    setAlsoSelected([])
     return true
-  }, [selectedGroup, doc])
+  }, [selectedGroup, doc, reselect])
 
   /**
    * Turn or mirror a whole group, as ONE shape.
@@ -569,13 +595,10 @@ export function PdfEngineEditorPage() {
     if (!selection || selectedGroup.length < 2) return false
     const { pageIndex } = selection
     void doc.transformSlots(pageIndex, selectedGroup.map(({ kind, index }) => ({ kind, index })), op)
+      .then((moved) => reselect(pageIndex, moved))
       .catch((err: unknown) => toast.error(err instanceof Error ? err.message : String(err)))
-    // Turning moves things, and text lines are numbered by where they sit,
-    // so every index held here is stale the moment this lands.
-    setSelection(null)
-    setAlsoSelected([])
     return true
-  }, [selection, selectedGroup, doc])
+  }, [selection, selectedGroup, doc, reselect])
 
   /**
    * Copy a whole group.
@@ -594,18 +617,22 @@ export function PdfEngineEditorPage() {
   const duplicateGroup = useCallback(async () => {
     if (!selection || selectedGroup.length < 2) return false
     const { pageIndex } = selection
-    const ordered = [...selectedGroup].sort((a, b) => b.index - a.index)
-    setSelection(null)
-    setAlsoSelected([])
     try {
-      for (const slot of ordered) {
-        await doc.duplicateSlot(pageIndex, slot.kind, slot.index)
-      }
+      // One engine call, which does the copying in the safe order and reports
+      // where the ORIGINALS ended up. Doing this from here instead would mean
+      // reading the page back through React state, which is not guaranteed to
+      // have caught up by the time the copy resolves — the selection would
+      // sometimes land on the right objects and sometimes not.
+      const originals = await doc.duplicateSlots(
+        pageIndex, selectedGroup.map(({ kind, index }) => ({ kind, index })))
+      reselect(pageIndex, originals)
     } catch (err) {
       toast.error(err instanceof Error ? err.message : String(err))
+      setSelection(null)
+      setAlsoSelected([])
     }
     return true
-  }, [selection, selectedGroup, doc])
+  }, [selection, selectedGroup, doc, reselect])
 
   /**
    * A move gesture has ended somewhere in the document.
