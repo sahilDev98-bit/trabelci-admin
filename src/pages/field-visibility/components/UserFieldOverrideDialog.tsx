@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next"
 import { Loader2Icon, SaveIcon, RotateCcwIcon } from "lucide-react"
 import { toast } from "sonner"
 
+import { ApiError } from "@/lib/apiClient"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -24,6 +25,10 @@ interface UserFieldOverrideDialogProps {
   user: UserFieldOverride | null
   fields: FieldDefinition[]
   bpVisibleFields: string[] | null
+  // Called when a save is rejected as stale (409) so the parent can refetch
+  // the users list — the dialog then closes rather than trying to reconcile
+  // its own local selection against data it can't see (BUG-029).
+  onConflict: () => void
 }
 
 export function UserFieldOverrideDialog({
@@ -32,6 +37,7 @@ export function UserFieldOverrideDialog({
   user,
   fields,
   bpVisibleFields,
+  onConflict,
 }: UserFieldOverrideDialogProps) {
   const { t } = useTranslation()
   const updateMutation = useUpdateFieldVisibilityMutation()
@@ -58,10 +64,22 @@ export function UserFieldOverrideDialog({
       await updateMutation.mutateAsync({
         userId: user.userId,
         visibleFields: Array.from(selected),
+        expectedUpdatedAt: user.updatedAt,
       })
       toast.success(t("fieldVisibility.userSaved", "User field visibility updated"))
       onOpenChange(false)
-    } catch {
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 409) {
+        onConflict()
+        onOpenChange(false)
+        toast.error(
+          t(
+            "fieldVisibility.userSaveConflict",
+            "This user's field visibility was changed by someone else. Please reopen and reapply your change.",
+          ),
+        )
+        return
+      }
       toast.error(t("fieldVisibility.userSaveError", "Failed to update user field visibility"))
     }
   }

@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next"
 import { Loader2Icon, SaveIcon, PencilIcon } from "lucide-react"
 import { toast } from "sonner"
 
+import { ApiError } from "@/lib/apiClient"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -70,9 +71,23 @@ export function FieldVisibilityPage() {
       await updateMutation.mutateAsync({
         businessPartnerId: Number(selectedBpId),
         visibleFields: Array.from(bpSelected),
+        expectedUpdatedAt: bpConfigQuery.data?.updatedAt ?? null,
       })
       toast.success(t("fieldVisibility.bpSaved", "Merchant field visibility updated"))
-    } catch {
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 409) {
+        // Someone else saved a change to this BP's config since we loaded it —
+        // refetch so the admin sees the current state before reapplying
+        // their edit, instead of silently losing it (BUG-029).
+        await bpConfigQuery.refetch()
+        toast.error(
+          t(
+            "fieldVisibility.bpSaveConflict",
+            "This configuration was changed by someone else. It's been refreshed below — please reapply your change.",
+          ),
+        )
+        return
+      }
       toast.error(t("fieldVisibility.bpSaveError", "Failed to update merchant field visibility"))
     }
   }
@@ -258,6 +273,7 @@ export function FieldVisibilityPage() {
         user={editingUser}
         fields={allFields}
         bpVisibleFields={bpConfigQuery.data?.visibleFields ?? null}
+        onConflict={() => bpUsersQuery.refetch()}
       />
     </div>
   )

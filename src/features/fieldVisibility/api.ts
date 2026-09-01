@@ -62,6 +62,11 @@ async function updateFieldVisibility(input: {
   businessPartnerId?: number
   userId?: string
   visibleFields: string[]
+  // The updatedAt of the config as last loaded by this client. The backend
+  // rejects the save with a 409 if the row has since changed (optimistic
+  // concurrency control — see BUG-029). Omit/null when creating a config for
+  // a BP/user that doesn't have one yet.
+  expectedUpdatedAt?: string | null
 }): Promise<FieldVisibilityConfig> {
   const res = await apiFetch<{
     success: true

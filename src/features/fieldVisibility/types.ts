@@ -21,6 +21,10 @@ export interface UserFieldOverride {
   role: string
   hasOverride: boolean
   visibleFields: string[] | null
+  // Timestamp of the override row this was loaded from (null if the user has
+  // no override yet). Round-tripped as expectedUpdatedAt on save so the
+  // backend can detect a concurrent edit (optimistic concurrency control).
+  updatedAt: string | null
 }
 
 export interface BPUsersFieldVisibilityResponse {
