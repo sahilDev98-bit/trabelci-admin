@@ -599,7 +599,11 @@ export async function showWorkspaceForDrag(pageCount = 12): Promise<void> {
   const toolbar = {
     selection: null, contentMode: "text" as const, onToggleContentMode: () => {},
     onAddText: () => {}, onAddImage: () => {},
-    assetPanelOpen: true, onToggleAssetPanel: () => {},
+    selectionCount: 0,
+      onTransformGroup: () => false,
+      thumbnailRailOpen: true,
+      onToggleThumbnailRail: () => {},
+      assetPanelOpen: true, onToggleAssetPanel: () => {},
     canUndo: false, canRedo: false, onUndo: () => {}, onRedo: () => {},
     onAddPage: () => {}, selectionLocked: false, onToggleLock: () => {},
       onDuplicate: () => {},
@@ -618,7 +622,8 @@ export async function showWorkspaceForDrag(pageCount = 12): Promise<void> {
   root.render(createElement(QueryClientProvider, { client },
     createElement(PdfEngineWorkspace, {
       doc, documentName: "drag test", onExit: () => {},
-      onDisplayWidthChange: () => {}, selection: null, column, toolbar,
+      onDisplayWidthChange: () => {},
+    thumbnailRailOpen: true, selection: null, column, toolbar,
       leftPanel: createElement(PdfAssetPanel, { onPlaceAsset: () => {}, onClose: () => {} }),
     })))
   await until("the workspace", () => !!document.querySelector("[data-pdf-workspace]"))

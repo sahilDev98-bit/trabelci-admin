@@ -145,7 +145,8 @@ async function runDirection(direction: "ltr" | "rtl"): Promise<RtlCase> {
       { pageIndex: 0, kind: "image", index: 0 }
 
     const render = () => root.render(createElement(PdfEngineWorkspace, {
-      doc, documentName: "rtl.pdf", onExit: () => {}, onDisplayWidthChange: () => {},
+      doc, documentName: "rtl.pdf", onExit: () => {}, thumbnailRailOpen: true,
+    onDisplayWidthChange: () => {},
       selection,
       column: {
         contentMode: "text", selection, onSelect: () => {}, drag: null,

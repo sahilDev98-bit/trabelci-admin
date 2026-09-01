@@ -73,6 +73,10 @@ interface PdfEngineWorkspaceProps {
     "documentName" | "onZoomToSelection" | "onExit"
   >
   selection: SlotSelection
+  /** Whether the page-thumbnail rail is showing. Owned by the editor rather
+   * than here so the toolbar's button and this layout read the same value —
+   * two copies of a toggle is two things to get out of step. */
+  thumbnailRailOpen: boolean
   /**
    * The product panel, when it is open.
    *
@@ -89,7 +93,8 @@ interface PdfEngineWorkspaceProps {
 }
 
 export function PdfEngineWorkspace({
-  doc, documentName, onExit, onDisplayWidthChange, column, toolbar, selection, panel, leftPanel,
+  doc, documentName, onExit, onDisplayWidthChange, column, toolbar, selection,
+  thumbnailRailOpen, panel, leftPanel,
 }: PdfEngineWorkspaceProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
   /** Sized to the SCALED content during a gesture, so the scrollbars match
@@ -468,11 +473,17 @@ export function PdfEngineWorkspace({
       />
 
       <div className="flex min-h-0 flex-1">
-        <PdfEngineThumbnailRail
-          doc={doc}
-          currentPage={currentPage}
-          onSelectPage={goToPage}
-        />
+        {/* Unmounted rather than hidden when closed. It renders a thumbnail
+            for every page through the engine, so leaving it mounted behind
+            display:none would keep paying for work nobody can see — on a
+            fourteen-page catalogue that is fourteen renders. */}
+        {thumbnailRailOpen && (
+          <PdfEngineThumbnailRail
+            doc={doc}
+            currentPage={currentPage}
+            onSelectPage={goToPage}
+          />
+        )}
 
         {leftPanel}
 
@@ -483,6 +494,7 @@ export function PdfEngineWorkspace({
       <div className="relative flex min-h-0 min-w-0 flex-1">
       <div
         ref={scrollRef}
+        data-pdf-page-area
         onScroll={onScroll}
         // Auto-scroll while dragging. On the SCROLLER rather than on each
         // page, so it keeps working in the gaps between pages and in the

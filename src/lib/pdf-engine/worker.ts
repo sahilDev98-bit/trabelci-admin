@@ -78,6 +78,7 @@ const MUTATING_METHODS = new Set<EngineMethodName>([
   "replaceVectorGroupWithImage", "removeVectorGroup", "reorderLayer",
   "setVectorGroupRect", "transformVectorGroup", "transformTextLine",
   "applyPagePlan", "addBlankPage", "duplicateSlot", "translateSlots", "cropImage",
+  "removeSlots", "transformSlots",
 ])
 
 const docs = new Map<string, OpenDoc>()
@@ -398,6 +399,109 @@ const handlers: {
       }
       pdfium.FPDFPage_GenerateContent(page)
       return { ok: true, moved: handles.length }
+    })
+  },
+
+  removeSlots: ({ docId, pageIndex, slots }, { pdfium }) => {
+    const doc = requireDoc(docId)
+    return withPage(pdfium, doc.handle, pageIndex, (page) => {
+      // The same rule translateSlots follows, and for the same reason: a slot
+      // index is a POSITION, so removing one object renumbers every object
+      // after it. Deleting three things by index one at a time deletes the
+      // first, then whatever inherited the second's number — which is how a
+      // group delete quietly destroys the wrong objects.
+      //
+      // So every handle is resolved BEFORE anything is removed. Handles are
+      // identities; they stay valid while their neighbours disappear.
+      const textLines = groupIntoLines(
+        listTextObjects(pdfium, page, doc.scratch).filter(isEditableText))
+      const images = listImageObjects(pdfium, page, doc.scratch)
+      const groups = listVectorGroups(pdfium, page, doc.scratch)
+
+      // The text objects themselves are kept, not just their handles:
+      // removeTextGroup takes the objects, and holding them is exactly as
+      // safe — they were all resolved before anything was removed.
+      const textGroups: (typeof textLines)[number]["objects"][] = []
+      const imageHandles: number[] = []
+      const vectorGroups: number[][] = []
+
+      for (const slot of slots) {
+        if (slot.kind === "text") {
+          const line = textLines[slot.index]
+          if (line) textGroups.push(line.objects)
+        } else if (slot.kind === "image") {
+          const image = images[slot.index]
+          if (image) imageHandles.push(image.handle)
+        } else {
+          const group = groups[slot.index]
+          if (group) vectorGroups.push([...group.handles])
+        }
+      }
+
+      let removed = 0
+      for (const objects of textGroups) {
+        if (removeTextGroup(pdfium, page, objects).ok) removed++
+      }
+      for (const handle of imageHandles) {
+        if (removeImageObject(pdfium, page, handle).ok) removed++
+      }
+      for (const handles of vectorGroups) {
+        if (removeVectorGroup(pdfium, page, handles).ok) removed++
+      }
+
+      if (removed > 0) pdfium.FPDFPage_GenerateContent(page)
+      return { ok: removed > 0, removed }
+    })
+  },
+
+  transformSlots: ({ docId, pageIndex, slots, op }, { pdfium }) => {
+    const doc = requireDoc(docId)
+    return withPage(pdfium, doc.handle, pageIndex, (page) => {
+      // Same rule as translateSlots and removeSlots: resolve everything
+      // first. A transform MOVES an object, and text lines are numbered by
+      // where they sit on the page, so turning one renumbers its neighbours.
+      const textLines = groupIntoLines(
+        listTextObjects(pdfium, page, doc.scratch).filter(isEditableText))
+      const images = listImageObjects(pdfium, page, doc.scratch)
+      const groups = listVectorGroups(pdfium, page, doc.scratch)
+
+      const handles: number[] = []
+      const boxes: { left: number; bottom: number; right: number; top: number }[] = []
+
+      for (const slot of slots) {
+        if (slot.kind === "text") {
+          const line = textLines[slot.index]
+          if (!line) continue
+          handles.push(...line.objects.map((o) => o.handle))
+          for (const o of line.objects) if (o.bounds) boxes.push(o.bounds)
+        } else if (slot.kind === "image") {
+          const image = images[slot.index]
+          if (!image) continue
+          handles.push(image.handle)
+          if (image.bounds) boxes.push(image.bounds)
+        } else {
+          const group = groups[slot.index]
+          if (!group) continue
+          handles.push(...group.handles)
+          boxes.push(group.bbox)
+        }
+      }
+      if (handles.length === 0 || boxes.length === 0) return { ok: false, transformed: 0 }
+
+      // ONE box around the whole selection, and every object turned about
+      // ITS centre. That is what makes a group rotate as a single unit — the
+      // items swing around each other and keep their arrangement — rather
+      // than each spinning on the spot, which scatters a laid-out block.
+      const bbox = {
+        left: Math.min(...boxes.map((b) => b.left)),
+        bottom: Math.min(...boxes.map((b) => b.bottom)),
+        right: Math.max(...boxes.map((b) => b.right)),
+        top: Math.max(...boxes.map((b) => b.top)),
+      }
+
+      const r = transformObjectGroup(pdfium, page, handles, bbox, op)
+      if (!r.ok) throw new Error(r.error ?? "could not turn the selection")
+      return { ok: true, transformed: handles.length }
     })
   },
 

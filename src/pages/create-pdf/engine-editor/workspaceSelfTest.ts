@@ -194,6 +194,10 @@ export async function runWorkspaceSelfTest(): Promise<WorkspaceTestResult> {
       onAddImage: () => {},
       // Both closed for this measurement: a panel takes width from the page
       // area, and what is being measured here is the page area at full size.
+      selectionCount: 0,
+      onTransformGroup: () => false,
+      thumbnailRailOpen: true,
+      onToggleThumbnailRail: () => {},
       assetPanelOpen: false,
       onToggleAssetPanel: () => {},
       canUndo: false, canRedo: false, onUndo: () => {}, onRedo: () => {},
@@ -230,7 +234,8 @@ export async function runWorkspaceSelfTest(): Promise<WorkspaceTestResult> {
       doc,
       documentName: "REFIN_CATALOGO",
       onExit: () => {},
-      onDisplayWidthChange: () => {},
+      thumbnailRailOpen: true,
+    onDisplayWidthChange: () => {},
       selection,
       column: { ...column, selection },
       toolbar: { ...toolbar, selection },

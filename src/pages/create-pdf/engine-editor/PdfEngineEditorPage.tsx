@@ -201,6 +201,10 @@ export function PdfEngineEditorPage() {
     { pageIndex: number; kind: "text" | "image" | "vector"; index: number }[]
   >([])
   const productPanelOpen = rightPanel === "product"
+  /** The strip of page thumbnails down the start edge. Open by default —
+   * it is how you navigate a fourteen-page catalogue — but it costs real
+   * width, so it can be put away. */
+  const [thumbnailRailOpen, setThumbnailRailOpen] = useState(true)
   const [product, setProduct] = useState<CatalogProduct | null>(null)
   /**
    * Where the last detail added from the panel went, so the next one can go
@@ -370,19 +374,39 @@ export function PdfEngineEditorPage() {
     return boxes
   }, [doc.pageText, doc.pageImages, doc.pageVectors])
 
-  /** Removes whatever is selected. Shared by the Delete key and the
-   * toolbar's delete button, so the two can never diverge. */
+  /**
+   * Removes whatever is selected — one item, or a whole group.
+   *
+   * A group goes in ONE engine call, never a loop of single deletes, and the
+   * reason is the rule that governs everything about groups here: a slot's
+   * index is its POSITION. Removing one object renumbers the others, so
+   * deleting three by the numbers read beforehand would remove the first and
+   * then whatever inherited the second's number — destroying things the user
+   * never selected, silently, on their document.
+   *
+   * Shared by the Delete key and the toolbar, so the two cannot diverge.
+   */
   const deleteSelected = useCallback(() => {
     if (!selection) return
-    const target = selection
+    const group = selectedSlots({ primary: selection, also: alsoSelected })
+    const { pageIndex } = selection
     setSelection(null)
+    setAlsoSelected([])
+
+    if (group.length > 1) {
+      void doc.removeSlots(pageIndex, group.map(({ kind, index }) => ({ kind, index })))
+        .catch((err: unknown) => toast.error(err instanceof Error ? err.message : String(err)))
+      return
+    }
+
+    const target = selection
     const run = target.kind === "image"
       ? doc.removeImage(target.pageIndex, target.index)
       : target.kind === "vector"
         ? doc.removeVector(target.pageIndex, target.index)
         : doc.removeText(target.pageIndex, target.index)
     void run.catch((err: unknown) => toast.error(err instanceof Error ? err.message : String(err)))
-  }, [selection, doc])
+  }, [selection, alsoSelected, doc])
 
   /** Delete/Backspace removes the selected slot, matching how every other
    * canvas editor behaves. Ignored while a dialog or input has focus, so
@@ -529,6 +553,59 @@ export function PdfEngineEditorPage() {
     setAlsoSelected([])
     return true
   }, [selectedGroup, doc])
+
+  /**
+   * Turn or mirror a whole group, as ONE shape.
+   *
+   * Sent as a single engine call for the index reason above, and the group is
+   * turned about its SHARED centre rather than each item about its own. That
+   * is the difference between rotating a laid-out block — which keeps its
+   * arrangement, as every design tool does it — and every item spinning on
+   * the spot, which scatters it.
+   */
+  const transformGroup = useCallback((
+    op: "rotate-left" | "rotate-right" | "flip-horizontal" | "flip-vertical",
+  ) => {
+    if (!selection || selectedGroup.length < 2) return false
+    const { pageIndex } = selection
+    void doc.transformSlots(pageIndex, selectedGroup.map(({ kind, index }) => ({ kind, index })), op)
+      .catch((err: unknown) => toast.error(err instanceof Error ? err.message : String(err)))
+    // Turning moves things, and text lines are numbered by where they sit,
+    // so every index held here is stale the moment this lands.
+    setSelection(null)
+    setAlsoSelected([])
+    return true
+  }, [selection, selectedGroup, doc])
+
+  /**
+   * Copy a whole group.
+   *
+   * The one group operation that is a LOOP rather than a single call, and it
+   * is safe only because of the order. Text lines are numbered top-down by
+   * position, and a copy lands below its original — so copying the LOWEST
+   * first means each insertion only renumbers lines beneath it, which have
+   * already been dealt with. Copying top-down instead would shift the very
+   * indices still waiting to be used.
+   *
+   * Images are numbered in the order they were added, so a copy appends and
+   * shifts nothing; descending order is harmless there and keeps one rule
+   * for both.
+   */
+  const duplicateGroup = useCallback(async () => {
+    if (!selection || selectedGroup.length < 2) return false
+    const { pageIndex } = selection
+    const ordered = [...selectedGroup].sort((a, b) => b.index - a.index)
+    setSelection(null)
+    setAlsoSelected([])
+    try {
+      for (const slot of ordered) {
+        await doc.duplicateSlot(pageIndex, slot.kind, slot.index)
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : String(err))
+    }
+    return true
+  }, [selection, selectedGroup, doc])
 
   /**
    * A move gesture has ended somewhere in the document.
@@ -1066,17 +1143,33 @@ export function PdfEngineEditorPage() {
 
   // ── Locking ───────────────────────────────────────────────────────────────
 
-  /** The lock key for whatever is selected, or null when nothing is. */
-  const selectionLockKey = (() => {
-    if (!selection) return null
-    const { pageIndex, kind, index } = selection
+  /** The lock key for one slot, or null when it cannot be resolved. */
+  const lockKeyForSlot = useCallback((slot: {
+    pageIndex: number; kind: "text" | "image" | "vector"; index: number
+  }) => {
+    const { pageIndex, kind, index } = slot
     const bbox = kind === "text"
       ? doc.pageText[pageIndex]?.lines[index]?.bbox
       : kind === "image"
         ? doc.pageImages[pageIndex]?.images[index]?.bbox
         : doc.pageVectors[pageIndex]?.groups[index]?.bbox
     return lockKeyFor(pageIndex, kind, bbox ?? null)
-  })()
+  }, [doc.pageText, doc.pageImages, doc.pageVectors])
+
+  /** The lock key for whatever is selected, or null when nothing is. */
+  const selectionLockKey = selection ? lockKeyForSlot(selection) : null
+
+  /**
+   * Every lock key in the current selection.
+   *
+   * Locks are keyed by a slot's BOX rather than its index — precisely because
+   * indices renumber — so a group lock needs no ordering care at all. Every
+   * key is read from the page as it stands now, before anything changes.
+   */
+  const selectionLockKeys = useMemo(
+    () => selectedGroup.map(lockKeyForSlot).filter((key): key is string => key !== null),
+    [selectedGroup, lockKeyForSlot],
+  )
 
   // ── Undo / redo ───────────────────────────────────────────────────────────
 
@@ -1544,21 +1637,51 @@ export function PdfEngineEditorPage() {
         onExit={leaveEditor}
         onDisplayWidthChange={setPageDisplayWidth}
         selection={selection}
+        thumbnailRailOpen={thumbnailRailOpen}
         column={pageColumnProps}
         toolbar={{
           contentMode,
           onToggleContentMode: () => setContentMode((m) => (m === "text" ? "images" : "text")),
           onAddText: () => setNewTextDraft({ pageIndex: visiblePageIndex(), text: "" }),
           onAddImage: () => openFilePicker({ kind: "overlay", pageIndex: visiblePageIndex() }),
-          onDuplicate: () => void duplicateSelection(),
+          onDuplicate: () => {
+            if (selectedGroup.length > 1) { void duplicateGroup(); return }
+            void duplicateSelection()
+          },
+          /** How many things the toolbar is acting on, so it can offer the
+           * group's tools instead of one item's. */
+          selectionCount: selectedGroup.length,
           cropping: cropping !== null,
           onToggleCrop: () => {
             if (cropping) { setCropping(null); return }
             if (selection?.kind !== "image") return
             setCropping({ pageIndex: selection.pageIndex, imageIndex: selection.index })
           },
-          selectionLocked: isLocked(locks, selectionLockKey),
+          // A group counts as locked only when EVERY member is. Otherwise
+          // the button would read "locked" while half the selection was
+          // free to move.
+          selectionLocked: selectedGroup.length > 1
+            ? selectionLockKeys.length === selectedGroup.length
+              && selectionLockKeys.every((key) => isLocked(locks, key))
+            : isLocked(locks, selectionLockKey),
           onToggleLock: () => {
+            if (selectedGroup.length > 1) {
+              // One decision for the whole group: if every member is locked,
+              // this unlocks them all; otherwise it locks them all. Toggling
+              // each independently would leave a half-locked group, where the
+              // button's next press does something different again.
+              const allLocked = selectionLockKeys.length === selectedGroup.length
+                && selectionLockKeys.every((key) => isLocked(locks, key))
+              setLocks((current) => {
+                let next = current
+                for (const key of selectionLockKeys) {
+                  const locked = isLocked(next, key)
+                  if (locked !== !allLocked) next = toggleLock(next, key)
+                }
+                return next
+              })
+              return
+            }
             if (!selectionLockKey) return
             setLocks((current) => toggleLock(current, selectionLockKey))
           },
@@ -1567,6 +1690,8 @@ export function PdfEngineEditorPage() {
           canRedo: doc.canRedo,
           onUndo: () => void runHistory("undo"),
           onRedo: () => void runHistory("redo"),
+          thumbnailRailOpen,
+          onToggleThumbnailRail: () => setThumbnailRailOpen((open) => !open),
           assetPanelOpen,
           onToggleAssetPanel: () => setAssetPanelOpen((open) => !open),
           productPanelOpen,
@@ -1619,12 +1744,22 @@ export function PdfEngineEditorPage() {
             runOnSelection("text", (p, i) => doc.scaleText(p, i, factor)),
           onAlignText: (alignment) =>
             runOnSelection("text", (p, i) => doc.alignText(p, i, alignment)),
-          onTransformText: (op) =>
-            runOnSelection("text", (p, i) => doc.transformText(p, i, op)),
-          onTransformImage: (op) =>
-            runOnSelection("image", (p, i) => doc.transformImage(p, i, op)),
-          onTransformVector: (op) =>
-            runOnSelection("vector", (p, i) => doc.transformVector(p, i, op)),
+          // Each falls through to the group path first: with several things
+          // selected the answer is the same whichever kind the toolbar asked
+          // about, because the whole selection turns together.
+          onTransformText: (op) => {
+            if (transformGroup(op)) return
+            runOnSelection("text", (p, i) => doc.transformText(p, i, op))
+          },
+          onTransformImage: (op) => {
+            if (transformGroup(op)) return
+            runOnSelection("image", (p, i) => doc.transformImage(p, i, op))
+          },
+          onTransformVector: (op) => {
+            if (transformGroup(op)) return
+            runOnSelection("vector", (p, i) => doc.transformVector(p, i, op))
+          },
+          onTransformGroup: transformGroup,
           onDownload: () => void handleDownload(),
           downloading,
           busy: doc.busy,

@@ -258,6 +258,24 @@ export class PdfEngineClient {
     return this.call("translateSlots", { docId, pageIndex, slots, dxPts, dyPts })
   }
 
+  /** Delete several slots in one operation. Deleting them one at a time from
+   * the caller's side would remove the wrong objects — see the protocol. */
+  removeSlots(
+    docId: string, pageIndex: number,
+    slots: { kind: "text" | "image" | "vector"; index: number }[],
+  ) {
+    return this.call("removeSlots", { docId, pageIndex, slots })
+  }
+
+  /** Rotate or flip several slots as one unit, about their shared centre. */
+  transformSlots(
+    docId: string, pageIndex: number,
+    slots: { kind: "text" | "image" | "vector"; index: number }[],
+    op: "rotate-left" | "rotate-right" | "flip-horizontal" | "flip-vertical",
+  ) {
+    return this.call("transformSlots", { docId, pageIndex, slots, op })
+  }
+
   /** Copy a slot, onto the same page or another one. */
   duplicateSlot(
     docId: string, pageIndex: number,

@@ -359,6 +359,37 @@ export interface EngineMethods {
     result: { ok: boolean; moved: number }
   }
   /**
+   * Delete several slots in ONE operation.
+   *
+   * Not a loop over removeTextLine/removeImage on the caller's side, and the
+   * distinction is not cosmetic: an index is a POSITION, so removing one
+   * object renumbers everything after it. Deleting three things by index one
+   * after another removes the first, then whatever inherited the second's
+   * number — destroying objects the user never selected.
+   */
+  removeSlots: {
+    params: {
+      docId: string; pageIndex: number
+      slots: { kind: "text" | "image" | "vector"; index: number }[]
+    }
+    result: { ok: boolean; removed: number }
+  }
+  /**
+   * Rotate or flip several slots as ONE unit.
+   *
+   * Every object turns about the selection's shared centre, so the group
+   * keeps its arrangement — the alternative, each item spinning on its own
+   * centre, scatters a laid-out block.
+   */
+  transformSlots: {
+    params: {
+      docId: string; pageIndex: number
+      slots: { kind: "text" | "image" | "vector"; index: number }[]
+      op: "rotate-left" | "rotate-right" | "flip-horizontal" | "flip-vertical"
+    }
+    result: { ok: boolean; transformed: number }
+  }
+  /**
    * Copy one slot, offset slightly from the original.
    *
    * `toPageIndex` lets the copy land on a different page, which is what makes

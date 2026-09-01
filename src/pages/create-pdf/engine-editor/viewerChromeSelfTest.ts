@@ -127,7 +127,8 @@ export async function runViewerChromeSelfTest(): Promise<ViewerChromeTestResult>
 
   const render = (doc: UsePdfEngineDocumentResult) => root.render(
     createElement(PdfEngineWorkspace, {
-      doc, documentName: "test.pdf", onExit: () => {}, onDisplayWidthChange: () => {},
+      doc, documentName: "test.pdf", onExit: () => {}, thumbnailRailOpen: true,
+    onDisplayWidthChange: () => {},
       column: column as never, toolbar: toolbar as never, selection: null,
     }))
 

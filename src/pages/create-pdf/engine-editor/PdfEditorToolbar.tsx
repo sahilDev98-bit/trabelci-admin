@@ -5,6 +5,7 @@ import {
   MinusIcon, PackageSearchIcon, PlusIcon, RedoIcon, RotateCcwIcon, RotateCwIcon,
   ScanSearchIcon, Trash2Icon, TypeIcon, TypeOutlineIcon, UndoIcon,
   FilePlusIcon, LockIcon, LockOpenIcon, CopyPlusIcon, CropIcon, XIcon,
+  PanelLeftCloseIcon, PanelLeftOpenIcon,
 } from "lucide-react"
 import { useTranslation } from "react-i18next"
 
@@ -42,10 +43,25 @@ interface PdfEditorToolbarProps {
    * well enough to edit it". */
   onZoomToSelection: () => void
   selection: SlotSelection
+  /** How many slots are selected. Above one, the toolbar offers the tools
+   * that MEAN something for several things at once and hides the rest —
+   * "Edit text" or a colour picker cannot act on a picture and a caption
+   * together, and a button that silently ignores most of your selection is
+   * worse than one that is not there. */
+  selectionCount: number
+  /** Turn or mirror the whole selection as one shape. */
+  onTransformGroup: (
+    op: "rotate-left" | "rotate-right" | "flip-horizontal" | "flip-vertical",
+  ) => boolean
   contentMode: PdfContentMode
   onToggleContentMode: () => void
   onAddText: () => void
   onAddImage: () => void
+  /** Shows or hides the strip of page thumbnails down the side. It takes
+   * real width from the page, and someone laying out a spread wants that
+   * width back — so it is a toggle, not a fixture. */
+  thumbnailRailOpen: boolean
+  onToggleThumbnailRail: () => void
   /** Shows or hides the asset library. */
   assetPanelOpen: boolean
   onToggleAssetPanel: () => void
@@ -123,7 +139,7 @@ function Divider() {
 }
 
 function ToolButton({
-  label, icon: Icon, onClick, active, danger, disabled,
+  label, icon: Icon, onClick, active, danger, disabled, iconClassName,
 }: {
   label: string
   icon: typeof TypeIcon
@@ -131,6 +147,9 @@ function ToolButton({
   active?: boolean
   danger?: boolean
   disabled?: boolean
+  /** For an icon that POINTS somewhere. Most do not, but one that shows a
+   * panel on the left is wrong in Hebrew, where the panel is on the right. */
+  iconClassName?: string
 }) {
   return (
     <Tooltip>
@@ -145,7 +164,7 @@ function ToolButton({
           aria-pressed={active}
           className={`size-9 shrink-0 p-0 ${danger ? "text-destructive hover:bg-destructive/10" : ""}`}
         >
-          <Icon className="size-4" />
+          <Icon className={`size-4 ${iconClassName ?? ""}`} />
         </Button>
       </TooltipTrigger>
       <TooltipContent side="bottom">{label}</TooltipContent>
@@ -155,8 +174,9 @@ function ToolButton({
 
 export function PdfEditorToolbar({
   documentName,
-  onZoomToSelection, selection, contentMode, onToggleContentMode,
-  onAddText, onAddImage, assetPanelOpen, onToggleAssetPanel,
+  onZoomToSelection, selection, selectionCount, onTransformGroup, contentMode, onToggleContentMode,
+  onAddText, onAddImage, thumbnailRailOpen, onToggleThumbnailRail,
+  assetPanelOpen, onToggleAssetPanel,
   productPanelOpen, onToggleProductPanel,
   layersPanelOpen, onToggleLayersPanel, onOpenOrganizer,
   canUndo, canRedo, onUndo, onRedo, onAddPage,
@@ -192,6 +212,25 @@ export function PdfEditorToolbar({
             onClick={onExit}
           />
           <span className="ms-1 max-w-56 shrink truncate text-sm font-medium">{documentName}</span>
+
+          <Divider />
+
+          {/* The page thumbnails, shown or hidden. Placed here, at the very
+              start of the row, because that is the edge it controls — a
+              button for the left-hand strip buried among the right-hand
+              panel toggles is a button nobody finds.
+
+              The icon POINTS, so it is mirrored in Hebrew, where the strip
+              is on the other side. */}
+          <ToolButton
+            label={thumbnailRailOpen
+              ? t("pdfTemplates.engineHidePages", "Hide page thumbnails")
+              : t("pdfTemplates.engineShowPages", "Show page thumbnails")}
+            icon={thumbnailRailOpen ? PanelLeftCloseIcon : PanelLeftOpenIcon}
+            iconClassName="rtl:-scale-x-100"
+            onClick={onToggleThumbnailRail}
+            active={thumbnailRailOpen}
+          />
 
           <Divider />
 
@@ -339,7 +378,29 @@ export function PdfEditorToolbar({
                 data-pdf-toolbar-selection
                 className="ms-1 flex h-10 shrink-0 items-center gap-1 rounded-md bg-muted/70 px-1.5"
               >
-                {selection.kind === "text" && (
+                {/* ── Several things selected ──
+                    The per-kind tools below are hidden, because they cannot
+                    honestly act on a mixed selection: "Edit text" has no
+                    meaning for a photo, cropping has none for a caption, and
+                    a colour picker showing ONE line's colour while three
+                    things are selected states something untrue.
+
+                    What remains is everything that genuinely applies to
+                    several objects at once — turning, mirroring, copying,
+                    locking, deleting — plus a count, so it is never a
+                    mystery how much is about to be affected. */}
+                {selectionCount > 1 && (
+                  <>
+                    <span className="shrink-0 px-1 text-xs font-medium text-muted-foreground">
+                      {t("pdfTemplates.engineSelectedCount", "{{count}} selected", { count: selectionCount })}
+                    </span>
+                    <ToolButton label={t("pdfTemplates.engineRotateLeft", "Rotate left")} icon={RotateCcwIcon} onClick={() => onTransformGroup("rotate-left")} />
+                    <ToolButton label={t("pdfTemplates.engineRotateRight", "Rotate right")} icon={RotateCwIcon} onClick={() => onTransformGroup("rotate-right")} />
+                    <ToolButton label={t("pdfTemplates.engineFlipH", "Flip horizontally")} icon={FlipHorizontalIcon} onClick={() => onTransformGroup("flip-horizontal")} />
+                    <ToolButton label={t("pdfTemplates.engineFlipV", "Flip vertically")} icon={FlipVerticalIcon} onClick={() => onTransformGroup("flip-vertical")} />
+                  </>
+                )}
+                {selectionCount <= 1 && selection.kind === "text" && (
                   <>
                     <Button type="button" size="sm" variant="secondary" className="h-8 shrink-0 gap-1.5" onClick={onEditSelectedText}>
                       <TypeIcon className="size-4" />
@@ -429,7 +490,7 @@ export function PdfEditorToolbar({
                     </label>
                   </>
                 )}
-                {selection.kind === "image" && (
+                {selectionCount <= 1 && selection.kind === "image" && (
                   <>
                     <Button type="button" size="sm" variant="secondary" className="h-8 shrink-0 gap-1.5" onClick={onReplaceSelectedImage}>
                       <ImageIcon className="size-4" />
@@ -453,7 +514,7 @@ export function PdfEditorToolbar({
                     offer only "replace", which made a logo a visibly weaker
                     kind of picture for no reason a user could see — paths
                     turn and scale at least as well as pixels do. */}
-                {selection.kind === "vector" && (
+                {selectionCount <= 1 && selection.kind === "vector" && (
                   <>
                     <Button type="button" size="sm" variant="secondary" className="h-8 shrink-0 gap-1.5" onClick={onReplaceSelectedVector}>
                       <ImageIcon className="size-4" />

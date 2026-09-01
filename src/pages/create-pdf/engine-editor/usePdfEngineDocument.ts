@@ -140,6 +140,19 @@ export interface UsePdfEngineDocumentResult {
     pageIndex: number, imageIndex: number,
     region: { left: number; bottom: number; right: number; top: number },
   ) => Promise<void>
+  /** Delete several slots together, in one operation. Never a loop of single
+   * deletes — indices renumber as objects go, so that removes the wrong
+   * things. */
+  removeSlots: (
+    pageIndex: number,
+    slots: { kind: "text" | "image" | "vector"; index: number }[],
+  ) => Promise<void>
+  /** Rotate or flip several slots as one unit, about their shared centre. */
+  transformSlots: (
+    pageIndex: number,
+    slots: { kind: "text" | "image" | "vector"; index: number }[],
+    op: "rotate-left" | "rotate-right" | "flip-horizontal" | "flip-vertical",
+  ) => Promise<void>
   /** Shift several slots together by the same amount, in one operation. */
   translateSlots: (
     pageIndex: number,
@@ -727,6 +740,23 @@ export function usePdfEngineDocument(templateId: string | null | undefined): Use
       getEngine().translateSlots(id, pageIndex, slots, dxPts, dyPts).then(() => undefined))
   }, [getEngine, mutate])
 
+  const removeSlots = useCallback(async (
+    pageIndex: number,
+    slots: { kind: "text" | "image" | "vector"; index: number }[],
+  ) => {
+    await mutate(pageIndex, (id) =>
+      getEngine().removeSlots(id, pageIndex, slots).then(() => undefined))
+  }, [getEngine, mutate])
+
+  const transformSlots = useCallback(async (
+    pageIndex: number,
+    slots: { kind: "text" | "image" | "vector"; index: number }[],
+    op: "rotate-left" | "rotate-right" | "flip-horizontal" | "flip-vertical",
+  ) => {
+    await mutate(pageIndex, (id) =>
+      getEngine().transformSlots(id, pageIndex, slots, op).then(() => undefined))
+  }, [getEngine, mutate])
+
   const duplicateSlot = useCallback(async (
     pageIndex: number, kind: "text" | "image" | "vector", index: number, toPageIndex?: number,
   ) => {
@@ -791,7 +821,7 @@ export function usePdfEngineDocument(templateId: string | null | undefined): Use
     removeVector, replaceVector, setVectorRect, transformVector, transformText, styleText, scaleText, alignText, transformImage, renderPage, editText, moveText, moveTextToPage, moveImageToPage, removeText,
     replaceImage, removeImage, setImageRect, addTextOverlay, addImageOverlay, applyPagePlan,
     canUndo: history.canUndo, canRedo: history.canRedo, undo, redo,
-    listLayers, reorderLayer, addBlankPage, duplicateSlot, translateSlots, cropImage,
+    listLayers, reorderLayer, addBlankPage, duplicateSlot, translateSlots, removeSlots, transformSlots, cropImage,
     save, busy, revision,
   }), [
     phase, error, downloadPercent, pages, docId, pageText, pageImages,
@@ -801,6 +831,6 @@ export function usePdfEngineDocument(templateId: string | null | undefined): Use
     renderPage, editText, moveText, moveTextToPage, moveImageToPage, removeText,
     replaceImage, removeImage, setImageRect, addTextOverlay, addImageOverlay,
     applyPagePlan, save, busy, revision, history, undo, redo,
-    listLayers, reorderLayer, addBlankPage, duplicateSlot, translateSlots, cropImage,
+    listLayers, reorderLayer, addBlankPage, duplicateSlot, translateSlots, removeSlots, transformSlots, cropImage,
   ])
 }
