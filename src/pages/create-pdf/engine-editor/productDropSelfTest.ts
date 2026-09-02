@@ -426,7 +426,9 @@ export async function runProductDropWiringTest(): Promise<ProductDropWiringResul
  * on. What is being looked at here is the card and the placement button, not
  * the search.
  */
-export async function showProductPanelWithProduct(language: "en" | "he"): Promise<void> {
+export async function showProductPanelWithProduct(
+  language: "en" | "he", slots = 0,
+): Promise<void> {
   const [{ createElement }, { createRoot }, i18n, { PdfProductPanel },
     { QueryClient, QueryClientProvider }] = await Promise.all([
     import("react"),
@@ -452,9 +454,9 @@ export async function showProductPanelWithProduct(language: "en" | "he"): Promis
       onPickProduct: () => {},
       mode: "add" as const,
       onApply: () => {},
-      slotCountOnPage: 0,
-        onFillSlots: () => {},
-        onPlaceProduct: () => {},
+      slotCountOnPage: slots,
+      onFillSlots: () => {},
+      onPlaceProduct: () => {},
       onClose: () => {},
     }),
   ))

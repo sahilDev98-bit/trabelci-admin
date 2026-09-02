@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 import {
-  ImageOffIcon, ImagePlusIcon, Loader2Icon, PackageSearchIcon, SearchIcon,
+  GripVerticalIcon, ImageOffIcon, ImagePlusIcon, Loader2Icon, PackageSearchIcon,
+  SearchIcon,
   SparklesIcon, XIcon,
 } from "lucide-react"
 
@@ -219,15 +220,26 @@ export function PdfProductPanel({
           {/* The chosen product, as a card you can pick up.
               Draggable as a whole rather than by a separate handle: the card
               IS the product, and a handle would be one more thing to find.
-              The click alternative below it matters as much — dragging is not
-              available from a keyboard. */}
+
+              It LOOKS draggable, and that was not free. The first version
+              relied on the cursor turning into a grab hand — which you only
+              discover after already hovering over the right thing — plus a
+              line of text below calling it "the card". Neither told anyone
+              which part of the panel to pick up, and it was reported as not
+              being there at all. So: a grip, a dashed edge, and a background
+              that lifts on hover. The click alternative below it matters as
+              much — dragging is not available from a keyboard. */}
           <div
             data-pdf-product-card
             draggable
             onDragStart={(e) => setProductDragData(e.dataTransfer, product)}
-            className="flex shrink-0 cursor-grab items-center gap-2 border-b px-3 py-2 active:cursor-grabbing"
+            className="m-3 mb-0 flex shrink-0 cursor-grab items-center gap-2 rounded-md border border-dashed bg-muted/30 p-2 transition hover:border-primary hover:bg-muted/70 active:cursor-grabbing"
             title={t("pdfTemplates.productDragHint", "Drag onto the page to place this product")}
           >
+            <GripVerticalIcon
+              aria-hidden
+              className="size-4 shrink-0 text-muted-foreground"
+            />
             {product.coverUrl ? (
               // Straight at the image's own URL. Displaying needs no CORS —
               // only reading the bytes does, which is what the API proxy is
@@ -297,11 +309,22 @@ export function PdfProductPanel({
               <ImagePlusIcon className="size-3.5" />
               {t("pdfTemplates.productPlace", "Place product on page")}
             </Button>
+            {/* What dragging will do — which is not one answer.
+                On a page with product slots a drop SWAPS the page's product;
+                on a page without, it places a block. One sentence covering
+                both would be half wrong in both cases, and this text was
+                already stale: it still described the old behaviour after
+                swapping was added. */}
             <p className="mt-1.5 text-xs text-muted-foreground">
-              {t(
-                "pdfTemplates.productDragExplain",
-                "Or drag the card above onto the page. Drop it on a picture to swap that picture for this product's photo.",
-              )}
+              {slotCountOnPage > 0
+                ? t(
+                  "pdfTemplates.productDragExplainSwap",
+                  "Or drag the card above onto the page — it will swap this page's product, leaving the layout as it is.",
+                )
+                : t(
+                  "pdfTemplates.productDragExplain",
+                  "Or drag the card above onto the page. Drop it on a picture to use that picture's place for this product's photo.",
+                )}
             </p>
           </div>
 
