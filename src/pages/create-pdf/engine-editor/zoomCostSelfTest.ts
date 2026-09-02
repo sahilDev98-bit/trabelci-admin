@@ -94,7 +94,8 @@ export async function runZoomCostSelfTest(pdfUrl: string): Promise<ZoomCostTestR
       onReplaceImage: () => {},
       onReplaceVector: () => {},
       onDropOnImage: () => {},
-      onDropProductOnPage: () => {},
+      productSlots: new Map(),
+    onDropProductOnPage: () => {},
     onDropProductOnImage: () => {},
     onDropAssetOnPage: () => {},
       // Nothing is locked in these measurements.

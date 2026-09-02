@@ -173,7 +173,8 @@ export async function runWorkspaceSelfTest(): Promise<WorkspaceTestResult> {
       onReplaceImage: () => {},
       onReplaceVector: () => {},
       onDropOnImage: () => {},
-      onDropProductOnPage: () => {},
+      productSlots: new Map(),
+    onDropProductOnPage: () => {},
     onDropProductOnImage: () => {},
     onDropAssetOnPage: () => {},
       // Nothing is locked in these measurements.
@@ -195,7 +196,10 @@ export async function runWorkspaceSelfTest(): Promise<WorkspaceTestResult> {
       // Both closed for this measurement: a panel takes width from the page
       // area, and what is being measured here is the page area at full size.
       selectionCount: 0,
-      onTransformGroup: () => false,
+      selectionSlotField: null,
+    onSetSlotField: () => {},
+    slotFieldOptions: [],
+    onTransformGroup: () => false,
       thumbnailRailOpen: true,
       onToggleThumbnailRail: () => {},
       assetPanelOpen: false,

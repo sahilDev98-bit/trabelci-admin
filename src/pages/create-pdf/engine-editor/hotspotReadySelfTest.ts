@@ -105,7 +105,8 @@ async function observe(pageCount: number): Promise<string[]> {
       drag: null, onMoveStart: () => {}, originPatch: null, imagePreview: null,
       onEditLine: () => {}, onReplaceImage: () => {}, onReplaceVector: () => {},
       onDropOnImage: () => {}, onDropOnPage: () => {}, onTransformImage: () => {},
-      onDropProductOnPage: () => {},
+      productSlots: new Map(),
+    onDropProductOnPage: () => {},
     onDropProductOnImage: () => {},
     onDropAssetOnPage: () => {},
       // Nothing is locked in these measurements.

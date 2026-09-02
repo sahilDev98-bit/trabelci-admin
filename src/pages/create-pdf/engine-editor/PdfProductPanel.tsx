@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 import {
-  ImageOffIcon, ImagePlusIcon, Loader2Icon, PackageSearchIcon, SearchIcon, XIcon,
+  ImageOffIcon, ImagePlusIcon, Loader2Icon, PackageSearchIcon, SearchIcon,
+  SparklesIcon, XIcon,
 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
@@ -61,6 +62,12 @@ interface PdfProductPanelProps {
    * view. The click equivalent of dragging the card, and the only route
    * available from a keyboard. */
   onPlaceProduct: () => void
+  /** How many boxes on the page in view are marked as holding this product's
+   * details. Zero hides the fill button entirely — an action that can only
+   * report "nothing to do" is not worth a button. */
+  slotCountOnPage: number
+  /** Pours the chosen product into every marked box at once. */
+  onFillSlots: () => void
   onClose: () => void
 }
 
@@ -74,7 +81,8 @@ function useDebounced<T>(value: T, delayMs: number): T {
 }
 
 export function PdfProductPanel({
-  product, onPickProduct, mode, onApply, onPlaceProduct, onClose,
+  product, onPickProduct, mode, onApply, onPlaceProduct,
+  slotCountOnPage, onFillSlots, onClose,
 }: PdfProductPanelProps) {
   const { t, i18n } = useTranslation()
   const [search, setSearch] = useState("")
@@ -243,6 +251,35 @@ export function PdfProductPanel({
               </p>
             </div>
           </div>
+
+          {/* ── Filling the page's product slots ──
+              Shown only when this page HAS slots. It is the one action that
+              needs no positioning at all: the page was laid out already, and
+              this pours a product into it. Placed above "Place product on
+              page" because on a page with slots it is almost always the one
+              that is wanted. */}
+          {slotCountOnPage > 0 && (
+            <div className="shrink-0 border-b px-3 py-2">
+              <Button
+                type="button"
+                size="sm"
+                className="w-full gap-1.5"
+                data-pdf-fill-slots
+                onClick={onFillSlots}
+              >
+                <SparklesIcon className="size-3.5" />
+                {t("pdfTemplates.productFillSlots", "Fill {{count}} slots on this page", {
+                  count: slotCountOnPage,
+                })}
+              </Button>
+              <p className="mt-1.5 text-xs text-muted-foreground">
+                {t(
+                  "pdfTemplates.productFillSlotsHint",
+                  "Puts this product into every box marked as holding a product detail.",
+                )}
+              </p>
+            </div>
+          )}
 
           <div className="shrink-0 border-b px-3 py-2">
             <Button

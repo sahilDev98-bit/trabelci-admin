@@ -279,7 +279,8 @@ async function measurePageDrops(out: AssetLibraryTestResult): Promise<AssetLibra
         // recognised and the page fell through to "dragged off the desktop".
         out.errors.push("an asset drop was handled as a plain file drop")
       },
-      onDropProductOnPage: () => {},
+      productSlots: new Map(),
+    onDropProductOnPage: () => {},
     onDropProductOnImage: () => {},
     onDropAssetOnPage: (_pageIndex: number, assetId: string, xPts: number, yFromTopPts: number) => {
         out.droppedAssetId = assetId
@@ -586,7 +587,8 @@ export async function showWorkspaceForDrag(pageCount = 12): Promise<void> {
     contentMode: "text" as const, selection: null, onSelect: () => {},
     drag: null, onMoveStart: () => {}, originPatch: null, imagePreview: null,
     onEditLine: () => {}, onReplaceImage: () => {}, onReplaceVector: () => {},
-    onDropOnImage: () => {}, onDropOnPage: () => {}, onDropProductOnPage: () => {},
+    onDropOnImage: () => {}, onDropOnPage: () => {}, productSlots: new Map(),
+    onDropProductOnPage: () => {},
     onDropProductOnImage: () => {},
     onDropAssetOnPage: () => {},
     locks: new Set<string>(),
@@ -600,7 +602,10 @@ export async function showWorkspaceForDrag(pageCount = 12): Promise<void> {
     selection: null, contentMode: "text" as const, onToggleContentMode: () => {},
     onAddText: () => {}, onAddImage: () => {},
     selectionCount: 0,
-      onTransformGroup: () => false,
+      selectionSlotField: null,
+    onSetSlotField: () => {},
+    slotFieldOptions: [],
+    onTransformGroup: () => false,
       thumbnailRailOpen: true,
       onToggleThumbnailRail: () => {},
       assetPanelOpen: true, onToggleAssetPanel: () => {},

@@ -314,7 +314,8 @@ export async function runProductDropWiringTest(): Promise<ProductDropWiringResul
       onDropOnImage: () => {},
       onDropOnPage: () => {},
       onDropAssetOnPage: () => {},
-      onDropProductOnPage: (pageIndex, product, x, y) => {
+      productSlots: new Map(),
+    onDropProductOnPage: (pageIndex, product, x, y) => {
         out.droppedOnPage = { pageIndex, sku: product.sku, x: Math.round(x), y: Math.round(y) }
       },
       onDropProductOnImage: (pageIndex, imageIndex, product) => {
@@ -451,7 +452,9 @@ export async function showProductPanelWithProduct(language: "en" | "he"): Promis
       onPickProduct: () => {},
       mode: "add" as const,
       onApply: () => {},
-      onPlaceProduct: () => {},
+      slotCountOnPage: 0,
+        onFillSlots: () => {},
+        onPlaceProduct: () => {},
       onClose: () => {},
     }),
   ))

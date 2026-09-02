@@ -173,6 +173,8 @@ function harness() {
         product,
         onPickProduct: setProduct,
         mode,
+        slotCountOnPage: 0,
+        onFillSlots: () => {},
         onPlaceProduct: () => {},
     onApply: (value: string) => { fills.push(value) },
         onClose: () => {},

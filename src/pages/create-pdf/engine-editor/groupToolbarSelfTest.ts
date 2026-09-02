@@ -25,6 +25,11 @@ export interface GroupToolbarTestResult {
   /** The page-thumbnail toggle. */
   railButtonLabel: string | null
   railToggled: number
+  /** The control that turns a box into a product slot. */
+  slotControlPresent: boolean
+  slotOptions: string[]
+  slotChoiceReported: string | null
+  slotControlHiddenForGroup: boolean
 }
 
 const SELECTION = { pageIndex: 0, kind: "text" as const, index: 0 }
@@ -36,6 +41,9 @@ function baseToolbar(overrides: Record<string, unknown>) {
     onExit: () => {},
     selection: SELECTION,
     selectionCount: 1,
+    selectionSlotField: null,
+    onSetSlotField: () => {},
+    slotFieldOptions: [],
     onTransformGroup: () => true,
     contentMode: "text" as const,
     onToggleContentMode: () => {},
@@ -77,6 +85,8 @@ export async function runGroupToolbarSelfTest(): Promise<GroupToolbarTestResult>
     single: { editText: false, rotate: false, count: null },
     group: { editText: false, rotate: false, count: null },
     groupOps: [], railButtonLabel: null, railToggled: 0,
+    slotControlPresent: false, slotOptions: [], slotChoiceReported: null,
+    slotControlHiddenForGroup: false,
   }
 
   const host = document.createElement("div")
@@ -112,7 +122,10 @@ export async function runGroupToolbarSelfTest(): Promise<GroupToolbarTestResult>
     const ops: string[] = []
     root.render(createElement(PdfEditorToolbar, baseToolbar({
       selectionCount: 3,
-      onTransformGroup: (op: string) => { ops.push(op); return true },
+      selectionSlotField: null,
+    onSetSlotField: () => {},
+    slotFieldOptions: [],
+    onTransformGroup: (op: string) => { ops.push(op); return true },
     })))
     await new Promise((r) => setTimeout(r, 60))
 
@@ -151,6 +164,51 @@ export async function runGroupToolbarSelfTest(): Promise<GroupToolbarTestResult>
     // several objects at once.
     for (const label of ["Duplicate", "Lock in place", "Deselect"]) {
       if (!hasButton(host, label)) out.errors.push(`"${label}" is missing for a group`)
+    }
+
+    // ── The product-slot control ─────────────────────────────────────
+    // The dropdown that turns a box into a product slot. Checked here rather
+    // than only in productSlotsSelfTest because that one proves the RULES;
+    // this proves the control exists, offers the right options for the kind
+    // of box selected, and reports what was chosen.
+    let chosenField: string | null | undefined
+    root.render(createElement(PdfEditorToolbar, baseToolbar({
+      selectionCount: 1,
+      slotFieldOptions: [
+        { id: "sku", labelKey: "pdfTemplates.productFieldSku", labelFallback: "SKU" },
+        { id: "name", labelKey: "pdfTemplates.productFieldName", labelFallback: "Product name" },
+      ],
+      selectionSlotField: null,
+      onSetSlotField: (id: string | null) => { chosenField = id },
+    })))
+    await new Promise((r) => setTimeout(r, 60))
+    const slotSelect = host.querySelector<HTMLSelectElement>("[data-pdf-slot-field]")
+    out.slotControlPresent = slotSelect !== null
+    if (!slotSelect) {
+      out.errors.push("there is no control for marking a box as a product slot")
+    } else {
+      out.slotOptions = Array.from(slotSelect.options).map((o) => o.value)
+      // "Fixed text" first, then the fields. Without the empty option a box
+      // could be marked but never un-marked.
+      if (out.slotOptions[0] !== "") {
+        out.errors.push("the slot control has no way back to plain fixed text")
+      }
+      slotSelect.value = "sku"
+      slotSelect.dispatchEvent(new Event("change", { bubbles: true }))
+      await new Promise((r) => setTimeout(r, 30))
+      out.slotChoiceReported = chosenField ?? null
+      if (out.slotChoiceReported !== "sku") {
+        out.errors.push(`choosing SKU reported ${JSON.stringify(out.slotChoiceReported)}`)
+      }
+    }
+
+    // With several things selected it must NOT be offered: they would all be
+    // given the same field, and a page cannot have four SKU slots.
+    root.render(createElement(PdfEditorToolbar, baseToolbar({ selectionCount: 3 })))
+    await new Promise((r) => setTimeout(r, 60))
+    out.slotControlHiddenForGroup = host.querySelector("[data-pdf-slot-field]") === null
+    if (!out.slotControlHiddenForGroup) {
+      out.errors.push("the product-slot control is offered for a whole group")
     }
 
     // ── The page-thumbnail toggle ────────────────────────────────────
@@ -277,6 +335,7 @@ export async function runRailVisibilityTest(): Promise<RailVisibilityResult> {
     drag: null, onMoveStart: () => {}, originPatch: null, imagePreview: null,
     onEditLine: () => {}, onReplaceImage: () => {}, onReplaceVector: () => {},
     onDropOnImage: () => {}, onDropOnPage: () => {}, onDropAssetOnPage: () => {},
+    productSlots: new Map(),
     onDropProductOnPage: () => {}, onDropProductOnImage: () => {},
     locks: new Set<string>(), alsoSelected: [], cropping: null,
     onCropCancel: () => {}, onCropCommit: () => {},
@@ -337,4 +396,27 @@ export async function runRailVisibilityTest(): Promise<RailVisibilityResult> {
   }
 
   return out
+}
+
+/** The toolbar with a box marked as a product slot, for looking at. */
+export async function showSlotToolbar(language: "en" | "he"): Promise<void> {
+  const i18n = (await import("@/i18n")).default
+  await i18n.changeLanguage(language)
+
+  document.getElementById("toolbar-inspect")?.remove()
+  const host = document.createElement("div")
+  host.id = "toolbar-inspect"
+  host.style.cssText = "position:fixed;inset:0;background:var(--background,#fff)"
+  document.body.appendChild(host)
+
+  const { fieldsForKind } = await import("./productSlots")
+  createRoot(host).render(createElement(PdfEditorToolbar, baseToolbar({
+    documentName: "REFIN_CATALOGO_MOLD",
+    selectionCount: 1,
+    canUndo: true,
+    textStyle: { bold: false, italic: false, color: { r: 0, g: 0, b: 0 } },
+    slotFieldOptions: fieldsForKind("text"),
+    selectionSlotField: "sku",
+  })))
+  await new Promise((r) => setTimeout(r, 350))
 }

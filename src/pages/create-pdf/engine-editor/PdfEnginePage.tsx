@@ -12,6 +12,7 @@ import { PdfEngineTextSlot } from "./PdfEngineTextSlot"
 import { PdfEngineVectorSlot } from "./PdfEngineVectorSlot"
 import { assetIdFromDrag, dragCarriesAsset } from "./assetDrag"
 import { dragCarriesProduct, productFromDrag } from "./productDrag"
+import { markFor, slotKeyFor, type ProductSlotMap } from "./productSlots"
 import { isLocked, lockKeyFor, type LockSet } from "./locks"
 import {
   buildSnapTargets, edgesForHandle, MOVE_EDGES, paintGuides, snapRect,
@@ -80,6 +81,9 @@ interface PdfEnginePageProps {
   /** A product dropped onto an existing picture: that picture becomes the
    * product's photo, keeping the slot's position, size and shape. */
   onDropProductOnImage: (pageIndex: number, imageIndex: number, product: CatalogProduct) => void
+  /** Which boxes hold a product's details rather than fixed text. Shown on
+   * the box itself: a slot you cannot see is a slot you forget you made. */
+  productSlots: ProductSlotMap
   /** Slots the user has locked against being moved. Keyed by position — see
    * locks.ts for why an index would not survive an edit. */
   locks: LockSet
@@ -209,7 +213,7 @@ export function PdfEnginePage({
   renderPage, renderPageRegion, lastChange, loadPageText, loadPageImages, loadPageVectors,
   onSelectLine, onReplaceImage, onReplaceVector,
   onDropOnImage, onDropOnPage, onDropAssetOnPage,
-  onDropProductOnPage, onDropProductOnImage, locks, alsoSelected,
+  onDropProductOnPage, onDropProductOnImage, productSlots, locks, alsoSelected,
   cropping, onCropCancel, onCropCommit,
   onTransformImage, onTransformVector, onResizeText,
   selection, onSelect, onMoveStart, draggingSlot, dropTargetPage, originPatchUrl, imagePreviewUrl,
@@ -622,6 +626,7 @@ export function PdfEnginePage({
               snap={snapFor({ kind: "image", index: image.imageIndex })}
               onGestureEnd={clearGuides}
               locked={isLocked(locks, lockKeyFor(pageIndex, "image", image.bbox))}
+              productField={markFor(productSlots, slotKeyFor(pageIndex, "image", image.bbox))?.fieldId ?? null}
               rect={boxStyle(image.bbox)}
               pageWidthPx={displayWidth}
               pageHeightPx={displayHeight}
@@ -663,6 +668,7 @@ export function PdfEnginePage({
           snap={snapFor({ kind: "vector", index: group.vectorIndex })}
           onGestureEnd={clearGuides}
           locked={isLocked(locks, lockKeyFor(pageIndex, "vector", group.bbox))}
+          productField={markFor(productSlots, slotKeyFor(pageIndex, "vector", group.bbox))?.fieldId ?? null}
           rect={boxStyle(group.bbox)}
           pageWidthPx={displayWidth}
           pageHeightPx={displayHeight}
@@ -681,6 +687,7 @@ export function PdfEnginePage({
           snap={snapFor({ kind: "text", index: line.lineIndex })}
           onGestureEnd={clearGuides}
           locked={isLocked(locks, lockKeyFor(pageIndex, "text", line.bbox))}
+          productField={markFor(productSlots, slotKeyFor(pageIndex, "text", line.bbox))?.fieldId ?? null}
           line={line}
           rect={boxStyle(line.bbox)}
           pageWidthPx={displayWidth}

@@ -98,7 +98,8 @@ export async function runPartialRepaintSelfTest(): Promise<PartialRepaintTestRes
       onSelectLine: () => {},
       onReplaceImage: () => {},
       onDropOnImage: () => {},
-      onDropProductOnPage: () => {},
+      productSlots: new Map(),
+    onDropProductOnPage: () => {},
     onDropProductOnImage: () => {},
     onDropAssetOnPage: () => {},
       // Nothing is locked in these measurements.

@@ -49,6 +49,13 @@ interface PdfEditorToolbarProps {
    * together, and a button that silently ignores most of your selection is
    * worse than one that is not there. */
   selectionCount: number
+  /** Which product detail the selected box holds, or null for fixed text.
+   * This is what a template is built from — see productSlots.ts. */
+  selectionSlotField: string | null
+  onSetSlotField: (fieldId: string | null) => void
+  /** What this KIND of box may hold: a picture can only be the photo, a line
+   * of text can be any of the written details. */
+  slotFieldOptions: { id: string; labelKey: string; labelFallback: string }[]
   /** Turn or mirror the whole selection as one shape. */
   onTransformGroup: (
     op: "rotate-left" | "rotate-right" | "flip-horizontal" | "flip-vertical",
@@ -174,7 +181,9 @@ function ToolButton({
 
 export function PdfEditorToolbar({
   documentName,
-  onZoomToSelection, selection, selectionCount, onTransformGroup, contentMode, onToggleContentMode,
+  onZoomToSelection, selection, selectionCount, onTransformGroup,
+  selectionSlotField, onSetSlotField, slotFieldOptions,
+  contentMode, onToggleContentMode,
   onAddText, onAddImage, thumbnailRailOpen, onToggleThumbnailRail,
   assetPanelOpen, onToggleAssetPanel,
   productPanelOpen, onToggleProductPanel,
@@ -526,6 +535,39 @@ export function PdfEditorToolbar({
                     <ToolButton label={t("pdfTemplates.engineFlipV", "Flip vertically")} icon={FlipVerticalIcon} onClick={() => onTransformVector("flip-vertical")} />
                   </>
                 )}
+                {/* ── What this box holds. ──
+                    The foundation of templates: a box marked "this is the
+                    SKU" stops being text that happens to read 100201305 and
+                    becomes a place any product's SKU can go.
+
+                    Only for ONE box at a time. Marking several at once would
+                    mean giving them all the same field, and a page cannot
+                    have four SKU slots. */}
+                {selectionCount <= 1 && (
+                  <select
+                    data-pdf-slot-field
+                    value={selectionSlotField ?? ""}
+                    onChange={(e) => onSetSlotField(e.target.value || null)}
+                    aria-label={t("pdfTemplates.productSlotField", "Holds product detail")}
+                    title={t(
+                      "pdfTemplates.productSlotFieldHint",
+                      "Mark this box as holding one of the product's details",
+                    )}
+                    className={`h-8 shrink-0 rounded-md border px-1 text-xs ${
+                      selectionSlotField ? "border-primary bg-primary/10" : "bg-background"
+                    }`}
+                  >
+                    <option value="">
+                      {t("pdfTemplates.productSlotNone", "Fixed text")}
+                    </option>
+                    {slotFieldOptions.map((option) => (
+                      <option key={option.id} value={option.id}>
+                        {t(option.labelKey, option.labelFallback)}
+                      </option>
+                    ))}
+                  </select>
+                )}
+
                 {/* Both apply to text, pictures and artwork alike, so they
                     sit outside the per-kind blocks above. */}
                 <ToolButton

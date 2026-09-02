@@ -1,4 +1,5 @@
 import { useTranslation } from "react-i18next"
+import { productFieldLabel } from "./productSlots"
 
 import { useBoxTransform, type BoxRectPx, type ResizeHandle } from "./useBoxTransform"
 
@@ -18,6 +19,8 @@ interface PdfEngineImageSlotProps {
    * exist nowhere but the DOM. */
   slotIndex: number
   locked?: boolean
+  /** The product detail this box holds, or null for fixed text. */
+  productField?: string | null
   /** Alignment: nudges the live rect and draws the guides. Supplied by the
    * page, which is the only thing that knows what else is on it. */
   snap?: (rect: BoxRectPx, kind: string, altKey: boolean) => BoxRectPx
@@ -71,7 +74,7 @@ const HANDLES: { key: ResizeHandle; className: string; cursor: string }[] = [
  */
 export function PdfEngineImageSlot({
   rect, pageWidthPx, pageHeightPx, scale, pageHeightPts,
-  selected, locked, slotIndex, dropTarget, dragging, originPatchUrl, onSelect, onReplace, onTransform, onMoveStart, snap, onGestureEnd,
+  selected, locked, productField, slotIndex, dropTarget, dragging, originPatchUrl, onSelect, onReplace, onTransform, onMoveStart, snap, onGestureEnd,
 }: PdfEngineImageSlotProps) {
   const { t } = useTranslation()
 
@@ -131,6 +134,14 @@ export function PdfEngineImageSlot({
       onDoubleClick={(e) => { e.stopPropagation(); if (!locked) onReplace() }}
       title={`${t("pdfTemplates.engineImageHint", "Double-click to replace. Drag to move it anywhere in the document, corners to resize.")} ${t("pdfTemplates.engineGroupHint", "Shift-click to move several things together.")} ${t("pdfTemplates.engineSnapHint", "Hold Alt while dragging to ignore alignment.")}`}
     >
+      {productField && (
+        <span
+          data-pdf-slot-badge={productField}
+          className="pointer-events-none absolute -top-4 start-0 z-10 whitespace-nowrap rounded-sm bg-emerald-600 px-1 text-[9px] font-medium leading-4 text-white"
+        >
+          {productFieldLabel(t, productField)}
+        </span>
+      )}
       {/* Nothing floats over the artwork: no toolbar, and no delete button
           either. On a dense catalogue page the boxes sit shoulder to
           shoulder, so a control hovering over each selection covered the
