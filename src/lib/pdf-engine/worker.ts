@@ -78,7 +78,7 @@ const MUTATING_METHODS = new Set<EngineMethodName>([
   "replaceVectorGroupWithImage", "removeVectorGroup", "reorderLayer",
   "setVectorGroupRect", "transformVectorGroup", "transformTextLine",
   "applyPagePlan", "addBlankPage", "duplicateSlot", "translateSlots", "cropImage",
-  "removeSlots", "transformSlots", "duplicateSlots",
+  "removeSlots", "transformSlots", "duplicateSlots", "insertPageFrom",
 ])
 
 const docs = new Map<string, OpenDoc>()
@@ -1405,6 +1405,37 @@ const handlers: {
     doc.handle = built.document
     doc.fonts = new DocumentFonts(pdfium, built.document)
     return { docId, pages: toEnginePages(pdfium, built.document) }
+  },
+
+  insertPageFrom: ({ docId, bytes, atIndex }, { pdfium }) => {
+    const doc = requireDoc(docId)
+
+    // The template is opened as a SECOND document and its page imported into
+    // the one being edited. Importing copies the page's objects, fonts and
+    // images across — which is why a template can be a plain PDF rather than
+    // a layout format of our own, and why nothing is lost on the way in.
+    const scratch = new Scratch(pdfium)
+    const source = openDocument(pdfium, new Uint8Array(bytes), scratch)
+    try {
+      if (pdfium.FPDF_GetPageCount(source) < 1) {
+        throw new Error("that template has no pages")
+      }
+      const where = Math.max(0, Math.min(atIndex, pdfium.FPDF_GetPageCount(doc.handle)))
+      const idxPtr = scratch.malloc(4)
+      pdfium.pdfium.setValue(idxPtr, 0, "i32")
+      if (!pdfium.FPDF_ImportPagesByIndex(doc.handle, source, idxPtr, 1, where)) {
+        throw new Error("FPDF_ImportPagesByIndex failed")
+      }
+      // The fonts index is rebuilt because the imported page brought its own
+      // with it; without this, editing text on a page that arrived from a
+      // template would not find the typeface it is drawn in.
+      doc.fonts = new DocumentFonts(pdfium, doc.handle)
+      return { ok: true, pageIndex: where, pages: toEnginePages(pdfium, doc.handle) }
+    } finally {
+      // Closed whatever happened. The template document exists only to be
+      // copied out of, and leaking it pins a page of WASM memory per use.
+      pdfium.FPDF_CloseDocument(source)
+    }
   },
 
   savePage: ({ docId, pageIndex }, { pdfium, transfer }) => {

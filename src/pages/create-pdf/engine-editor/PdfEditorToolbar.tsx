@@ -5,7 +5,7 @@ import {
   MinusIcon, PackageSearchIcon, PlusIcon, RedoIcon, RotateCcwIcon, RotateCwIcon,
   ScanSearchIcon, Trash2Icon, TypeIcon, TypeOutlineIcon, UndoIcon,
   FilePlusIcon, LockIcon, LockOpenIcon, CopyPlusIcon, CropIcon, XIcon,
-  PanelLeftCloseIcon, PanelLeftOpenIcon, BookmarkPlusIcon,
+  PanelLeftCloseIcon, PanelLeftOpenIcon, BookmarkPlusIcon, LayoutTemplateIcon,
 } from "lucide-react"
 import { useTranslation } from "react-i18next"
 
@@ -72,6 +72,10 @@ interface PdfEditorToolbarProps {
   /** Shows or hides the asset library. */
   assetPanelOpen: boolean
   onToggleAssetPanel: () => void
+  /** Shows or hides the library of saved page designs. Shares the start edge
+   * with the asset shelf, so opening one closes the other. */
+  templatePanelOpen: boolean
+  onToggleTemplatePanel: () => void
   /** Shows or hides the product panel. A toggle rather than a one-way open,
    * because the panel takes real width from the page and someone half way
    * through a layout needs it back. */
@@ -187,7 +191,7 @@ export function PdfEditorToolbar({
   selectionSlotField, onSetSlotField, slotFieldOptions,
   contentMode, onToggleContentMode,
   onAddText, onAddImage, thumbnailRailOpen, onToggleThumbnailRail,
-  assetPanelOpen, onToggleAssetPanel,
+  assetPanelOpen, onToggleAssetPanel, templatePanelOpen, onToggleTemplatePanel,
   productPanelOpen, onToggleProductPanel,
   layersPanelOpen, onToggleLayersPanel, onOpenOrganizer,
   canUndo, canRedo, onUndo, onRedo, onAddPage, onSaveTemplate,
@@ -362,6 +366,23 @@ export function PdfEditorToolbar({
           <ToolButton label={t("pdfTemplates.railCopyPage", "Duplicate pages")} icon={CopyIcon} onClick={() => onOpenOrganizer("copy")} />
           <ToolButton label={t("pdfTemplates.railMovePage", "Reorder pages")} icon={ArrowUpDownIcon} onClick={() => onOpenOrganizer("move")} />
           <ToolButton label={t("pdfTemplates.railDeletePages", "Delete pages")} icon={Trash2Icon} onClick={() => onOpenOrganizer("delete")} danger />
+
+          {/* The library of saved page designs, beside the tool that fills
+              it. Applying a template and saving one are the two halves of the
+              same idea, so they sit together rather than in separate corners. */}
+          <Button
+            type="button"
+            size="sm"
+            variant={templatePanelOpen ? "secondary" : "ghost"}
+            onClick={onToggleTemplatePanel}
+            aria-pressed={templatePanelOpen}
+            className="h-8 shrink-0 gap-1.5 px-2"
+            aria-label={t("pdfTemplates.templatePanelTitle", "Page templates")}
+            title={t("pdfTemplates.templatePanelTitle", "Page templates")}
+          >
+            <LayoutTemplateIcon className="size-4" />
+            <span className="text-xs">{t("pdfTemplates.engineTemplatesShort", "Templates")}</span>
+          </Button>
 
           {/* Saving the page as a template. Sits with the PAGE tools rather
               than the selection tools: it acts on the whole page in view, and

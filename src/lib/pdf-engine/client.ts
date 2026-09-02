@@ -267,6 +267,12 @@ export class PdfEngineClient {
     return this.call("removeSlots", { docId, pageIndex, slots })
   }
 
+  /** Insert a page from another PDF — how a template is applied. The bytes
+   * are TRANSFERRED, so the caller's copy is detached afterwards. */
+  insertPageFrom(docId: string, bytes: ArrayBuffer, atIndex: number) {
+    return this.call("insertPageFrom", { docId, bytes, atIndex }, [bytes])
+  }
+
   /** One page as its own single-page PDF, for saving it as a template. */
   savePage(docId: string, pageIndex: number): Promise<{ bytes: ArrayBuffer }> {
     return this.call("savePage", { docId, pageIndex })

@@ -306,6 +306,17 @@ export interface EngineMethods {
     result: { ok: boolean; newIndex: number }
   }
   applyPagePlan: { params: { docId: string; plan: PagePlanRequest[] }; result: { docId: string; pages: EnginePage[] } }
+  /**
+   * Insert a page from ANOTHER PDF into the open document.
+   *
+   * How a template is applied: the template's page is imported, bringing its
+   * objects, fonts and images with it. Resolves with the whole page list,
+   * since inserting renumbers every page after the new one.
+   */
+  insertPageFrom: {
+    params: { docId: string; bytes: ArrayBuffer; atIndex: number }
+    result: { ok: boolean; pageIndex: number; pages: EnginePage[] }
+  }
   /** One page, written out as its own single-page document. The open
    * document is left untouched — the page is IMPORTED into a new one. */
   savePage: { params: { docId: string; pageIndex: number }; result: { bytes: ArrayBuffer } }

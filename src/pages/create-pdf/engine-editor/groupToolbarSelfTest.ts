@@ -49,6 +49,8 @@ function baseToolbar(overrides: Record<string, unknown>) {
     onToggleContentMode: () => {},
     onAddText: () => {}, onAddImage: () => {},
     thumbnailRailOpen: true, onToggleThumbnailRail: () => {},
+    templatePanelOpen: false,
+    onToggleTemplatePanel: () => {},
     assetPanelOpen: false, onToggleAssetPanel: () => {},
     productPanelOpen: false, onToggleProductPanel: () => {},
     layersPanelOpen: false, onToggleLayersPanel: () => {},

@@ -20,11 +20,14 @@ import { PRODUCT_BLOCK_FIELD_IDS, planProductBlock, productBlockLines } from "./
 import { PRODUCT_FIELDS } from "./productFields"
 import {
   PRODUCT_PHOTO_FIELD, fieldsForKind, markFor, marksOnPage, pruneSlotMarks,
-  reanchorSlotMark, setSlotMark, slotKeyFor, type ProductSlotMap,
+  reanchorSlotMark, setSlotMark, slotKeyFor,
+  type ProductSlotMap, type ProductSlotMark,
 } from "./productSlots"
 import { fetchPdfAssetFile } from "@/features/pdfAssets/api"
-import { useSavePageTemplateMutation } from "@/features/pdfPageTemplates/api"
+import { fetchPageTemplateFile, useSavePageTemplateMutation } from "@/features/pdfPageTemplates/api"
 import { PdfSaveTemplateDialog } from "./PdfSaveTemplateDialog"
+import { PdfTemplatePanel } from "./PdfTemplatePanel"
+import type { PdfPageTemplate } from "@/features/pdfPageTemplates/types"
 import type { PdfAsset } from "@/features/pdfAssets/types"
 
 import type { PdfContentMode, PdfOrganizerMode } from "../pdfEditorTypes"
@@ -169,7 +172,11 @@ export function PdfEngineEditorPage() {
    * one product, and having to search for it again after glancing at the full
    * width of the page would make the panel not worth opening.
    */
-  const [assetPanelOpen, setAssetPanelOpen] = useState(false)
+  /** The START-side panel: the asset shelf, the template library, or
+   * neither. A union rather than two booleans, so the two cannot both be
+   * open and fight over the same edge — exactly how the right side works. */
+  const [leftPanel, setLeftPanel] = useState<"assets" | "templates" | null>(null)
+  const assetPanelOpen = leftPanel === "assets"
   /**
    * Which panel the RIGHT side is showing, if any.
    *
@@ -1755,6 +1762,71 @@ export function PdfEngineEditorPage() {
     }
   }
 
+  // ── Applying a template ───────────────────────────────────────────────────
+
+  /** Which template is being applied, so its row can show it is working. */
+  const [applyingTemplateId, setApplyingTemplateId] = useState<string | null>(null)
+
+  /**
+   * Insert a saved template after the page in view, slots and all.
+   *
+   * The slots are the point. A template's page arrives with its boxes in
+   * exactly the coordinates they were saved in — the round trip through
+   * PDFium is bit-for-bit on geometry, which is checked rather than assumed —
+   * so the stored slots are registered against the new page directly, and the
+   * page is ready to be filled from a product the moment it lands.
+   *
+   * Inserted as a NEW page rather than replacing the one in view. "Apply a
+   * template to a page" could mean either, and replacing would silently
+   * destroy whatever was there; anyone who does want that can delete the old
+   * page, which is a deliberate act with its own undo.
+   */
+  const applyTemplate = async (template: PdfPageTemplate) => {
+    const afterPageIndex = visiblePageIndex()
+    setApplyingTemplateId(template.id)
+    try {
+      const bytes = await fetchPageTemplateFile(template.id)
+      const newPageIndex = await doc.insertPageFrom(bytes, afterPageIndex)
+      if (newPageIndex < 0) throw new Error("the template page could not be inserted")
+
+      // The marks are keyed by page number, and inserting shifted every page
+      // after this one — so existing marks are moved up before the new page's
+      // are added, or a mark from page 3 would now describe page 4.
+      setProductSlots((current) => {
+        const next = new Map<string, ProductSlotMark>()
+        for (const mark of current.values()) {
+          const pageIndex = mark.pageIndex >= newPageIndex ? mark.pageIndex + 1 : mark.pageIndex
+          const key = slotKeyFor(pageIndex, mark.kind, mark.bbox)
+          if (key) next.set(key, { ...mark, pageIndex })
+        }
+        for (const slot of template.slots) {
+          const key = slotKeyFor(newPageIndex, slot.kind, slot.bbox)
+          if (key) {
+            next.set(key, {
+              fieldId: slot.fieldId,
+              pageIndex: newPageIndex,
+              kind: slot.kind,
+              bbox: slot.bbox,
+            })
+          }
+        }
+        return next
+      })
+
+      setSelection(null)
+      setAlsoSelected([])
+      toast.success(template.slots.length > 0
+        ? t("pdfTemplates.templateApplied", "Template added with {{count}} product slots", {
+          count: template.slots.length,
+        })
+        : t("pdfTemplates.templateAppliedNoSlots", "Template added"))
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : String(err))
+    } finally {
+      setApplyingTemplateId(null)
+    }
+  }
+
   // ── Download ──────────────────────────────────────────────────────────────
 
   const handleDownload = async () => {
@@ -1967,7 +2039,11 @@ export function PdfEngineEditorPage() {
           thumbnailRailOpen,
           onToggleThumbnailRail: () => setThumbnailRailOpen((open) => !open),
           assetPanelOpen,
-          onToggleAssetPanel: () => setAssetPanelOpen((open) => !open),
+          onToggleAssetPanel: () =>
+            setLeftPanel((p) => (p === "assets" ? null : "assets")),
+          templatePanelOpen: leftPanel === "templates",
+          onToggleTemplatePanel: () =>
+            setLeftPanel((p) => (p === "templates" ? null : "templates")),
           productPanelOpen,
           onToggleProductPanel: () =>
             setRightPanel((p) => (p === "product" ? null : "product")),
@@ -2039,10 +2115,17 @@ export function PdfEngineEditorPage() {
           busy: doc.busy,
           selection,
         }}
-        leftPanel={assetPanelOpen ? (
+        leftPanel={leftPanel === "assets" ? (
           <PdfAssetPanel
             onPlaceAsset={placeAssetOnVisiblePage}
-            onClose={() => setAssetPanelOpen(false)}
+            onClose={() => setLeftPanel(null)}
+          />
+        ) : leftPanel === "templates" ? (
+          <PdfTemplatePanel
+            onApplyTemplate={(template) => void applyTemplate(template)}
+            afterPageNumber={visiblePageIndex() + 1}
+            applyingId={applyingTemplateId}
+            onClose={() => setLeftPanel(null)}
           />
         ) : undefined}
         panel={rightPanel === "product" ? (

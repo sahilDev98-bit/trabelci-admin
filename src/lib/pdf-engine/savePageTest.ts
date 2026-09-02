@@ -165,3 +165,161 @@ export async function runSavePageTest(pdfUrl = SAMPLE_PDF_URL): Promise<SavePage
   out.ok = out.errors.length === 0
   return out
 }
+
+/**
+ * The whole template loop: save a page out, and put it back in.
+ *
+ * This is what Step 3 rests on, and it is the round trip that matters rather
+ * than either half alone. A template is only useful if the page that comes
+ * back is the page that went out — same content, same size, and above all the
+ * same COORDINATES, because the slots stored alongside it are boxes in that
+ * page's space. Drift anywhere in the loop and every slot points beside its
+ * box instead of at it.
+ *
+ * Checked with the page inserted into a DIFFERENT document from the one it
+ * came from, because that is what applying a template actually does.
+ */
+export interface TemplateRoundTripResult {
+  ok: boolean
+  errors: string[]
+  pagesBefore: number
+  pagesAfter: number
+  /** Where the template landed, and what was already there. */
+  insertedAt: number
+  originalText: string[]
+  insertedText: string[]
+  /** The page that was already at that position must still be intact. */
+  neighbourIntact: boolean
+  sizeMatches: boolean
+  worstBoxDrift: number
+  /** A slot's box, carried through the loop and checked against the page it
+   * now names. */
+  slotStillOnItsBox: boolean
+}
+
+export async function runTemplateRoundTripTest(
+  pdfUrl = SAMPLE_PDF_URL,
+): Promise<TemplateRoundTripResult> {
+  const out: TemplateRoundTripResult = {
+    ok: false, errors: [], pagesBefore: 0, pagesAfter: 0, insertedAt: -1,
+    originalText: [], insertedText: [], neighbourIntact: false,
+    sizeMatches: false, worstBoxDrift: 0, slotStillOnItsBox: false,
+  }
+  const engine = new PdfEngineClient()
+  let sourceId: string | null = null
+  let targetId: string | null = null
+
+  try {
+    const res = await fetch(pdfUrl)
+    const bytes = await res.arrayBuffer()
+
+    // Two independent documents from the same file: one plays the catalogue
+    // the template came from, the other the catalogue it is applied to.
+    const source = await engine.open(bytes.slice(0))
+    sourceId = source.docId
+    const target = await engine.open(bytes.slice(0))
+    targetId = target.docId
+    out.pagesBefore = target.pages.length
+
+    let pageIndex = -1
+    for (let i = 0; i < source.pages.length; i++) {
+      const text = await engine.listTextLines(sourceId, i)
+      if (text.lines.length >= 2) { pageIndex = i; break }
+    }
+    if (pageIndex < 0) throw new Error("no page with enough text to test with")
+
+    const originalLines = (await engine.listTextLines(sourceId, pageIndex)).lines
+    out.originalText = originalLines.map((l) => l.text)
+    const sourcePage = source.pages[pageIndex]
+
+    // A slot, as the editor would have stored it with the template.
+    const slotBox = { ...originalLines[0].bbox }
+
+    // ── Out, then back in ────────────────────────────────────────────
+    const saved = await engine.savePage(sourceId, pageIndex)
+
+    // Applied AFTER page 0 of the other document, so there is a real
+    // neighbour on each side to be disturbed if insertion is careless.
+    const inserted = await engine.insertPageFrom(targetId, saved.bytes, 1)
+    out.insertedAt = inserted.pageIndex
+    out.pagesAfter = inserted.pages.length
+
+    if (out.pagesAfter !== out.pagesBefore + 1) {
+      out.errors.push(
+        `the document had ${out.pagesBefore} pages and now has ${out.pagesAfter};`
+        + " applying a template should add exactly one")
+    }
+    if (out.insertedAt !== 1) {
+      out.errors.push(`the template landed at page ${out.insertedAt}, expected 1`)
+    }
+
+    // ── What arrived ─────────────────────────────────────────────────
+    const insertedLines = (await engine.listTextLines(targetId, out.insertedAt)).lines
+    out.insertedText = insertedLines.map((l) => l.text)
+    if (JSON.stringify(out.insertedText) !== JSON.stringify(out.originalText)) {
+      out.errors.push(
+        `the applied page reads ${JSON.stringify(out.insertedText)},`
+        + ` the template was ${JSON.stringify(out.originalText)}`)
+    }
+
+    const newPage = inserted.pages[out.insertedAt]
+    out.sizeMatches = !!newPage
+      && Math.abs(newPage.widthPts - sourcePage.widthPts) < 0.01
+      && Math.abs(newPage.heightPts - sourcePage.heightPts) < 0.01
+    if (!out.sizeMatches) {
+      out.errors.push(
+        `the applied page is ${newPage?.widthPts}x${newPage?.heightPts}pt,`
+        + ` the template was ${sourcePage.widthPts}x${sourcePage.heightPts}pt`)
+    }
+
+    // ── THE check: do the stored slots still land on their boxes? ────
+    let worst = 0
+    for (const line of originalLines) {
+      const twin = insertedLines.find((l) => l.text === line.text)
+      if (!twin) continue
+      worst = Math.max(
+        worst,
+        Math.abs(twin.bbox.left - line.bbox.left),
+        Math.abs(twin.bbox.bottom - line.bbox.bottom),
+        Math.abs(twin.bbox.right - line.bbox.right),
+        Math.abs(twin.bbox.top - line.bbox.top),
+      )
+    }
+    out.worstBoxDrift = Number(worst.toFixed(3))
+
+    // Looked up the way the editor does it: find the box on the applied page
+    // that matches the stored slot. If nothing matches, the slot is orphaned
+    // and the template would insert but never fill.
+    const match = insertedLines.find((l) =>
+      Math.abs(l.bbox.left - slotBox.left) < 0.5
+      && Math.abs(l.bbox.bottom - slotBox.bottom) < 0.5
+      && Math.abs(l.bbox.right - slotBox.right) < 0.5
+      && Math.abs(l.bbox.top - slotBox.top) < 0.5)
+    out.slotStillOnItsBox = match !== undefined
+    if (!out.slotStillOnItsBox) {
+      out.errors.push(
+        "a slot stored with the template does not match any box on the applied"
+        + " page — the template would insert but nothing could ever fill it")
+    }
+
+    // ── The neighbours must be untouched ─────────────────────────────
+    // Inserting into the middle of a document must not disturb what was
+    // already there. Page 0 is the one the template was placed after.
+    const neighbour = (await engine.listTextLines(targetId, 0)).lines.map((l) => l.text)
+    const originalNeighbour = (await engine.listTextLines(sourceId, 0)).lines.map((l) => l.text)
+    out.neighbourIntact = JSON.stringify(neighbour) === JSON.stringify(originalNeighbour)
+    if (!out.neighbourIntact) {
+      out.errors.push("the page before the inserted one was changed by the insertion")
+    }
+  } catch (err) {
+    out.errors.push(String(err))
+  } finally {
+    for (const id of [sourceId, targetId]) {
+      if (id) { try { await engine.close(id) } catch { /* best effort */ } }
+    }
+    engine.terminate?.()
+  }
+
+  out.ok = out.errors.length === 0
+  return out
+}

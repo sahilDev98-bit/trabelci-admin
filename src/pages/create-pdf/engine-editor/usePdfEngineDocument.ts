@@ -176,6 +176,9 @@ export interface UsePdfEngineDocumentResult {
   duplicateSlot: (
     pageIndex: number, kind: "text" | "image" | "vector", index: number, toPageIndex?: number,
   ) => Promise<number>
+  /** Insert a page from another PDF after `afterPageIndex` — how a template
+   * is applied. Resolves to the new page's index. */
+  insertPageFrom: (bytes: ArrayBuffer, afterPageIndex: number) => Promise<number>
   /** Insert a blank page after `afterPageIndex`. Without a size it matches
    * that page's. Resolves to the new page's index. */
   addBlankPage: (
@@ -737,6 +740,36 @@ export function usePdfEngineDocument(templateId: string | null | undefined): Use
     }
   }, [getEngine, pages])
 
+  /**
+   * Insert a page from another PDF — how a template is applied.
+   *
+   * Follows addBlankPage exactly, including clearing every cached per-page
+   * list: those are keyed by page NUMBER, and inserting shifts every number
+   * above the new page. Rebuilding them is cheap; shifting them by hand is
+   * the kind of arithmetic that is subtly wrong once and then wrong forever.
+   */
+  const insertPageFrom = useCallback(async (
+    bytes: ArrayBuffer, afterPageIndex: number,
+  ) => {
+    const id = docIdRef.current
+    if (!id) return -1
+    const at = afterPageIndex + 1
+    setBusy(true)
+    try {
+      const result = await getEngine().insertPageFrom(id, bytes, at)
+      setHistory({ canUndo: true, canRedo: false })
+      setPages(result.pages)
+      setPageText({})
+      setPageImages({})
+      setPageVectors({})
+      setLastChange(null)
+      setRevision((r) => r + 1)
+      return result.pageIndex
+    } finally {
+      setBusy(false)
+    }
+  }, [getEngine])
+
   const cropImage = useCallback(async (
     pageIndex: number, imageIndex: number,
     region: { left: number; bottom: number; right: number; top: number },
@@ -868,7 +901,7 @@ export function usePdfEngineDocument(templateId: string | null | undefined): Use
     removeVector, replaceVector, setVectorRect, transformVector, transformText, styleText, scaleText, alignText, transformImage, renderPage, editText, moveText, moveTextToPage, moveImageToPage, removeText,
     replaceImage, removeImage, setImageRect, addTextOverlay, addImageOverlay, applyPagePlan,
     canUndo: history.canUndo, canRedo: history.canRedo, undo, redo,
-    listLayers, reorderLayer, addBlankPage, duplicateSlot, translateSlots, removeSlots, transformSlots, duplicateSlots, cropImage,
+    listLayers, reorderLayer, addBlankPage, insertPageFrom, duplicateSlot, translateSlots, removeSlots, transformSlots, duplicateSlots, cropImage,
     save, savePage, busy, revision,
   }), [
     phase, error, downloadPercent, pages, docId, pageText, pageImages,
@@ -878,6 +911,6 @@ export function usePdfEngineDocument(templateId: string | null | undefined): Use
     renderPage, editText, moveText, moveTextToPage, moveImageToPage, removeText,
     replaceImage, removeImage, setImageRect, addTextOverlay, addImageOverlay,
     applyPagePlan, save, savePage, busy, revision, history, undo, redo,
-    listLayers, reorderLayer, addBlankPage, duplicateSlot, translateSlots, removeSlots, transformSlots, duplicateSlots, cropImage,
+    listLayers, reorderLayer, addBlankPage, insertPageFrom, duplicateSlot, translateSlots, removeSlots, transformSlots, duplicateSlots, cropImage,
   ])
 }
