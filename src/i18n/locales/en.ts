@@ -1195,6 +1195,8 @@ const en = {
     templateCategorySupplier: "Supplier opening",
     templateCategoryContact: "Contact / final page",
     templateCategoryOther: "Other",
+    productSwapped: "Page now shows {{name}} — {{count}} slots updated",
+    productSwapHint: "Drop to swap this page's product",
     productSlotField: "Holds product detail",
     productSlotFieldHint: "Mark this box as holding one of the product's details",
     productSlotNone: "Fixed text",

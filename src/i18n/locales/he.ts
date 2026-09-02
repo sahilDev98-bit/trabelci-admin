@@ -1179,6 +1179,8 @@ const he = {
     templateCategorySupplier: "עמוד פתיחה לספק",
     templateCategoryContact: "עמוד קשר / סיום",
     templateCategoryOther: "אחר",
+    productSwapped: "העמוד מציג כעת את {{name}} — {{count}} משבצות עודכנו",
+    productSwapHint: "שחרר כדי להחליף את המוצר בעמוד",
     productSlotField: "מכיל פרט מוצר",
     productSlotFieldHint: "סמן תיבה זו ככזו שמכילה אחד מפרטי המוצר",
     productSlotNone: "טקסט קבוע",

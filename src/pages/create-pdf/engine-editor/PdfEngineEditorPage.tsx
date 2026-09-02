@@ -15,7 +15,7 @@ import { Label } from "@/components/ui/label"
 import type { EngineTextLine, PagePlanRequest, PdfRect } from "@/lib/pdf-engine"
 import type { CatalogProduct } from "@/features/catalogProducts/types"
 import { fetchProductCoverFile } from "@/features/catalogProducts/api"
-import { toProductFieldLanguage } from "./productFields"
+import { productDisplayName, toProductFieldLanguage } from "./productFields"
 import { PRODUCT_BLOCK_FIELD_IDS, planProductBlock, productBlockLines } from "./productBlock"
 import { PRODUCT_FIELDS } from "./productFields"
 import {
@@ -1038,6 +1038,32 @@ export function PdfEngineEditorPage() {
     const page = doc.pages[pageIndex]
     if (!page) return
 
+    /**
+     * ── Point 6: swapping the product on a page ──
+     *
+     * If this page already HOLDS a product — that is, it has product slots —
+     * then dropping another one onto it means "show this product instead",
+     * not "add a second product on top of the first". The layout does not
+     * move; only the data in the slots changes. That is the brief's own
+     * wording, and it is the commonest act in building a catalogue: one
+     * design, forty products.
+     *
+     * A page with no slots is a blank page as far as products are concerned,
+     * so a drop there still places a block. The two behaviours never overlap,
+     * because a page either has slots or it does not.
+     */
+    if (marksOnPage(productSlots, pageIndex).length > 0) {
+      const filled = await fillPageFromProduct(product, pageIndex)
+      if (filled) {
+        toast.success(t(
+          "pdfTemplates.productSwapped",
+          "Page now shows {{name}} — {{count}} slots updated",
+          { name: productDisplayName(product), count: filled },
+        ))
+      }
+      return
+    }
+
     const language = toProductFieldLanguage(i18n.language)
     const lines = productBlockLines(product, language)
 
@@ -1141,15 +1167,20 @@ export function PdfEngineEditorPage() {
    * are keyed by box, and filling a text box changes its box, so re-reading
    * the page between writes would lose the slots not yet filled.
    */
-  const fillPageFromProduct = useCallback(async (chosen: CatalogProduct) => {
-    const pageIndex = visiblePageIndex()
+  const fillPageFromProduct = useCallback(async (
+    chosen: CatalogProduct, targetPageIndex?: number,
+  ) => {
+    // A named page, because this is reached two ways now: the panel's button
+    // means "the page I am looking at", and a product DROPPED on a page means
+    // that page, which may not be the one in view.
+    const pageIndex = targetPageIndex ?? visiblePageIndex()
     const marks = marksOnPage(productSlots, pageIndex)
     if (marks.length === 0) {
       toast.error(t(
         "pdfTemplates.productSlotsNone",
         "No product slots on this page yet. Select a box and choose what it holds.",
       ))
-      return
+      return 0
     }
 
     const language = toProductFieldLanguage(i18n.language)
@@ -1204,13 +1235,39 @@ export function PdfEngineEditorPage() {
         { count: skipped.length },
       ))
     }
+    return filled
   }, [productSlots, doc, i18n.language, t, visiblePageIndex, reportFontOutcome])
 
-  /** A product dropped onto an existing picture: that picture becomes the
-   * product's photo, keeping the slot's position, size and shape. */
+  /**
+   * A product dropped onto an existing picture.
+   *
+   * Two meanings, decided by whether the page holds a product:
+   *
+   *   - On a page WITH slots, this is the brief's "drag product B over
+   *     product A": the whole page swaps to the new product — photo, name,
+   *     SKU, size, price — and the layout does not move. Dropping onto the
+   *     photo is the natural way to express it, and swapping only the picture
+   *     while the name underneath still said the old product would be worse
+   *     than doing nothing: the page would be quietly, plausibly wrong.
+   *
+   *   - On a page with no slots, there is no product to swap, so it does what
+   *     it always did: that picture becomes this product's photo, keeping its
+   *     position, size and shape.
+   */
   const handleDropProductOnImage = async (
     pageIndex: number, imageIndex: number, product: CatalogProduct,
   ) => {
+    if (marksOnPage(productSlots, pageIndex).length > 0) {
+      const filled = await fillPageFromProduct(product, pageIndex)
+      if (filled) {
+        toast.success(t(
+          "pdfTemplates.productSwapped",
+          "Page now shows {{name}} — {{count}} slots updated",
+          { name: productDisplayName(product), count: filled },
+        ))
+      }
+      return
+    }
     if (!product.coverUrl) {
       toast.error(t("pdfTemplates.productNoPhoto", "This product has no photo."))
       return

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react"
+import { useTranslation } from "react-i18next"
 
 import {
   drawRenderedPage, drawPagePatch,
@@ -218,6 +219,7 @@ export function PdfEnginePage({
   onTransformImage, onTransformVector, onResizeText,
   selection, onSelect, onMoveStart, draggingSlot, dropTargetPage, originPatchUrl, imagePreviewUrl,
 }: PdfEnginePageProps) {
+  const { t } = useTranslation()
   const canvasRef = useRef<HTMLCanvasElement>(null)
   /** Where the alignment guides are drawn, by hand, during a gesture. */
   const guideLayerRef = useRef<HTMLDivElement>(null)
@@ -238,6 +240,14 @@ export function PdfEnginePage({
   const [dropSlot, setDropSlot] = useState<number | null>(null)
   /** True while a file hovers the page but not over any slot. */
   const [dropPage, setDropPage] = useState(false)
+  /** True while a PRODUCT is being dragged over a page that already holds
+   * one, where letting go swaps the product rather than adding to the page. */
+  const [swapOnDrop, setSwapOnDrop] = useState(false)
+  /** Whether this page holds a product at all — that is, whether any box on
+   * it is marked as carrying a product detail. Dropping a product onto such a
+   * page SWAPS the product; onto any other page it adds one. */
+  const pageHoldsProduct = [...productSlots.values()]
+    .some((mark) => mark.pageIndex === pageIndex)
   const displayHeight = page.heightPts > 0 ? (displayWidth * page.heightPts) / page.widthPts : 0
   // PDF points -> CSS pixels, for placing hotspot boxes over the canvas.
   const scale = page.widthPts > 0 ? displayWidth / page.widthPts : 1
@@ -466,6 +476,7 @@ export function PdfEnginePage({
   const handlePageDrop = (e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault()
     setDropPage(false)
+    setSwapOnDrop(false)
     setDropSlot(null)
     const rect = e.currentTarget.getBoundingClientRect()
     // Drop point -> PDF points, measured from the page's top-left.
@@ -494,15 +505,28 @@ export function PdfEnginePage({
     <div
       ref={containerRef}
       data-engine-page-index={pageIndex}
+      // Amber for a SWAP, green for an addition. The same gesture does two
+      // very different things depending on whether this page holds a product,
+      // and which one you are about to get has to be visible before you let
+      // go — not announced afterwards by a message about what already
+      // happened to the page.
       className={`relative mx-auto bg-white shadow-sm ring-1 transition ${
         dropPage
-          ? "ring-2 ring-emerald-500"
+          ? (swapOnDrop ? "ring-2 ring-amber-500" : "ring-2 ring-emerald-500")
           : dropTargetPage
             ? "ring-2 ring-sky-500"
             : "ring-black/10"
       }`}
       style={{ width: displayWidth, height: displayHeight }}
-      onDragEnter={(e) => { if (dragCarriesDroppable(e.dataTransfer)) { e.preventDefault(); setDropPage(true) } }}
+      onDragEnter={(e) => {
+        if (!dragCarriesDroppable(e.dataTransfer)) return
+        e.preventDefault()
+        setDropPage(true)
+        // Decided during the DRAG, from the type list alone — the payload
+        // cannot be read until the drop, which would be too late to show
+        // anything.
+        setSwapOnDrop(dragCarriesProduct(e.dataTransfer) && pageHoldsProduct)
+      }}
       onDragOver={(e) => {
         if (!dragCarriesDroppable(e.dataTransfer)) return
         // Both preventDefault AND a copy effect are required, or the
@@ -515,6 +539,7 @@ export function PdfEnginePage({
         // child; only a genuine exit of the page itself counts.
         if (e.currentTarget.contains(e.relatedTarget as Node | null)) return
         setDropPage(false)
+        setSwapOnDrop(false)
       }}
       onDrop={handlePageDrop}
       onPointerDown={() => {
@@ -536,6 +561,22 @@ export function PdfEnginePage({
         className="block h-full w-full"
         style={{ width: displayWidth, height: displayHeight }}
       />
+
+      {/* What letting go here will DO. A colour alone is not an explanation:
+          "the ring went amber instead of green" is not something anyone
+          should have to learn, and swapping the product on a laid-out page is
+          too destructive to be signalled by a hue. */}
+      {dropPage && swapOnDrop && (
+        <div
+          data-pdf-swap-hint
+          aria-hidden
+          className="pointer-events-none absolute inset-x-0 top-0 z-30 flex justify-center p-2"
+        >
+          <span className="rounded-full bg-amber-500 px-2 py-0.5 text-[11px] font-medium text-white shadow">
+            {t("pdfTemplates.productSwapHint", "Drop to swap this page's product")}
+          </span>
+        </div>
+      )}
 
       {/* Alignment guides, drawn straight into this element by the gesture
           rather than rendered from state — see snapping.ts for why. */}

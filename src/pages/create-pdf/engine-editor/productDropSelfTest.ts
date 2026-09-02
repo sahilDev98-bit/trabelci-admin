@@ -460,3 +460,169 @@ export async function showProductPanelWithProduct(language: "en" | "he"): Promis
   ))
   await new Promise((r) => setTimeout(r, 400))
 }
+
+/**
+ * Point 6: does dropping a product SWAP the one already on the page?
+ *
+ * The brief's rule is that the layout must not change — only the connected
+ * data. So the same gesture has to mean two different things:
+ *
+ *   - on a page that HOLDS a product (it has slots), a drop swaps it
+ *   - on a page that does not, a drop adds one
+ *
+ * Both are checked, and the second is the control: without it, "the drop
+ * swapped" would also pass for code that swapped unconditionally and had
+ * quietly stopped being able to place a product on a blank page at all.
+ *
+ * And the hint matters as much as the behaviour. The same gesture doing two
+ * different things is only acceptable if you can see which one you are about
+ * to get BEFORE letting go — so the swap warning is checked to be present on
+ * a page with slots and absent on a page without.
+ */
+export interface ProductSwapResult {
+  errors: string[]
+  /** What the page reported when a product was dropped on a page WITH slots. */
+  droppedOnSlottedPage: string | null
+  /** …and on a page with none. */
+  droppedOnPlainPage: string | null
+  swapHintOnSlottedPage: boolean
+  /** The control: no swap warning where a drop would only add. */
+  swapHintOnPlainPage: boolean
+  ringOnSlottedPage: string | null
+  ringOnPlainPage: string | null
+}
+
+export async function runProductSwapTest(): Promise<ProductSwapResult> {
+  const [{ createElement }, { createRoot }, { PdfEnginePage }, { slotKeyFor }] = await Promise.all([
+    import("react"), import("react-dom/client"),
+    import("./PdfEnginePage"), import("./productSlots"),
+  ])
+
+  const out: ProductSwapResult = {
+    errors: [], droppedOnSlottedPage: null, droppedOnPlainPage: null,
+    swapHintOnSlottedPage: false, swapHintOnPlainPage: false,
+    ringOnSlottedPage: null, ringOnPlainPage: null,
+  }
+
+  const imageBox = { left: 100, bottom: 500, right: 300, top: 700 }
+  // A page whose picture is marked as holding the product's photo — which is
+  // what "this page holds a product" means.
+  const withSlots = new Map([[
+    slotKeyFor(0, "image", imageBox)!,
+    { fieldId: "photo", pageIndex: 0, kind: "image" as const, bbox: imageBox },
+  ]])
+
+  const run = async (slots: typeof withSlots) => {
+    const host = document.createElement("div")
+    document.body.appendChild(host)
+    const root = createRoot(host)
+    // On an object, not a plain `let`: assigning inside the callbacks below
+    // is invisible to the compiler's narrowing, which then decides the
+    // variable is still null and refuses to let it be read as a string.
+    const seen: { reported: string | null } = { reported: null }
+
+    root.render(createElement(PdfEnginePage, {
+      page: { index: 0, widthPts: 600, heightPts: 800, rotation: 0 },
+      pageIndex: 0,
+      displayWidth: 600,
+      text: { loaded: true, lines: [] },
+      images: {
+        loaded: true,
+        images: [{
+          imageIndex: 0, bbox: imageBox,
+          pixelWidth: 500, pixelHeight: 500, hasClipPath: false, filters: ["DCTDecode"],
+        }],
+      },
+      vectors: { loaded: true, groups: [] },
+      contentMode: "images",
+      revision: 0,
+      renderPage: async () => null,
+      renderPageRegion: async () => null,
+      lastChange: null,
+      loadPageText: async () => {}, loadPageImages: async () => {}, loadPageVectors: async () => {},
+      onSelectLine: () => {}, onReplaceImage: () => {}, onReplaceVector: () => {},
+      onDropOnImage: () => {}, onDropOnPage: () => {}, onDropAssetOnPage: () => {},
+      onDropProductOnPage: (_p: number, product: { sku: string }) => {
+        seen.reported = `page:${product.sku}`
+      },
+      onDropProductOnImage: (_p: number, _i: number, product: { sku: string }) => {
+        seen.reported = `image:${product.sku}`
+      },
+      productSlots: slots,
+      locks: new Set<string>(),
+      alsoSelected: [], cropping: null,
+      onCropCancel: () => {}, onCropCommit: () => {},
+      onTransformImage: () => {}, onTransformVector: () => {}, onResizeText: () => {},
+      selection: null, onSelect: () => {}, onMoveStart: () => {},
+      draggingSlot: null, dropTargetPage: false,
+      originPatchUrl: null, imagePreviewUrl: null,
+    } as never))
+    await new Promise((r) => setTimeout(r, 80))
+
+    const surface = host.querySelector<HTMLElement>("[data-engine-page-index]")!
+    const rect = surface.getBoundingClientRect()
+    const drag = (type: string, x: number, y: number) => {
+      const dataTransfer = new DataTransfer()
+      setProductDragData(dataTransfer, PRODUCT)
+      return new DragEvent(type, {
+        bubbles: true, cancelable: true, dataTransfer, clientX: x, clientY: y,
+      })
+    }
+
+    // Hover first — the hint has to appear before the drop, not after.
+    surface.dispatchEvent(drag("dragenter", rect.left + 400, rect.top + 100))
+    await new Promise((r) => setTimeout(r, 60))
+    const hint = host.querySelector("[data-pdf-swap-hint]") !== null
+    const ring = /ring-amber-500/.test(surface.className)
+      ? "amber" : /ring-emerald-500/.test(surface.className) ? "emerald" : "none"
+
+    surface.dispatchEvent(drag("drop", rect.left + 400, rect.top + 100))
+    await new Promise((r) => setTimeout(r, 40))
+
+    root.unmount()
+    host.remove()
+    return { reported: seen.reported, hint, ring }
+  }
+
+  try {
+    const slotted = await run(withSlots)
+    out.droppedOnSlottedPage = slotted.reported
+    out.swapHintOnSlottedPage = slotted.hint
+    out.ringOnSlottedPage = slotted.ring
+
+    const plain = await run(new Map())
+    out.droppedOnPlainPage = plain.reported
+    out.swapHintOnPlainPage = plain.hint
+    out.ringOnPlainPage = plain.ring
+
+    // Both routes reach the editor, which then decides swap-or-add from the
+    // page's slots. What this proves is that the DROP arrives with the page
+    // it landed on, and that the page told the user which it would be.
+    if (!out.droppedOnSlottedPage?.includes(PRODUCT.sku)) {
+      out.errors.push("a product dropped on a page holding a product never reached the editor")
+    }
+    if (!out.droppedOnPlainPage?.includes(PRODUCT.sku)) {
+      out.errors.push("a product dropped on a plain page never reached the editor")
+    }
+
+    if (!out.swapHintOnSlottedPage) {
+      out.errors.push(
+        "no warning that the drop will SWAP the page's product — the same"
+        + " gesture does two different things and nothing says which")
+    }
+    // THE control. A warning that shows everywhere warns about nothing.
+    if (out.swapHintOnPlainPage) {
+      out.errors.push("the swap warning shows on a page that holds no product")
+    }
+    if (out.ringOnSlottedPage !== "amber") {
+      out.errors.push(`a page holding a product highlighted ${out.ringOnSlottedPage}, expected amber`)
+    }
+    if (out.ringOnPlainPage !== "emerald") {
+      out.errors.push(`a plain page highlighted ${out.ringOnPlainPage}, expected emerald`)
+    }
+  } catch (err) {
+    out.errors.push(String(err))
+  }
+
+  return out
+}
