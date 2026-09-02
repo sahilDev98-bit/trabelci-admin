@@ -202,6 +202,8 @@ export interface UsePdfEngineDocumentResult {
   ) => Promise<number>
   applyPagePlan: (plan: PagePlanRequest[]) => Promise<void>
   save: () => Promise<Blob>
+  /** One page on its own, as PDF bytes. */
+  savePage: (pageIndex: number) => Promise<ArrayBuffer>
   /** True while any mutating operation is in flight. */
   busy: boolean
   /** Bumped whenever the document changes, so canvases know to repaint. */
@@ -822,6 +824,20 @@ export function usePdfEngineDocument(templateId: string | null | undefined): Use
   const undo = useCallback(() => stepHistory("undo"), [stepHistory])
   const redo = useCallback(() => stepHistory("redo"), [stepHistory])
 
+  /** One page as its own single-page PDF, for saving it as a template. The
+   * open document is untouched — the page is imported into a new one. */
+  const savePage = useCallback(async (pageIndex: number) => {
+    const id = docIdRef.current
+    if (!id) throw new Error("No document is open")
+    setBusy(true)
+    try {
+      const { bytes } = await getEngine().savePage(id, pageIndex)
+      return bytes
+    } finally {
+      setBusy(false)
+    }
+  }, [getEngine])
+
   const save = useCallback(async () => {
     const id = docIdRef.current
     if (!id) throw new Error("No document is open")
@@ -853,7 +869,7 @@ export function usePdfEngineDocument(templateId: string | null | undefined): Use
     replaceImage, removeImage, setImageRect, addTextOverlay, addImageOverlay, applyPagePlan,
     canUndo: history.canUndo, canRedo: history.canRedo, undo, redo,
     listLayers, reorderLayer, addBlankPage, duplicateSlot, translateSlots, removeSlots, transformSlots, duplicateSlots, cropImage,
-    save, busy, revision,
+    save, savePage, busy, revision,
   }), [
     phase, error, downloadPercent, pages, docId, pageText, pageImages,
     loadPageText, loadPageImages, loadPageVectors, pageVectors,
@@ -861,7 +877,7 @@ export function usePdfEngineDocument(templateId: string | null | undefined): Use
     removeVector, replaceVector, setVectorRect, transformVector, transformText, styleText, scaleText, alignText, transformImage,
     renderPage, editText, moveText, moveTextToPage, moveImageToPage, removeText,
     replaceImage, removeImage, setImageRect, addTextOverlay, addImageOverlay,
-    applyPagePlan, save, busy, revision, history, undo, redo,
+    applyPagePlan, save, savePage, busy, revision, history, undo, redo,
     listLayers, reorderLayer, addBlankPage, duplicateSlot, translateSlots, removeSlots, transformSlots, duplicateSlots, cropImage,
   ])
 }

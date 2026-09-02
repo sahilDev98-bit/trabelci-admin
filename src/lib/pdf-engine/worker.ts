@@ -1407,6 +1407,31 @@ const handlers: {
     return { docId, pages: toEnginePages(pdfium, built.document) }
   },
 
+  savePage: ({ docId, pageIndex }, { pdfium, transfer }) => {
+    const doc = requireDoc(docId)
+    // The SAME machinery the page organizer uses, with a plan of one page.
+    // Importing rather than deleting the others leaves the open document
+    // completely untouched — saving a page as a template must not disturb
+    // the catalogue the user is still working on.
+    const built = buildDocumentFromPlan(
+      pdfium, doc.handle, [{ sourceIndex: pageIndex }], doc.scratch)
+    if (!built.ok || !built.document) {
+      throw new Error(built.error ?? `could not extract page ${pageIndex}`)
+    }
+    try {
+      const saved = saveDocument(pdfium, built.document, doc.scratch)
+      const out = new Uint8Array(saved.length)
+      out.set(saved)
+      transfer.push(out.buffer)
+      return { bytes: out.buffer }
+    } finally {
+      // Closed whatever happened: this document exists only to be written
+      // out, and leaking it would pin a page's worth of WASM memory for the
+      // life of the session.
+      pdfium.FPDF_CloseDocument(built.document)
+    }
+  },
+
   save: ({ docId }, { pdfium, transfer }) => {
     const doc = requireDoc(docId)
     const saved = saveDocument(pdfium, doc.handle, doc.scratch)

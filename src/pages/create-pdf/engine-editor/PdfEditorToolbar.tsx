@@ -5,7 +5,7 @@ import {
   MinusIcon, PackageSearchIcon, PlusIcon, RedoIcon, RotateCcwIcon, RotateCwIcon,
   ScanSearchIcon, Trash2Icon, TypeIcon, TypeOutlineIcon, UndoIcon,
   FilePlusIcon, LockIcon, LockOpenIcon, CopyPlusIcon, CropIcon, XIcon,
-  PanelLeftCloseIcon, PanelLeftOpenIcon,
+  PanelLeftCloseIcon, PanelLeftOpenIcon, BookmarkPlusIcon,
 } from "lucide-react"
 import { useTranslation } from "react-i18next"
 
@@ -91,6 +91,8 @@ interface PdfEditorToolbarProps {
   onRedo: () => void
   /** Insert a blank page after the one in view. */
   onAddPage: () => void
+  /** Save the page in view as a reusable template, with its product slots. */
+  onSaveTemplate: () => void
   /** Whether the SELECTED slot is locked, and the toggle for it. Locks are a
    * property of this editing session; a PDF has nowhere to store one. */
   selectionLocked: boolean
@@ -188,7 +190,7 @@ export function PdfEditorToolbar({
   assetPanelOpen, onToggleAssetPanel,
   productPanelOpen, onToggleProductPanel,
   layersPanelOpen, onToggleLayersPanel, onOpenOrganizer,
-  canUndo, canRedo, onUndo, onRedo, onAddPage,
+  canUndo, canRedo, onUndo, onRedo, onAddPage, onSaveTemplate,
   selectionLocked, onToggleLock, onDuplicate, cropping, onToggleCrop,
   onEditSelectedText, onReplaceSelectedImage, onReplaceSelectedVector,
   textStyle, onToggleBold, onToggleItalic, onTextColor, onScaleText, onSetFont, onAlignText,
@@ -360,6 +362,15 @@ export function PdfEditorToolbar({
           <ToolButton label={t("pdfTemplates.railCopyPage", "Duplicate pages")} icon={CopyIcon} onClick={() => onOpenOrganizer("copy")} />
           <ToolButton label={t("pdfTemplates.railMovePage", "Reorder pages")} icon={ArrowUpDownIcon} onClick={() => onOpenOrganizer("move")} />
           <ToolButton label={t("pdfTemplates.railDeletePages", "Delete pages")} icon={Trash2Icon} onClick={() => onOpenOrganizer("delete")} danger />
+
+          {/* Saving the page as a template. Sits with the PAGE tools rather
+              than the selection tools: it acts on the whole page in view, and
+              belongs beside the other things that do. */}
+          <ToolButton
+            label={t("pdfTemplates.saveTemplate", "Save page as template")}
+            icon={BookmarkPlusIcon}
+            onClick={onSaveTemplate}
+          />
 
           {/* ── The selected item's own tools, ADDED to this same row. ──
               Never a second row. A row that appears on selection changes the

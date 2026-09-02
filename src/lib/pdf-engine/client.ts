@@ -267,6 +267,11 @@ export class PdfEngineClient {
     return this.call("removeSlots", { docId, pageIndex, slots })
   }
 
+  /** One page as its own single-page PDF, for saving it as a template. */
+  savePage(docId: string, pageIndex: number): Promise<{ bytes: ArrayBuffer }> {
+    return this.call("savePage", { docId, pageIndex })
+  }
+
   /** Copy several slots at once. Resolves with where the ORIGINALS ended up,
    * so they can stay selected. */
   duplicateSlots(

@@ -610,6 +610,7 @@ export async function showWorkspaceForDrag(pageCount = 12): Promise<void> {
       onToggleThumbnailRail: () => {},
       assetPanelOpen: true, onToggleAssetPanel: () => {},
     canUndo: false, canRedo: false, onUndo: () => {}, onRedo: () => {},
+    onSaveTemplate: () => {},
     onAddPage: () => {}, selectionLocked: false, onToggleLock: () => {},
       onDuplicate: () => {},
       cropping: false, onToggleCrop: () => {}, onSetFont: () => {},

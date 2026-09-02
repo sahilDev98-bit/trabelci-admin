@@ -23,6 +23,8 @@ import {
   reanchorSlotMark, setSlotMark, slotKeyFor, type ProductSlotMap,
 } from "./productSlots"
 import { fetchPdfAssetFile } from "@/features/pdfAssets/api"
+import { useSavePageTemplateMutation } from "@/features/pdfPageTemplates/api"
+import { PdfSaveTemplateDialog } from "./PdfSaveTemplateDialog"
 import type { PdfAsset } from "@/features/pdfAssets/types"
 
 import type { PdfContentMode, PdfOrganizerMode } from "../pdfEditorTypes"
@@ -1677,6 +1679,82 @@ export function PdfEngineEditorPage() {
     }
   }
 
+  // ── Saving a page as a template ───────────────────────────────────────────
+
+  /** Which page the save dialog is about, or null when it is closed. */
+  const [savingTemplateFor, setSavingTemplateFor] = useState<number | null>(null)
+  const saveTemplate = useSavePageTemplateMutation()
+
+  /**
+   * Store the page in view as a reusable template.
+   *
+   * Three things travel together and must agree with each other:
+   *
+   *   - the PAGE, extracted as its own single-page PDF. The open document is
+   *     left completely alone — it is imported, not cut out — so saving a
+   *     template never disturbs the catalogue being worked on.
+   *   - its SLOTS, in that page's own PDF coordinates. Because the page is
+   *     saved unchanged, the boxes recorded here are exactly the boxes in the
+   *     saved file, at the same numbers.
+   *   - a PREVIEW, rendered through the same engine, so the library shows
+   *     what the page actually looks like rather than a guess.
+   */
+  // Not memoised: it is handed to a dialog's onSave and nothing depends on
+  // its identity, so a useCallback here would buy nothing and only tie the
+  // function to a dependency list that has to be kept correct.
+  const savePageAsTemplate = async (details: {
+    name: string; description: string; category: string; supplier: string
+  }) => {
+    const pageIndex = savingTemplateFor
+    if (pageIndex === null) return
+    const page = doc.pages[pageIndex]
+    if (!page) return
+
+    try {
+      const pageBytes = await doc.savePage(pageIndex)
+
+      // Rendered at the same width the organizer uses for its thumbnails —
+      // enough to recognise a layout, small enough that a library of fifty
+      // is not a download.
+      let preview: Blob | null = null
+      const rendered = await doc.renderPage(pageIndex, 200 / Math.max(1, page.widthPts))
+      if (rendered) {
+        const canvas = document.createElement("canvas")
+        canvas.width = rendered.width
+        canvas.height = rendered.height
+        const ctx = canvas.getContext("2d")
+        if (ctx) {
+          const imageData = ctx.createImageData(rendered.width, rendered.height)
+          imageData.data.set(new Uint8ClampedArray(rendered.rgba))
+          ctx.putImageData(imageData, 0, 0)
+          preview = await new Promise<Blob | null>((resolve) =>
+            canvas.toBlob(resolve, "image/png"))
+        }
+      }
+
+      await saveTemplate.mutateAsync({
+        ...details,
+        pageBytes,
+        preview,
+        widthPts: page.widthPts,
+        heightPts: page.heightPts,
+        slots: marksOnPage(productSlots, pageIndex).map((mark) => ({
+          fieldId: mark.fieldId,
+          kind: mark.kind,
+          // One product per page today. The brief asks for two-, four- and
+          // six-product pages, and this is what will tell them apart.
+          productIndex: 0,
+          bbox: mark.bbox,
+        })),
+      })
+
+      setSavingTemplateFor(null)
+      toast.success(t("pdfTemplates.saveTemplateDone", "Saved as a template"))
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : String(err))
+    }
+  }
+
   // ── Download ──────────────────────────────────────────────────────────────
 
   const handleDownload = async () => {
@@ -1881,6 +1959,7 @@ export function PdfEngineEditorPage() {
             setLocks((current) => toggleLock(current, selectionLockKey))
           },
           onAddPage: () => setAddingPageAfter(selection?.pageIndex ?? visiblePageIndex()),
+          onSaveTemplate: () => setSavingTemplateFor(visiblePageIndex()),
           canUndo: doc.canUndo,
           canRedo: doc.canRedo,
           onUndo: () => void runHistory("undo"),
@@ -2029,6 +2108,20 @@ export function PdfEngineEditorPage() {
             })
             .catch((err: unknown) => toast.error(err instanceof Error ? err.message : String(err)))
         }}
+      />
+
+      <PdfSaveTemplateDialog
+        open={savingTemplateFor !== null}
+        pageNumber={(savingTemplateFor ?? 0) + 1}
+        pageSize={savingTemplateFor !== null ? doc.pages[savingTemplateFor] ?? null : null}
+        slotFieldIds={
+          savingTemplateFor === null
+            ? []
+            : marksOnPage(productSlots, savingTemplateFor).map((m) => m.fieldId)
+        }
+        saving={saveTemplate.isPending}
+        onCancel={() => setSavingTemplateFor(null)}
+        onSave={(details) => void savePageAsTemplate(details)}
       />
 
       {organizerMode && (

@@ -306,6 +306,9 @@ export interface EngineMethods {
     result: { ok: boolean; newIndex: number }
   }
   applyPagePlan: { params: { docId: string; plan: PagePlanRequest[] }; result: { docId: string; pages: EnginePage[] } }
+  /** One page, written out as its own single-page document. The open
+   * document is left untouched — the page is IMPORTED into a new one. */
+  savePage: { params: { docId: string; pageIndex: number }; result: { bytes: ArrayBuffer } }
   save: { params: { docId: string }; result: { bytes: ArrayBuffer } }
   /**
    * Steps the document back or forward through its own history.

@@ -54,6 +54,7 @@ function baseToolbar(overrides: Record<string, unknown>) {
     layersPanelOpen: false, onToggleLayersPanel: () => {},
     onOpenOrganizer: () => {},
     canUndo: false, canRedo: false, onUndo: () => {}, onRedo: () => {},
+    onSaveTemplate: () => {},
     onAddPage: () => {},
     selectionLocked: false, onToggleLock: () => {}, onDuplicate: () => {},
     cropping: false, onToggleCrop: () => {},
