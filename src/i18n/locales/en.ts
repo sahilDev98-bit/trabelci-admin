@@ -1199,6 +1199,8 @@ const en = {
     productSwapHint: "Drop to swap this page's product",
     productSlotField: "Holds product detail",
     productSlotFieldHint: "Mark this box as holding one of the product's details",
+    productSlotFixedImage: "Fixed image",
+    productSlotFixedVector: "Fixed artwork",
     productSlotNone: "Fixed text",
     productFieldPhoto: "Product photo",
     productFillSlots: "Fill {{count}} slots on this page",

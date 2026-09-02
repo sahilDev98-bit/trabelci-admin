@@ -12,7 +12,7 @@ import {
 import { Textarea } from "@/components/ui/textarea"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import type { EngineTextLine, PagePlanRequest, PdfRect } from "@/lib/pdf-engine"
+import type { EngineTextLine, PagePlanRequest } from "@/lib/pdf-engine"
 import type { CatalogProduct } from "@/features/catalogProducts/types"
 import { fetchProductCoverFile } from "@/features/catalogProducts/api"
 import { productDisplayName, toProductFieldLanguage } from "./productFields"
@@ -20,8 +20,8 @@ import { PRODUCT_BLOCK_FIELD_IDS, planProductBlock, productBlockLines } from "./
 import { PRODUCT_FIELDS } from "./productFields"
 import {
   PRODUCT_PHOTO_FIELD, fieldsForKind, markFor, marksOnPage, pruneSlotMarks,
-  reanchorSlotMark, setSlotMark, slotKeyFor,
-  type ProductSlotMap, type ProductSlotMark,
+  reanchorMarksOnPage, setSlotMark, slotKeyFor,
+  type LiveBox, type ProductSlotMap, type ProductSlotMark,
 } from "./productSlots"
 import { fetchPdfAssetFile } from "@/features/pdfAssets/api"
 import { fetchPageTemplateFile, useSavePageTemplateMutation } from "@/features/pdfPageTemplates/api"
@@ -574,43 +574,50 @@ export function PdfEngineEditorPage() {
   }, [doc.pageText, doc.pageImages, doc.pageVectors])
 
   /**
-   * Keeps a product mark on its box when that box moves.
+   * The marks as they apply to the page RIGHT NOW.
    *
-   * This is the one thing that separates a product slot from a lock. A locked
-   * object cannot move, so keying it by position is safe forever. A marked
-   * box moves all the time — positioning it is the normal thing to do while
-   * laying out a page — and without this, nudging a box you had just marked
-   * as the SKU would silently unmark it.
+   * Derived rather than stored, and that is the second attempt at this. The
+   * first watched the selected slot in an effect and moved its mark whenever
+   * the selected box's key changed — which corrupted the page, because
+   * selecting a DIFFERENT box is indistinguishable from the marked box
+   * moving. Marking a picture as the product photo and then clicking a
+   * caption moved the photo mark onto the caption, with nothing edited at all.
    *
-   * It watches the SELECTED slot, because the object being moved is the
-   * object that is selected. When the selection's box no longer matches the
-   * key its mark is under, the mark is carried over to the new box.
+   * Deriving removes the whole class of problem: there is no moment at which
+   * a mark is "moved", so there is no signal to misread. What is stored is
+   * where the user put each mark; what is used is that resolved against the
+   * boxes actually on the page, by overlap. See reanchorMarksOnPage.
    *
-   * A previous position is remembered here rather than derived, because once
-   * the box has moved there is nothing left on the page that says where it
-   * used to be.
+   * Every consumer reads THIS — the badges, the toolbar, filling, saving a
+   * template — so none of them can disagree about which box holds what.
    */
-  const lastSelectionBox = useRef<{ key: string; bbox: PdfRect } | null>(null)
-  useEffect(() => {
-    const resolved = slotKeyOf(selection)
-    if (!resolved?.key || !resolved.bbox) {
-      lastSelectionBox.current = null
-      return
+  const liveProductSlots = useMemo(() => {
+    const boxesFor = (pageIndex: number): LiveBox[] => [
+      ...(doc.pageText[pageIndex]?.lines ?? []).map((l) => ({ kind: "text" as const, bbox: l.bbox })),
+      ...(doc.pageImages[pageIndex]?.images ?? [])
+        .filter((i) => i.bbox !== null)
+        .map((i) => ({ kind: "image" as const, bbox: i.bbox! })),
+      ...(doc.pageVectors[pageIndex]?.groups ?? []).map((g) => ({ kind: "vector" as const, bbox: g.bbox })),
+    ]
+    /** Which lists have actually been READ for a page. An unread list is
+     * indistinguishable from an empty one, so marks of that kind are left
+     * alone rather than taken for stranded and dropped. */
+    const loadedKindsFor = (pageIndex: number): Set<LiveBox["kind"]> => {
+      const kinds = new Set<LiveBox["kind"]>()
+      if (doc.pageText[pageIndex]?.loaded) kinds.add("text")
+      if (doc.pageImages[pageIndex]?.loaded) kinds.add("image")
+      if (doc.pageVectors[pageIndex]?.loaded) kinds.add("vector")
+      return kinds
     }
-    // Read out before the updater: narrowing does not survive into a closure,
-    // and an updater must be pure anyway.
-    const { key, bbox } = resolved
-    const previous = lastSelectionBox.current
-    lastSelectionBox.current = { key, bbox }
-    if (!previous || previous.key === key) return
-    // The selected box has a different key than it had a moment ago — it
-    // moved or was resized. If it carried a mark, the mark moves with it.
-    setProductSlots((current) => (
-      current.has(previous.key)
-        ? reanchorSlotMark(current, previous.key, key, bbox)
-        : current
-    ))
-  }, [selection, doc.revision, slotKeyOf])
+
+    const pages = new Set([...productSlots.values()].map((m) => m.pageIndex))
+    let next: ProductSlotMap = productSlots
+    for (const pageIndex of pages) {
+      next = reanchorMarksOnPage(
+        next, pageIndex, boxesFor(pageIndex), loadedKindsFor(pageIndex))
+    }
+    return next
+  }, [productSlots, doc.pageText, doc.pageImages, doc.pageVectors])
 
   /**
    * Put the selection back on the same objects after an operation moved them.
@@ -1052,7 +1059,7 @@ export function PdfEngineEditorPage() {
      * so a drop there still places a block. The two behaviours never overlap,
      * because a page either has slots or it does not.
      */
-    if (marksOnPage(productSlots, pageIndex).length > 0) {
+    if (marksOnPage(liveProductSlots, pageIndex).length > 0) {
       const filled = await fillPageFromProduct(product, pageIndex)
       if (filled) {
         toast.success(t(
@@ -1174,7 +1181,7 @@ export function PdfEngineEditorPage() {
     // means "the page I am looking at", and a product DROPPED on a page means
     // that page, which may not be the one in view.
     const pageIndex = targetPageIndex ?? visiblePageIndex()
-    const marks = marksOnPage(productSlots, pageIndex)
+    const marks = marksOnPage(liveProductSlots, pageIndex)
     if (marks.length === 0) {
       toast.error(t(
         "pdfTemplates.productSlotsNone",
@@ -1236,7 +1243,7 @@ export function PdfEngineEditorPage() {
       ))
     }
     return filled
-  }, [productSlots, doc, i18n.language, t, visiblePageIndex, reportFontOutcome])
+  }, [liveProductSlots, doc, i18n.language, t, visiblePageIndex, reportFontOutcome])
 
   /**
    * A product dropped onto an existing picture.
@@ -1257,7 +1264,7 @@ export function PdfEngineEditorPage() {
   const handleDropProductOnImage = async (
     pageIndex: number, imageIndex: number, product: CatalogProduct,
   ) => {
-    if (marksOnPage(productSlots, pageIndex).length > 0) {
+    if (marksOnPage(liveProductSlots, pageIndex).length > 0) {
       const filled = await fillPageFromProduct(product, pageIndex)
       if (filled) {
         toast.success(t(
@@ -1802,7 +1809,7 @@ export function PdfEngineEditorPage() {
         preview,
         widthPts: page.widthPts,
         heightPts: page.heightPts,
-        slots: marksOnPage(productSlots, pageIndex).map((mark) => ({
+        slots: marksOnPage(liveProductSlots, pageIndex).map((mark) => ({
           fieldId: mark.fieldId,
           kind: mark.kind,
           // One product per page today. The brief asks for two-, four- and
@@ -1962,7 +1969,7 @@ export function PdfEngineEditorPage() {
     onDropOnPage: (pageIndex: number, file: File, x: number, y: number) =>
       void handleDropOnPage(pageIndex, file, x, y),
     onDropAssetOnPage: handleDropAssetOnPage,
-    productSlots,
+    productSlots: liveProductSlots,
     onDropProductOnPage: (pageIndex: number, dropped: CatalogProduct, x: number, y: number) =>
       void handleDropProductOnPage(pageIndex, dropped, x, y),
     onDropProductOnImage: (pageIndex: number, imageIndex: number, dropped: CatalogProduct) =>
@@ -2041,16 +2048,16 @@ export function PdfEngineEditorPage() {
           /** How many things the toolbar is acting on, so it can offer the
            * group's tools instead of one item's. */
           selectionCount: selectedGroup.length,
-          selectionSlotField: markFor(productSlots, slotKeyOf(selection)?.key ?? null)?.fieldId ?? null,
+          selectionSlotField: markFor(liveProductSlots, slotKeyOf(selection)?.key ?? null)?.fieldId ?? null,
           slotFieldOptions: selection ? fieldsForKind(selection.kind) : [],
           onSetSlotField: (fieldId: string | null) => {
             const resolved = slotKeyOf(selection)
             if (!selection || !resolved?.key || !resolved.bbox) return
-            setProductSlots((current) => setSlotMark(current, resolved.key!, {
+            setProductSlots(setSlotMark(liveProductSlots, resolved.key, {
               fieldId,
               pageIndex: selection.pageIndex,
               kind: selection.kind,
-              bbox: resolved.bbox!,
+              bbox: resolved.bbox,
             }))
           },
           cropping: cropping !== null,
@@ -2192,7 +2199,7 @@ export function PdfEngineEditorPage() {
             mode={productFieldMode}
             onApply={applyProductField}
             onPlaceProduct={placeProductOnVisiblePage}
-            slotCountOnPage={marksOnPage(productSlots, visiblePageIndex()).length}
+            slotCountOnPage={marksOnPage(liveProductSlots, visiblePageIndex()).length}
             onFillSlots={() => { if (product) void fillPageFromProduct(product) }}
             onClose={() => setRightPanel(null)}
           />
@@ -2257,7 +2264,7 @@ export function PdfEngineEditorPage() {
         slotFieldIds={
           savingTemplateFor === null
             ? []
-            : marksOnPage(productSlots, savingTemplateFor).map((m) => m.fieldId)
+            : marksOnPage(liveProductSlots, savingTemplateFor).map((m) => m.fieldId)
         }
         saving={saveTemplate.isPending}
         onCancel={() => setSavingTemplateFor(null)}

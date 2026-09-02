@@ -16,7 +16,8 @@
 import type { PdfRect } from "@/lib/pdf-engine"
 import {
   PRODUCT_PHOTO_FIELD, fieldsForKind, markFor, marksOnPage, pruneSlotMarks,
-  reanchorSlotMark, setSlotMark, slotKeyFor, type ProductSlotMap,
+  reanchorMarksOnPage, reanchorSlotMark, setSlotMark, slotKeyFor,
+  type ProductSlotMap,
 } from "./productSlots"
 
 export interface ProductSlotsTestResult {
@@ -167,6 +168,169 @@ export function runProductSlotsSelfTest(): ProductSlotsTestResult {
   }
   if (marksOnPage(twoPages, 0).length === 0) {
     out.errors.push("pruning removed marks from a page that still exists")
+  }
+
+  return out
+}
+
+/**
+ * The two faults reported from a screen recording, each reproduced.
+ *
+ * 1. SELECTING a different box moved the mark onto it. Marking a picture as
+ *    the product photo and then clicking a caption transferred the photo mark
+ *    to the caption. Nothing had been edited — the old rule watched the
+ *    selection and could not tell "the marked box moved" from "you clicked
+ *    something else".
+ *
+ * 2. FILLING the slots lost their badges. Writing a product's name into a
+ *    text box changes that box's width, so its mark no longer matched where
+ *    it sat, and the slot vanished from view — while still filling correctly,
+ *    which made it look like the marks had been silently forgotten.
+ *
+ * Both are the same underlying question — how a mark follows its box — so
+ * both are checked here, together with the controls that keep the fix from
+ * over-reaching.
+ */
+export interface SlotReanchorTestResult {
+  errors: string[]
+  /** Selecting elsewhere must not move anything. */
+  markStaysOnItsBoxWhenAnotherIsSelected: boolean
+  /** A refilled text box keeps its slot. */
+  markFollowsRefilledText: boolean
+  fieldAfterRefill: string | null
+  /** A box dragged far away drops its mark rather than grabbing a stranger. */
+  farMoveDropsMark: boolean
+  /** Two marks can never land on one box. */
+  noTwoMarksShareABox: boolean
+  /** An untouched page is returned unchanged, so the effect writes nothing. */
+  unchangedPageReturnsSameMap: boolean
+  /** A list that has not loaded yet must not be read as "everything of that
+   * kind is gone". */
+  unloadedKindLeavesMarksAlone: boolean
+}
+
+export function runSlotReanchorSelfTest(): SlotReanchorTestResult {
+  const out: SlotReanchorTestResult = {
+    errors: [],
+    markStaysOnItsBoxWhenAnotherIsSelected: false,
+    markFollowsRefilledText: false, fieldAfterRefill: null,
+    farMoveDropsMark: false, noTwoMarksShareABox: false,
+    unchangedPageReturnsSameMap: false, unloadedKindLeavesMarksAlone: false,
+  }
+
+  const photoBox = box(50, 400, 300, 700)
+  const skuBox = box(50, 300, 200, 320)
+  const nameBox = box(50, 250, 260, 275)
+
+  let marks: ProductSlotMap = setSlotMark(new Map(), slotKeyFor(0, "image", photoBox)!, {
+    fieldId: PRODUCT_PHOTO_FIELD, pageIndex: 0, kind: "image", bbox: photoBox,
+  })
+  marks = setSlotMark(marks, slotKeyFor(0, "text", skuBox)!, {
+    fieldId: "sku", pageIndex: 0, kind: "text", bbox: skuBox,
+  })
+  marks = setSlotMark(marks, slotKeyFor(0, "text", nameBox)!, {
+    fieldId: "name", pageIndex: 0, kind: "text", bbox: nameBox,
+  })
+
+  const live = (boxes: { kind: "text" | "image" | "vector"; bbox: PdfRect }[]) => boxes
+  /** Every list read, which is the normal state once a page is on screen. */
+  const ALL_KINDS = new Set(["text", "image", "vector"] as const)
+
+  // ── Fault 1: nothing was edited, so nothing may move ─────────────────
+  // The page is exactly as it was. Whatever is selected is irrelevant — this
+  // rule never sees the selection at all, which is the point.
+  const untouched = reanchorMarksOnPage(marks, 0, live([
+    { kind: "image", bbox: photoBox },
+    { kind: "text", bbox: skuBox },
+    { kind: "text", bbox: nameBox },
+  ]), ALL_KINDS)
+  out.unchangedPageReturnsSameMap = untouched === marks
+  if (!out.unchangedPageReturnsSameMap) {
+    out.errors.push("an unchanged page produced a new map, so the editor would write state on every edit")
+  }
+  out.markStaysOnItsBoxWhenAnotherIsSelected =
+    markFor(untouched, slotKeyFor(0, "image", photoBox))?.fieldId === PRODUCT_PHOTO_FIELD
+    && markFor(untouched, slotKeyFor(0, "text", skuBox))?.fieldId === "sku"
+  if (!out.markStaysOnItsBoxWhenAnotherIsSelected) {
+    out.errors.push(
+      "a mark moved although nothing was edited — this is the reported fault"
+      + " where clicking another box stole the product photo slot")
+  }
+
+  // ── Fault 2: a refilled text box keeps its slot ──────────────────────
+  // Writing a longer product name widens the box. It has not moved, so the
+  // mark must follow it — the badge disappearing was what made the slots look
+  // forgotten even though they still filled.
+  const widerSku = box(50, 300, 340, 320)
+  const refilled = reanchorMarksOnPage(marks, 0, live([
+    { kind: "image", bbox: photoBox },
+    { kind: "text", bbox: widerSku },
+    { kind: "text", bbox: nameBox },
+  ]), ALL_KINDS)
+  out.fieldAfterRefill = markFor(refilled, slotKeyFor(0, "text", widerSku))?.fieldId ?? null
+  out.markFollowsRefilledText = out.fieldAfterRefill === "sku"
+  if (!out.markFollowsRefilledText) {
+    out.errors.push(
+      `after a refill widened the box its slot reads ${JSON.stringify(out.fieldAfterRefill)},`
+      + " expected sku — the badge would have vanished")
+  }
+  // And it must not have taken the neighbouring name slot with it.
+  if (markFor(refilled, slotKeyFor(0, "text", nameBox))?.fieldId !== "name") {
+    out.errors.push("re-anchoring the SKU slot disturbed the name slot beside it")
+  }
+
+  // ── The control: a box moved far away drops its mark ─────────────────
+  // Overlap is what makes this safe. A box dragged to the other side of the
+  // page shares nothing with where it was, so the mark is dropped rather than
+  // attached to whatever happens to be nearby now.
+  const movedFar = box(400, 100, 550, 120)
+  const afterFarMove = reanchorMarksOnPage(marks, 0, live([
+    { kind: "image", bbox: photoBox },
+    { kind: "text", bbox: movedFar },
+    { kind: "text", bbox: nameBox },
+  ]), ALL_KINDS)
+  out.farMoveDropsMark = markFor(afterFarMove, slotKeyFor(0, "text", movedFar)) === null
+  if (!out.farMoveDropsMark) {
+    out.errors.push(
+      "a box moved right across the page inherited a mark it never had —"
+      + " overlap is not being required")
+  }
+
+  // ── No two marks on one box ──────────────────────────────────────────
+  // Both text boxes vanish and ONE new box appears overlapping both. Only one
+  // mark may claim it; the other is dropped rather than doubling up.
+  const merged = box(50, 250, 340, 320)
+  const afterMerge = reanchorMarksOnPage(marks, 0, live([
+    { kind: "image", bbox: photoBox },
+    { kind: "text", bbox: merged },
+  ]), ALL_KINDS)
+  const onMerged = [...afterMerge.values()].filter(
+    (m) => slotKeyFor(0, m.kind, m.bbox) === slotKeyFor(0, "text", merged))
+  out.noTwoMarksShareABox = onMerged.length <= 1
+  if (!out.noTwoMarksShareABox) {
+    out.errors.push(`${onMerged.length} marks ended up on the same box`)
+  }
+  // The picture is untouched throughout — a text edit must never disturb it.
+  if (markFor(afterMerge, slotKeyFor(0, "image", photoBox))?.fieldId !== PRODUCT_PHOTO_FIELD) {
+    out.errors.push("editing text disturbed the product photo slot")
+  }
+
+  // ── An unread list is not an empty one ───────────────────────────────
+  // The editor loads text, pictures and artwork separately. Mid-edit the text
+  // can be read back before the pictures are, and a page reporting no
+  // pictures would otherwise look as though every photo slot had been
+  // deleted — dropping the mark for a box that is still sitting there.
+  const textOnly = reanchorMarksOnPage(
+    marks, 0,
+    live([{ kind: "text", bbox: skuBox }, { kind: "text", bbox: nameBox }]),
+    new Set(["text"] as const),
+  )
+  out.unloadedKindLeavesMarksAlone =
+    markFor(textOnly, slotKeyFor(0, "image", photoBox))?.fieldId === PRODUCT_PHOTO_FIELD
+  if (!out.unloadedKindLeavesMarksAlone) {
+    out.errors.push(
+      "the product photo slot was dropped because the picture list had not"
+      + " loaded yet — an unread list was taken for an empty page")
   }
 
   return out

@@ -1183,6 +1183,8 @@ const he = {
     productSwapHint: "שחרר כדי להחליף את המוצר בעמוד",
     productSlotField: "מכיל פרט מוצר",
     productSlotFieldHint: "סמן תיבה זו ככזו שמכילה אחד מפרטי המוצר",
+    productSlotFixedImage: "תמונה קבועה",
+    productSlotFixedVector: "איור קבוע",
     productSlotNone: "טקסט קבוע",
     productFieldPhoto: "תמונת המוצר",
     productFillSlots: "מלא {{count}} משבצות בעמוד זה",

@@ -30,6 +30,12 @@ export interface GroupToolbarTestResult {
   slotOptions: string[]
   slotChoiceReported: string | null
   slotControlHiddenForGroup: boolean
+  /** The neutral option names the KIND of box selected. "Fixed text" in front
+   * of a photograph reads as though the editor thinks the picture is
+   * writing. */
+  fixedLabelForText: string | null
+  fixedLabelForImage: string | null
+  fixedLabelForVector: string | null
 }
 
 const SELECTION = { pageIndex: 0, kind: "text" as const, index: 0 }
@@ -90,6 +96,7 @@ export async function runGroupToolbarSelfTest(): Promise<GroupToolbarTestResult>
     groupOps: [], railButtonLabel: null, railToggled: 0,
     slotControlPresent: false, slotOptions: [], slotChoiceReported: null,
     slotControlHiddenForGroup: false,
+    fixedLabelForText: null, fixedLabelForImage: null, fixedLabelForVector: null,
   }
 
   const host = document.createElement("div")
@@ -203,6 +210,44 @@ export async function runGroupToolbarSelfTest(): Promise<GroupToolbarTestResult>
       if (out.slotChoiceReported !== "sku") {
         out.errors.push(`choosing SKU reported ${JSON.stringify(out.slotChoiceReported)}`)
       }
+    }
+
+    // ── The neutral option is named for what is selected ─────────────
+    // Reported from a screen recording: selecting a photograph offered
+    // "Fixed text", which describes something the user is not looking at.
+    const fixedLabelWith = async (kind: "text" | "image" | "vector") => {
+      root!.render(createElement(PdfEditorToolbar, baseToolbar({
+        selection: { pageIndex: 0, kind, index: 0 },
+        selectionCount: 1,
+        slotFieldOptions: [
+          { id: "sku", labelKey: "pdfTemplates.productFieldSku", labelFallback: "SKU" },
+        ],
+        selectionSlotField: null,
+      })))
+      await new Promise((r) => setTimeout(r, 60))
+      const select = host.querySelector<HTMLSelectElement>("[data-pdf-slot-field]")
+      return select?.options[0]?.textContent?.trim() ?? null
+    }
+
+    out.fixedLabelForText = await fixedLabelWith("text")
+    out.fixedLabelForImage = await fixedLabelWith("image")
+    out.fixedLabelForVector = await fixedLabelWith("vector")
+
+    if (out.fixedLabelForText !== "Fixed text") {
+      out.errors.push(`a text box's neutral option reads "${out.fixedLabelForText}"`)
+    }
+    // THE one that was reported. A picture is not text.
+    if (/text/i.test(out.fixedLabelForImage ?? "")) {
+      out.errors.push(
+        `selecting a picture offers "${out.fixedLabelForImage}" — it calls a`
+        + " photograph text")
+    }
+    if (/text/i.test(out.fixedLabelForVector ?? "")) {
+      out.errors.push(`selecting artwork offers "${out.fixedLabelForVector}"`)
+    }
+    // And the three must differ, or naming them per kind achieved nothing.
+    if (out.fixedLabelForImage === out.fixedLabelForText) {
+      out.errors.push("a picture and a line of text share the same neutral label")
     }
 
     // With several things selected it must NOT be offered: they would all be

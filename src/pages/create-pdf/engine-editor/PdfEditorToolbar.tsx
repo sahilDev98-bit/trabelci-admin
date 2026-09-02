@@ -13,6 +13,7 @@ import { Button } from "@/components/ui/button"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import type { PdfContentMode, PdfOrganizerMode } from "../pdfEditorTypes"
 import type { SlotSelection } from "./PdfEnginePageColumn"
+import { fixedLabelForKind } from "./productSlots"
 
 /**
  * The expanded editor's toolbar.
@@ -202,6 +203,7 @@ export function PdfEditorToolbar({
   onDeselect, onExit, onDownload, downloading, busy,
 }: PdfEditorToolbarProps) {
   const { t } = useTranslation()
+  const fixedLabel = fixedLabelForKind(selection?.kind ?? "text")
 
   return (
     <TooltipProvider delayDuration={400}>
@@ -589,8 +591,11 @@ export function PdfEditorToolbar({
                       selectionSlotField ? "border-primary bg-primary/10" : "bg-background"
                     }`}
                   >
+                    {/* Named for the KIND of box selected. "Fixed text" in
+                        front of a photograph reads as though the editor
+                        thinks the picture is writing. */}
                     <option value="">
-                      {t("pdfTemplates.productSlotNone", "Fixed text")}
+                      {t(fixedLabel.key, fixedLabel.fallback)}
                     </option>
                     {slotFieldOptions.map((option) => (
                       <option key={option.id} value={option.id}>
