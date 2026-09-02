@@ -36,6 +36,11 @@ export interface GroupToolbarTestResult {
   fixedLabelForText: string | null
   fixedLabelForImage: string | null
   fixedLabelForVector: string | null
+  /** A native select's popup takes its colours from the select's own
+   * background. A see-through one makes the browser composite the list
+   * against white while the text stays light — invisible options. */
+  slotSelectBackgrounds: string[]
+  slotSelectOpaqueInBothStates: boolean
 }
 
 const SELECTION = { pageIndex: 0, kind: "text" as const, index: 0 }
@@ -97,6 +102,7 @@ export async function runGroupToolbarSelfTest(): Promise<GroupToolbarTestResult>
     slotControlPresent: false, slotOptions: [], slotChoiceReported: null,
     slotControlHiddenForGroup: false,
     fixedLabelForText: null, fixedLabelForImage: null, fixedLabelForVector: null,
+    slotSelectBackgrounds: [], slotSelectOpaqueInBothStates: false,
   }
 
   const host = document.createElement("div")
@@ -248,6 +254,71 @@ export async function runGroupToolbarSelfTest(): Promise<GroupToolbarTestResult>
     // And the three must differ, or naming them per kind achieved nothing.
     if (out.fixedLabelForImage === out.fixedLabelForText) {
       out.errors.push("a picture and a line of text share the same neutral label")
+    }
+
+    // ── The control must stay readable once a field is chosen ────────
+    // Reported from a screenshot: picking SKU turned the dropdown list white
+    // and its other options vanished. The marked state had set a translucent
+    // background, and a native select builds its popup from that colour.
+    const backgroundWith = async (field: string | null) => {
+      root!.render(createElement(PdfEditorToolbar, baseToolbar({
+        selectionCount: 1,
+        slotFieldOptions: [
+          { id: "sku", labelKey: "pdfTemplates.productFieldSku", labelFallback: "SKU" },
+        ],
+        selectionSlotField: field,
+      })))
+      await new Promise((r) => setTimeout(r, 60))
+      const select = host.querySelector<HTMLSelectElement>("[data-pdf-slot-field]")
+      return select ? getComputedStyle(select).backgroundColor : ""
+    }
+
+    const unmarked = await backgroundWith(null)
+    const marked = await backgroundWith("sku")
+    out.slotSelectBackgrounds = [unmarked, marked]
+
+    // Opaque means no alpha, or an alpha of exactly 1.
+    //
+    // Both spellings have to be understood. A first version of this check
+    // looked only for rgba(), and the very colour that caused the bug
+    // computes to "oklab(0.87 0 0 / 0.1)" — so it would have reported the
+    // broken control as perfectly opaque and caught nothing at all.
+    const alphaOf = (colour: string): number => {
+      const inside = /\(([^)]*)\)/.exec(colour)?.[1]
+      if (!inside) return 1
+      // Modern syntax: "oklab(L a b / alpha)", "color(srgb r g b / alpha)".
+      const slash = inside.split("/")[1]
+      if (slash !== undefined) return Number(slash.trim())
+      // Legacy syntax: "rgba(r, g, b, alpha)".
+      const parts = inside.split(",")
+      return parts.length >= 4 ? Number(parts[3].trim()) : 1
+    }
+    const isOpaque = (colour: string) => alphaOf(colour) === 1
+
+    // The control for the check itself. If this ever stops detecting a
+    // see-through colour, every result above becomes meaningless — which is
+    // exactly what happened the first time this was written.
+    if (isOpaque("oklab(0.87 0 0 / 0.1)") || isOpaque("rgba(0, 0, 0, 0.1)")) {
+      out.errors.push(
+        "CONTROL FAILED: a translucent colour is being read as opaque, so this"
+        + " check cannot detect the fault it exists for")
+    }
+
+    out.slotSelectOpaqueInBothStates = isOpaque(unmarked) && isOpaque(marked)
+    if (!out.slotSelectOpaqueInBothStates) {
+      out.errors.push(
+        `the slot control is see-through (${unmarked} unmarked, ${marked} marked)`
+        + " — the browser will draw its option list against whatever is behind"
+        + " it, and the options become unreadable")
+    }
+    // And the two states must still LOOK different, or the fix removed the
+    // signal that this box is a product slot.
+    if (unmarked === marked) {
+      const select = host.querySelector<HTMLSelectElement>("[data-pdf-slot-field]")
+      const marksItself = (select?.className ?? "").includes("border-primary")
+      if (!marksItself) {
+        out.errors.push("a marked slot control looks identical to an unmarked one")
+      }
     }
 
     // With several things selected it must NOT be offered: they would all be

@@ -587,8 +587,18 @@ export function PdfEditorToolbar({
                       "pdfTemplates.productSlotFieldHint",
                       "Mark this box as holding one of the product's details",
                     )}
-                    className={`h-8 shrink-0 rounded-md border px-1 text-xs ${
-                      selectionSlotField ? "border-primary bg-primary/10" : "bg-background"
+                    // The background is ALWAYS opaque, and the marked state
+                    // is shown with the border and a ring instead.
+                    //
+                    // This is not a style preference. A native select's popup
+                    // takes its colours from the select's own background, and
+                    // the marked state used to set bg-primary/10 — a
+                    // see-through colour. Chrome composited that against
+                    // white for the popup while the option text stayed light,
+                    // so choosing a field turned the whole list white on
+                    // white and every other option became invisible.
+                    className={`h-8 shrink-0 rounded-md border bg-background px-1 text-xs text-foreground ${
+                      selectionSlotField ? "border-primary ring-1 ring-primary/50" : ""
                     }`}
                   >
                     {/* Named for the KIND of box selected. "Fixed text" in
