@@ -127,6 +127,134 @@ export function runSkuListSelfTest(): SkuListTestResult {
   return out
 }
 
+/**
+ * Does the generate dialog send WHERE the pages should go?
+ *
+ * Step 4 of the bulk generator. The client prepares a cover and a final page
+ * in advance, so what the product pages sit BETWEEN is the whole question —
+ * and it used to be implicit, "wherever you were scrolled to". A page landing
+ * in the wrong half of a forty-page catalogue is tedious to undo.
+ *
+ * Two things are checked: that the default follows the page you were on, and
+ * that changing it actually reaches the generator rather than being shown and
+ * ignored.
+ */
+export interface GenerateTargetResult {
+  errors: string[]
+  optionLabels: string[]
+  defaultSelected: string
+  sentAfterIndex: number | null
+  sentSkuCount: number
+}
+
+export async function runGenerateTargetSelfTest(): Promise<GenerateTargetResult> {
+  const [{ createElement }, { createRoot }, { PdfGenerateDialog }] = await Promise.all([
+    import("react"), import("react-dom/client"), import("./PdfGenerateDialog"),
+  ])
+  const out: GenerateTargetResult = {
+    errors: [], optionLabels: [], defaultSelected: "", sentAfterIndex: null, sentSkuCount: 0,
+  }
+
+  const host = document.createElement("div")
+  document.body.appendChild(host)
+  const root = createRoot(host)
+  const sent: { afterIndex: number | null; skus: number } = { afterIndex: null, skus: 0 }
+
+  const box = { left: 10, bottom: 20, right: 110, top: 40 }
+  try {
+    root.render(createElement(PdfGenerateDialog, {
+      open: true,
+      templates: [{
+        id: "1", name: "Two up", description: null, category: "grid", supplier: null,
+        previewUrl: null, widthPts: 595, heightPts: 842, productCount: 2, createdAt: null,
+        slots: [{ fieldId: "sku", kind: "text" as const, productIndex: 0, bbox: box }],
+      }],
+      templatesLoading: false,
+      // A cover, two middle pages and a final page — the shape the client
+      // describes preparing in advance.
+      pages: [
+        { index: 0, label: "Page 1 (the first page)" },
+        { index: 1, label: "Page 2" },
+        { index: 2, label: "Page 3" },
+        { index: 3, label: "Page 4 (the end)" },
+      ],
+      // Opened while looking at page 3, so THAT is what it should offer.
+      defaultAfterIndex: 2,
+      onCheck: async () => ({ found: 4, missing: [] }),
+      busy: false,
+      progress: null,
+      onGenerate: (_tpl: unknown, skus: string[], afterIndex: number) => {
+        sent.afterIndex = afterIndex
+        sent.skus = skus.length
+      },
+      onCancel: () => {},
+    } as never))
+    await new Promise((r) => setTimeout(r, 150))
+
+    const select = document.querySelector<HTMLSelectElement>("[data-pdf-generate-after]")
+    if (!select) {
+      out.errors.push("there is no control for where the pages go")
+      return out
+    }
+    out.optionLabels = Array.from(select.options).map((o) => o.textContent?.trim() ?? "")
+    out.defaultSelected = select.value
+
+    // The default must follow the page you were LOOKING AT. Defaulting to the
+    // first page would drop forty pages straight after the cover.
+    if (out.defaultSelected !== "2") {
+      out.errors.push(
+        `the position defaulted to ${out.defaultSelected}, expected 2 — the page in view`)
+    }
+    // The first and last are named, because that is what a cover and a final
+    // page are; a bare number tells you nothing without going to look.
+    if (!out.optionLabels[0].includes("first")) {
+      out.errors.push(`the first page reads "${out.optionLabels[0]}" and is not called out`)
+    }
+    if (!out.optionLabels[3].includes("end")) {
+      out.errors.push(`the last page reads "${out.optionLabels[3]}" and is not called out`)
+    }
+
+    // ── Choosing a different position must REACH the generator ────────
+    const setValue = (el: HTMLElement, prototype: { prototype: object }, value: string) => {
+      const setter = Object.getOwnPropertyDescriptor(prototype.prototype, "value")?.set
+      setter?.call(el, value)
+    }
+    setValue(select, window.HTMLSelectElement, "0")
+    select.dispatchEvent(new Event("change", { bubbles: true }))
+
+    const area = document.querySelector<HTMLTextAreaElement>("[data-pdf-generate-skus]")!
+    setValue(area, window.HTMLTextAreaElement, "A\nB\nC\nD")
+    area.dispatchEvent(new Event("input", { bubbles: true }))
+
+    const tpl = document.querySelector<HTMLSelectElement>("[data-pdf-generate-template]")!
+    setValue(tpl, window.HTMLSelectElement, "1")
+    tpl.dispatchEvent(new Event("change", { bubbles: true }))
+    await new Promise((r) => setTimeout(r, 150))
+
+    document.querySelector<HTMLButtonElement>("[data-pdf-generate-run]")?.click()
+    await new Promise((r) => setTimeout(r, 100))
+
+    out.sentAfterIndex = sent.afterIndex
+    out.sentSkuCount = sent.skus
+    // THE check. Shown-and-ignored is the failure that looks like it works.
+    if (out.sentAfterIndex !== 0) {
+      out.errors.push(
+        `the position was changed to page 1 but the generator was told`
+        + ` ${out.sentAfterIndex} — the choice is displayed and ignored`)
+    }
+    if (out.sentSkuCount !== 4) {
+      out.errors.push(`the generator was given ${out.sentSkuCount} SKUs, expected 4`)
+    }
+  } catch (err) {
+    out.errors.push(String(err))
+  } finally {
+    root.unmount()
+    host.remove()
+  }
+
+  return out
+}
+
 /** Puts the generate dialog on screen, with a list already typed in. */
 export async function showGenerateDialog(
   language: "en" | "he", withSkus = true,
@@ -152,7 +280,11 @@ export async function showGenerateDialog(
       slots: [{ fieldId: "sku", kind: "text" as const, productIndex: 0, bbox: box }],
     }],
     templatesLoading: false,
-    afterPageNumber: 1,
+    pages: [
+      { index: 0, label: "Page 1 (the first page)" },
+      { index: 1, label: "Page 2 (the end)" },
+    ],
+    defaultAfterIndex: 0,
     onCheck: async () => ({ found: 38, missing: ["BAD-1", "BAD-2"] }),
     busy: false,
     progress: null,

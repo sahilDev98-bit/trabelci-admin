@@ -1930,6 +1930,30 @@ export function PdfEngineEditorPage() {
   const [generateProgress, setGenerateProgress] = useState<{ done: number; total: number } | null>(null)
   const templateLibrary = usePdfPageTemplatesQuery()
 
+  /**
+   * The document's pages, named for the "add them after" list.
+   *
+   * The first and last are called out because those are what a prepared cover
+   * and final page actually are, and "after the last page" is a different
+   * intention from "after page 7" even when they are the same number today.
+   */
+  const generateTargetPages = useMemo(
+    () => doc.pages.map((_, index) => {
+      const number = index + 1
+      if (index === 0 && doc.pages.length > 1) {
+        return { index, label: t("pdfTemplates.generateAfterFirst", "Page 1 (the first page)") }
+      }
+      if (index === doc.pages.length - 1) {
+        return {
+          index,
+          label: t("pdfTemplates.generateAfterLast", "Page {{n}} (the end)", { n: number }),
+        }
+      }
+      return { index, label: t("pdfTemplates.generateAfterN", "Page {{n}}", { n: number }) }
+    }),
+    [doc.pages, t],
+  )
+
   /** Resolve a pasted list against the catalogue, before anything is built. */
   const checkSkus = async (skus: string[]) => {
     try {
@@ -1958,8 +1982,13 @@ export function PdfEngineEditorPage() {
    *     stopping the run. Forty pages abandoned over one bad code would be a
    *     poor trade, and the gap is visible on the page and named afterwards.
    */
-  const generateCatalogue = async (template: PdfPageTemplate, skus: string[]) => {
-    const startAfter = visiblePageIndex()
+  const generateCatalogue = async (
+    template: PdfPageTemplate, skus: string[], afterIndex: number,
+  ) => {
+    // Where the user SAID, not where they happened to be scrolled to. With a
+    // cover and a final page prepared in advance, what the product pages sit
+    // between is the whole question.
+    const startAfter = afterIndex
     const perPage = Math.max(1, template.productCount)
     const groups = chunkForPages(skus, perPage)
     if (groups.length === 0) return
@@ -2453,12 +2482,14 @@ export function PdfEngineEditorPage() {
         open={generateOpen}
         templates={templateLibrary.data ?? []}
         templatesLoading={templateLibrary.isLoading}
-        afterPageNumber={visiblePageIndex() + 1}
+        pages={generateTargetPages}
+        defaultAfterIndex={visiblePageIndex()}
         onCheck={checkSkus}
         busy={generating}
         progress={generateProgress}
         onCancel={() => setGenerateOpen(false)}
-        onGenerate={(template, skus) => void generateCatalogue(template, skus)}
+        onGenerate={(template, skus, afterIndex) =>
+          void generateCatalogue(template, skus, afterIndex)}
       />
 
       <PdfSaveTemplateDialog

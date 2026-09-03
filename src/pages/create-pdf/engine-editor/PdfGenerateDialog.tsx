@@ -29,19 +29,23 @@ interface PdfGenerateDialogProps {
   open: boolean
   templates: PdfPageTemplate[]
   templatesLoading: boolean
-  /** Where the generated pages will be inserted, 1-based, for the summary. */
-  afterPageNumber: number
+  /** The document's pages, so the user can say WHERE the generated ones go.
+   * Named rather than numbered alone: "Cover" is recognisable, "page 1" is
+   * something you have to go and check. */
+  pages: { index: number; label: string }[]
+  /** The page in view when the dialog opened — the sensible default. */
+  defaultAfterIndex: number
   /** Resolves the list against the catalogue: which SKUs exist, which do not. */
   onCheck: (skus: string[]) => Promise<{ found: number; missing: string[] }>
   busy: boolean
   /** Progress while generating, so a forty-page build is not a frozen box. */
   progress: { done: number; total: number } | null
-  onGenerate: (template: PdfPageTemplate, skus: string[]) => void
+  onGenerate: (template: PdfPageTemplate, skus: string[], afterIndex: number) => void
   onCancel: () => void
 }
 
 export function PdfGenerateDialog({
-  open, templates, templatesLoading, afterPageNumber,
+  open, templates, templatesLoading, pages, defaultAfterIndex,
   onCheck, busy, progress, onGenerate, onCancel,
 }: PdfGenerateDialogProps) {
   const { t } = useTranslation()
@@ -50,7 +54,18 @@ export function PdfGenerateDialog({
   const [checking, setChecking] = useState(false)
   const [checked, setChecked] = useState<{ found: number; missing: string[] } | null>(null)
   const [fileProblem, setFileProblem] = useState<"spreadsheet" | "unreadable" | null>(null)
+  /**
+   * Where the generated pages go.
+   *
+   * Null until chosen, so the DEFAULT follows the page you were looking at
+   * when you opened this — storing it in state on mount would freeze it at
+   * whatever was on screen the first time the dialog was ever opened.
+   */
+  const [afterIndex, setAfterIndex] = useState<number | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
+
+  const insertAfter = afterIndex ?? defaultAfterIndex
+  const afterPageNumber = insertAfter + 1
 
   // Only templates that can actually receive products. One with no slots
   // would generate pages that never fill, which is not a catalogue.
@@ -59,7 +74,9 @@ export function PdfGenerateDialog({
 
   const parsed = useMemo(() => parseSkuList(text), [text])
   const perPage = template?.productCount ?? 0
-  const pages = pagesNeeded(parsed.skus.length, perPage)
+  /** How many pages the list will make. Named apart from the document's
+   * own pages, which the prop above carries. */
+  const pagesToMake = pagesNeeded(parsed.skus.length, perPage)
 
   /** Any change to the list invalidates a previous check — that answer was
    * about a different list. */
@@ -139,7 +156,33 @@ export function PdfGenerateDialog({
             )}
           </div>
 
-          {/* ── 2. The SKUs ───────────────────────────────────────────── */}
+          {/* ── 2. Where the new pages go ──────────────────────────────
+              The client prepares a cover and a final page in advance, so the
+              question that matters is what the product pages sit BETWEEN.
+              Left implicit it is "wherever you happened to be scrolled to",
+              which is fine until it is not — and a page landing in the wrong
+              half of a forty-page catalogue is tedious to undo. */}
+          <div className="space-y-1.5">
+            <Label htmlFor="generate-after">
+              {t("pdfTemplates.generateAfter", "Add the pages after")}
+            </Label>
+            <select
+              id="generate-after"
+              data-pdf-generate-after
+              value={String(insertAfter)}
+              onChange={(e) => setAfterIndex(Number(e.target.value))}
+              disabled={busy}
+              className="h-9 w-full rounded-md border bg-background px-2 text-sm text-foreground"
+            >
+              {pages.map((page) => (
+                <option key={page.index} value={String(page.index)}>
+                  {page.label}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* ── 3. The SKUs ───────────────────────────────────────────── */}
           <div className="space-y-1.5">
             <div className="flex items-center justify-between gap-2">
               <Label htmlFor="generate-skus">
@@ -207,10 +250,10 @@ export function PdfGenerateDialog({
                 {t("pdfTemplates.generateReadCount", "{{count}} SKUs read", {
                   count: parsed.skus.length,
                 })}
-                {template && pages > 0 && (
+                {template && pagesToMake > 0 && (
                   <>
                     {" · "}
-                    {t("pdfTemplates.generatePageCount", "{{count}} pages", { count: pages })}
+                    {t("pdfTemplates.generatePageCount", "{{count}} pages", { count: pagesToMake })}
                   </>
                 )}
               </p>
@@ -286,7 +329,7 @@ export function PdfGenerateDialog({
               {t(
                 "pdfTemplates.generateWillInsert",
                 "{{pages}} pages will be added after page {{after}}. You can edit everything afterwards.",
-                { pages, after: afterPageNumber },
+                { pages: pagesToMake, after: afterPageNumber },
               )}
             </p>
           )}
@@ -307,10 +350,10 @@ export function PdfGenerateDialog({
             className="gap-1.5"
             // Nothing to build without both a template and a list.
             disabled={busy || !template || parsed.skus.length === 0}
-            onClick={() => { if (template) onGenerate(template, parsed.skus) }}
+            onClick={() => { if (template) onGenerate(template, parsed.skus, insertAfter) }}
           >
             {busy && <Loader2Icon className="size-4 animate-spin" />}
-            {t("pdfTemplates.generateRun", "Generate {{count}} pages", { count: pages })}
+            {t("pdfTemplates.generateRun", "Generate {{count}} pages", { count: pagesToMake })}
           </Button>
         </DialogFooter>
       </DialogContent>
