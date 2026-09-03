@@ -197,6 +197,8 @@ export async function runWorkspaceSelfTest(): Promise<WorkspaceTestResult> {
       // area, and what is being measured here is the page area at full size.
       selectionCount: 0,
       selectionSlotField: null,
+    selectionSlotProduct: 0,
+    slotProductChoices: 1,
     onSetSlotField: () => {},
     slotFieldOptions: [],
     onTransformGroup: () => false,

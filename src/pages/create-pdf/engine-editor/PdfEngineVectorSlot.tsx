@@ -1,5 +1,5 @@
 import { useTranslation } from "react-i18next"
-import { productFieldLabel } from "./productSlots"
+import { productSlotBadge, type ProductSlotMark } from "./productSlots"
 
 import { useBoxTransform, type BoxRectPx, type ResizeHandle } from "./useBoxTransform"
 
@@ -18,8 +18,11 @@ interface PdfEngineVectorSlotProps {
    * exist nowhere but the DOM. */
   slotIndex: number
   locked?: boolean
-  /** The product detail this box holds, or null for fixed text. */
-  productField?: string | null
+  /** The product slot this box IS, or null for fixed content. */
+  productSlot?: ProductSlotMark | null
+  /** How many products the page shows, so the badge can say which one this
+   * belongs to when there is more than one. */
+  productsOnPage?: number
   /** Alignment: nudges the live rect and draws the guides. Supplied by the
    * page, which is the only thing that knows what else is on it. */
   snap?: (rect: BoxRectPx, kind: string, altKey: boolean) => BoxRectPx
@@ -63,7 +66,7 @@ const HANDLES: { key: ResizeHandle; className: string; cursor: string }[] = [
  */
 export function PdfEngineVectorSlot({
   rect, pageWidthPx, pageHeightPx, scale, pageHeightPts,
-  selected, locked, productField, slotIndex, onSelect, onReplace, onTransform, snap, onGestureEnd,
+  selected, locked, productSlot, productsOnPage = 1, slotIndex, onSelect, onReplace, onTransform, snap, onGestureEnd,
 }: PdfEngineVectorSlotProps) {
   const { t } = useTranslation()
 
@@ -117,12 +120,12 @@ export function PdfEngineVectorSlot({
         "Logo or icon drawn as artwork. Double-click to replace it with an image, drag to move it, corners to resize.",
       )}
     >
-      {productField && (
+      {productSlot && (
         <span
-          data-pdf-slot-badge={productField}
+          data-pdf-slot-badge={productSlot.fieldId}
           className="pointer-events-none absolute -top-4 start-0 z-10 whitespace-nowrap rounded-sm bg-emerald-600 px-1 text-[9px] font-medium leading-4 text-white"
         >
-          {productFieldLabel(t, productField)}
+          {productSlotBadge(t, productSlot, productsOnPage)}
         </span>
       )}
       {locked && (

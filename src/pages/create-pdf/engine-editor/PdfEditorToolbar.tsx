@@ -53,7 +53,14 @@ interface PdfEditorToolbarProps {
   /** Which product detail the selected box holds, or null for fixed text.
    * This is what a template is built from — see productSlots.ts. */
   selectionSlotField: string | null
-  onSetSlotField: (fieldId: string | null) => void
+  /** WHICH product on the page the selected box belongs to, counted from 0.
+   * A page can show eight products, so "the SKU" does not identify a slot on
+   * its own. */
+  selectionSlotProduct: number
+  /** How many product positions to offer — one more than the page uses, so
+   * another can always be started. */
+  slotProductChoices: number
+  onSetSlotField: (fieldId: string | null, productIndex: number) => void
   /** What this KIND of box may hold: a picture can only be the photo, a line
    * of text can be any of the written details. */
   slotFieldOptions: { id: string; labelKey: string; labelFallback: string }[]
@@ -189,7 +196,8 @@ function ToolButton({
 export function PdfEditorToolbar({
   documentName,
   onZoomToSelection, selection, selectionCount, onTransformGroup,
-  selectionSlotField, onSetSlotField, slotFieldOptions,
+  selectionSlotField, selectionSlotProduct, slotProductChoices,
+  onSetSlotField, slotFieldOptions,
   contentMode, onToggleContentMode,
   onAddText, onAddImage, thumbnailRailOpen, onToggleThumbnailRail,
   assetPanelOpen, onToggleAssetPanel, templatePanelOpen, onToggleTemplatePanel,
@@ -581,7 +589,7 @@ export function PdfEditorToolbar({
                   <select
                     data-pdf-slot-field
                     value={selectionSlotField ?? ""}
-                    onChange={(e) => onSetSlotField(e.target.value || null)}
+                    onChange={(e) => onSetSlotField(e.target.value || null, selectionSlotProduct)}
                     aria-label={t("pdfTemplates.productSlotField", "Holds product detail")}
                     title={t(
                       "pdfTemplates.productSlotFieldHint",
@@ -610,6 +618,35 @@ export function PdfEditorToolbar({
                     {slotFieldOptions.map((option) => (
                       <option key={option.id} value={option.id}>
                         {t(option.labelKey, option.labelFallback)}
+                      </option>
+                    ))}
+                  </select>
+                )}
+
+                {/* WHICH product this box belongs to.
+                    Only shown once the box actually holds something — the
+                    question has no meaning for fixed text, and an extra
+                    control that does nothing is worse than none.
+
+                    A page's product count is DERIVED from these: choosing
+                    "3" here is what makes it a three-product page. There is
+                    no separate "how many products" setting to keep in
+                    step. */}
+                {selectionCount <= 1 && selectionSlotField && (
+                  <select
+                    data-pdf-slot-product
+                    value={String(selectionSlotProduct)}
+                    onChange={(e) => onSetSlotField(selectionSlotField, Number(e.target.value))}
+                    aria-label={t("pdfTemplates.productSlotWhich", "Which product on this page")}
+                    title={t(
+                      "pdfTemplates.productSlotWhichHint",
+                      "Which product position on the page this box belongs to",
+                    )}
+                    className="h-8 shrink-0 rounded-md border border-primary bg-background px-1 text-xs text-foreground"
+                  >
+                    {Array.from({ length: Math.max(1, slotProductChoices) }, (_, i) => (
+                      <option key={i} value={String(i)}>
+                        {t("pdfTemplates.productSlotProductN", "Product {{n}}", { n: i + 1 })}
                       </option>
                     ))}
                   </select>

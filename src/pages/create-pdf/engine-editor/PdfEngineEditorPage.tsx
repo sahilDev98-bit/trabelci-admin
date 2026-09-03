@@ -19,7 +19,8 @@ import { productDisplayName, toProductFieldLanguage } from "./productFields"
 import { PRODUCT_BLOCK_FIELD_IDS, planProductBlock, productBlockLines } from "./productBlock"
 import { PRODUCT_FIELDS } from "./productFields"
 import {
-  PRODUCT_PHOTO_FIELD, fieldsForKind, markFor, marksOnPage, pruneSlotMarks,
+  PRODUCT_PHOTO_FIELD, fieldsForKind, markFor, marksForProduct, marksOnPage,
+  productCountOnPage, pruneSlotMarks,
   reanchorMarksOnPage, setSlotMark, slotKeyFor,
   type LiveBox, type ProductSlotMap, type ProductSlotMark,
 } from "./productSlots"
@@ -559,6 +560,13 @@ export function PdfEngineEditorPage() {
     [selection, alsoSelected],
   )
 
+  /** One picture's box on a page, for asking whether it is a product slot. */
+  const boxOfImage = useCallback(
+    (pageIndex: number, imageIndex: number) =>
+      doc.pageImages[pageIndex]?.images[imageIndex]?.bbox ?? null,
+    [doc.pageImages],
+  )
+
   /** The key for one slot's current box, or null if it cannot be resolved. */
   const slotKeyOf = useCallback((slot: {
     pageIndex: number; kind: "text" | "image" | "vector"; index: number
@@ -1059,15 +1067,27 @@ export function PdfEngineEditorPage() {
      * so a drop there still places a block. The two behaviours never overlap,
      * because a page either has slots or it does not.
      */
-    if (marksOnPage(liveProductSlots, pageIndex).length > 0) {
-      const filled = await fillPageFromProduct(product, pageIndex)
+    const productsHere = productCountOnPage(liveProductSlots, pageIndex)
+    if (productsHere === 1) {
+      const filled = await fillPageFromProduct(product, pageIndex, 0)
       if (filled) {
         toast.success(t(
           "pdfTemplates.productSwapped",
-          "Page now shows {{name}} — {{count}} slots updated",
+          "Now showing {{name}} — {{count}} slots updated",
           { name: productDisplayName(product), count: filled },
         ))
       }
+      return
+    }
+    if (productsHere > 1) {
+      // Which of the eight was meant? Bare paper cannot say, and guessing
+      // would overwrite a position the user did not point at. Dropping onto a
+      // product's own photo IS the answer, so that is what it asks for.
+      toast.info(t(
+        "pdfTemplates.productSwapAmbiguous",
+        "This page holds {{count}} products. Drop onto the photo of the one you want to replace.",
+        { count: productsHere },
+      ))
       return
     }
 
@@ -1175,13 +1195,17 @@ export function PdfEngineEditorPage() {
    * the page between writes would lose the slots not yet filled.
    */
   const fillPageFromProduct = useCallback(async (
-    chosen: CatalogProduct, targetPageIndex?: number,
+    chosen: CatalogProduct, targetPageIndex?: number, productIndex = 0,
   ) => {
-    // A named page, because this is reached two ways now: the panel's button
-    // means "the page I am looking at", and a product DROPPED on a page means
-    // that page, which may not be the one in view.
+    // A named page, because this is reached two ways: the panel's button means
+    // "the page I am looking at", and a product DROPPED on a page means that
+    // page, which may not be the one in view.
+    //
+    // And a named POSITION, because a page can hold eight products. Filling
+    // every slot on such a page with one product would put the same tile in
+    // all eight places, which is never what anyone means.
     const pageIndex = targetPageIndex ?? visiblePageIndex()
-    const marks = marksOnPage(liveProductSlots, pageIndex)
+    const marks = marksForProduct(liveProductSlots, pageIndex, productIndex)
     if (marks.length === 0) {
       toast.error(t(
         "pdfTemplates.productSlotsNone",
@@ -1264,12 +1288,17 @@ export function PdfEngineEditorPage() {
   const handleDropProductOnImage = async (
     pageIndex: number, imageIndex: number, product: CatalogProduct,
   ) => {
-    if (marksOnPage(liveProductSlots, pageIndex).length > 0) {
-      const filled = await fillPageFromProduct(product, pageIndex)
+    // Dropped onto a box that IS a product slot: that box says which product
+    // position is meant, which is the only unambiguous answer on a page
+    // holding several.
+    const droppedOn = markFor(
+      liveProductSlots, slotKeyFor(pageIndex, "image", boxOfImage(pageIndex, imageIndex)))
+    if (droppedOn) {
+      const filled = await fillPageFromProduct(product, pageIndex, droppedOn.productIndex)
       if (filled) {
         toast.success(t(
           "pdfTemplates.productSwapped",
-          "Page now shows {{name}} — {{count}} slots updated",
+          "Now showing {{name}} — {{count}} slots updated",
           { name: productDisplayName(product), count: filled },
         ))
       }
@@ -1812,9 +1841,7 @@ export function PdfEngineEditorPage() {
         slots: marksOnPage(liveProductSlots, pageIndex).map((mark) => ({
           fieldId: mark.fieldId,
           kind: mark.kind,
-          // One product per page today. The brief asks for two-, four- and
-          // six-product pages, and this is what will tell them apart.
-          productIndex: 0,
+          productIndex: mark.productIndex,
           bbox: mark.bbox,
         })),
       })
@@ -1868,6 +1895,7 @@ export function PdfEngineEditorPage() {
           if (key) {
             next.set(key, {
               fieldId: slot.fieldId,
+              productIndex: slot.productIndex,
               pageIndex: newPageIndex,
               kind: slot.kind,
               bbox: slot.bbox,
@@ -2050,11 +2078,19 @@ export function PdfEngineEditorPage() {
           selectionCount: selectedGroup.length,
           selectionSlotField: markFor(liveProductSlots, slotKeyOf(selection)?.key ?? null)?.fieldId ?? null,
           slotFieldOptions: selection ? fieldsForKind(selection.kind) : [],
-          onSetSlotField: (fieldId: string | null) => {
+          selectionSlotProduct:
+            markFor(liveProductSlots, slotKeyOf(selection)?.key ?? null)?.productIndex ?? 0,
+          /** One more than the page currently uses, so another product can
+           * always be started — and no more, so the list cannot run away. */
+          slotProductChoices: selection
+            ? Math.min(productCountOnPage(liveProductSlots, selection.pageIndex) + 1, 12)
+            : 1,
+          onSetSlotField: (fieldId: string | null, productIndex: number) => {
             const resolved = slotKeyOf(selection)
             if (!selection || !resolved?.key || !resolved.bbox) return
             setProductSlots(setSlotMark(liveProductSlots, resolved.key, {
               fieldId,
+              productIndex,
               pageIndex: selection.pageIndex,
               kind: selection.kind,
               bbox: resolved.bbox,
@@ -2199,7 +2235,8 @@ export function PdfEngineEditorPage() {
             mode={productFieldMode}
             onApply={applyProductField}
             onPlaceProduct={placeProductOnVisiblePage}
-            slotCountOnPage={marksOnPage(liveProductSlots, visiblePageIndex()).length}
+            slotCountOnPage={marksForProduct(liveProductSlots, visiblePageIndex(), 0).length}
+            productsOnPage={productCountOnPage(liveProductSlots, visiblePageIndex())}
             onFillSlots={() => { if (product) void fillPageFromProduct(product) }}
             onClose={() => setRightPanel(null)}
           />

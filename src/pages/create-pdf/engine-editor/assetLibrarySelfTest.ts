@@ -603,6 +603,8 @@ export async function showWorkspaceForDrag(pageCount = 12): Promise<void> {
     onAddText: () => {}, onAddImage: () => {},
     selectionCount: 0,
       selectionSlotField: null,
+    selectionSlotProduct: 0,
+    slotProductChoices: 1,
     onSetSlotField: () => {},
     slotFieldOptions: [],
     onTransformGroup: () => false,

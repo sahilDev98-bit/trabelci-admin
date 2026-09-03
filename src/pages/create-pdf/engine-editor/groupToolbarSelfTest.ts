@@ -53,6 +53,8 @@ function baseToolbar(overrides: Record<string, unknown>) {
     selection: SELECTION,
     selectionCount: 1,
     selectionSlotField: null,
+    selectionSlotProduct: 0,
+    slotProductChoices: 1,
     onSetSlotField: () => {},
     slotFieldOptions: [],
     onTransformGroup: () => true,
@@ -139,6 +141,8 @@ export async function runGroupToolbarSelfTest(): Promise<GroupToolbarTestResult>
     root.render(createElement(PdfEditorToolbar, baseToolbar({
       selectionCount: 3,
       selectionSlotField: null,
+    selectionSlotProduct: 0,
+    slotProductChoices: 1,
     onSetSlotField: () => {},
     slotFieldOptions: [],
     onTransformGroup: (op: string) => { ops.push(op); return true },
@@ -195,6 +199,8 @@ export async function runGroupToolbarSelfTest(): Promise<GroupToolbarTestResult>
         { id: "name", labelKey: "pdfTemplates.productFieldName", labelFallback: "Product name" },
       ],
       selectionSlotField: null,
+    selectionSlotProduct: 0,
+    slotProductChoices: 1,
       onSetSlotField: (id: string | null) => { chosenField = id },
     })))
     await new Promise((r) => setTimeout(r, 60))
@@ -229,6 +235,8 @@ export async function runGroupToolbarSelfTest(): Promise<GroupToolbarTestResult>
           { id: "sku", labelKey: "pdfTemplates.productFieldSku", labelFallback: "SKU" },
         ],
         selectionSlotField: null,
+    selectionSlotProduct: 0,
+    slotProductChoices: 1,
       })))
       await new Promise((r) => setTimeout(r, 60))
       const select = host.querySelector<HTMLSelectElement>("[data-pdf-slot-field]")

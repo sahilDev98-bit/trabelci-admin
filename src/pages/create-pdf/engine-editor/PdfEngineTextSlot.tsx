@@ -1,5 +1,5 @@
 import { useTranslation } from "react-i18next"
-import { productFieldLabel } from "./productSlots"
+import { productSlotBadge, type ProductSlotMark } from "./productSlots"
 
 import type { EngineTextLine } from "@/lib/pdf-engine"
 import { useBoxTransform, type BoxRectPx, type ResizeHandle } from "./useBoxTransform"
@@ -14,8 +14,11 @@ interface PdfEngineTextSlotProps {
   /** Locked slots can be selected — you have to be able to reach one to
    * unlock it — but not moved or resized, and they show no handles. */
   locked?: boolean
-  /** The product detail this box holds, or null for fixed text. */
-  productField?: string | null
+  /** The product slot this box IS, or null for fixed content. */
+  productSlot?: ProductSlotMark | null
+  /** How many products the page shows, so the badge can say which one this
+   * belongs to when there is more than one. */
+  productsOnPage?: number
   /** Alignment: nudges the live rect and draws the guides. Supplied by the
    * page, which is the only thing that knows what else is on it. */
   snap?: (rect: BoxRectPx, kind: string, altKey: boolean) => BoxRectPx
@@ -69,7 +72,7 @@ const HANDLES: { key: ResizeHandle; className: string; cursor: string }[] = [
  */
 export function PdfEngineTextSlot({
   line, rect, pageWidthPx, pageHeightPx, scale,
-  selected, locked, productField, dragging, originPatchUrl, onSelect, onEdit, onMoveStart, onResize, snap, onGestureEnd,
+  selected, locked, productSlot, productsOnPage = 1, dragging, originPatchUrl, onSelect, onEdit, onMoveStart, onResize, snap, onGestureEnd,
 }: PdfEngineTextSlotProps) {
   const { t } = useTranslation()
 
@@ -134,12 +137,12 @@ ${Math.round(line.fontSize)}pt · ${t("pdfTemplates.engineTextHint", "Double-cli
           rather than only in the toolbar: a slot you cannot see is a slot you
           forget you made, and on a finished page a product slot looks exactly
           like any other text. */}
-      {productField && (
+      {productSlot && (
         <span
-          data-pdf-slot-badge={productField}
+          data-pdf-slot-badge={productSlot.fieldId}
           className="pointer-events-none absolute -top-4 start-0 z-10 whitespace-nowrap rounded-sm bg-emerald-600 px-1 text-[9px] font-medium leading-4 text-white"
         >
-          {productFieldLabel(t, productField)}
+          {productSlotBadge(t, productSlot, productsOnPage)}
         </span>
       )}
       {/* No floating toolbar. On a dense catalogue page the boxes sit

@@ -13,7 +13,9 @@ import { PdfEngineTextSlot } from "./PdfEngineTextSlot"
 import { PdfEngineVectorSlot } from "./PdfEngineVectorSlot"
 import { assetIdFromDrag, dragCarriesAsset } from "./assetDrag"
 import { dragCarriesProduct, productFromDrag } from "./productDrag"
-import { markFor, slotKeyFor, type ProductSlotMap } from "./productSlots"
+import {
+  markFor, productCountOnPage, slotKeyFor, type ProductSlotMap,
+} from "./productSlots"
 import { isLocked, lockKeyFor, type LockSet } from "./locks"
 import {
   buildSnapTargets, edgesForHandle, MOVE_EDGES, paintGuides, snapRect,
@@ -248,6 +250,10 @@ export function PdfEnginePage({
    * page SWAPS the product; onto any other page it adds one. */
   const pageHoldsProduct = [...productSlots.values()]
     .some((mark) => mark.pageIndex === pageIndex)
+  /** How many products this page shows. Above one, each badge names WHICH
+   * product its box belongs to — on an eight-product page "SKU" alone says
+   * nothing about which of the eight. */
+  const productsOnPage = productCountOnPage(productSlots, pageIndex)
   const displayHeight = page.heightPts > 0 ? (displayWidth * page.heightPts) / page.widthPts : 0
   // PDF points -> CSS pixels, for placing hotspot boxes over the canvas.
   const scale = page.widthPts > 0 ? displayWidth / page.widthPts : 1
@@ -667,7 +673,8 @@ export function PdfEnginePage({
               snap={snapFor({ kind: "image", index: image.imageIndex })}
               onGestureEnd={clearGuides}
               locked={isLocked(locks, lockKeyFor(pageIndex, "image", image.bbox))}
-              productField={markFor(productSlots, slotKeyFor(pageIndex, "image", image.bbox))?.fieldId ?? null}
+              productSlot={markFor(productSlots, slotKeyFor(pageIndex, "image", image.bbox))}
+              productsOnPage={productsOnPage}
               rect={boxStyle(image.bbox)}
               pageWidthPx={displayWidth}
               pageHeightPx={displayHeight}
@@ -709,7 +716,8 @@ export function PdfEnginePage({
           snap={snapFor({ kind: "vector", index: group.vectorIndex })}
           onGestureEnd={clearGuides}
           locked={isLocked(locks, lockKeyFor(pageIndex, "vector", group.bbox))}
-          productField={markFor(productSlots, slotKeyFor(pageIndex, "vector", group.bbox))?.fieldId ?? null}
+          productSlot={markFor(productSlots, slotKeyFor(pageIndex, "vector", group.bbox))}
+          productsOnPage={productsOnPage}
           rect={boxStyle(group.bbox)}
           pageWidthPx={displayWidth}
           pageHeightPx={displayHeight}
@@ -728,7 +736,8 @@ export function PdfEnginePage({
           snap={snapFor({ kind: "text", index: line.lineIndex })}
           onGestureEnd={clearGuides}
           locked={isLocked(locks, lockKeyFor(pageIndex, "text", line.bbox))}
-          productField={markFor(productSlots, slotKeyFor(pageIndex, "text", line.bbox))?.fieldId ?? null}
+          productSlot={markFor(productSlots, slotKeyFor(pageIndex, "text", line.bbox))}
+          productsOnPage={productsOnPage}
           line={line}
           rect={boxStyle(line.bbox)}
           pageWidthPx={displayWidth}

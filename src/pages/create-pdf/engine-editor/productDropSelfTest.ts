@@ -455,6 +455,7 @@ export async function showProductPanelWithProduct(
       mode: "add" as const,
       onApply: () => {},
       slotCountOnPage: slots,
+      productsOnPage: 1,
       onFillSlots: () => {},
       onPlaceProduct: () => {},
       onClose: () => {},
@@ -511,7 +512,7 @@ export async function runProductSwapTest(): Promise<ProductSwapResult> {
   // what "this page holds a product" means.
   const withSlots = new Map([[
     slotKeyFor(0, "image", imageBox)!,
-    { fieldId: "photo", pageIndex: 0, kind: "image" as const, bbox: imageBox },
+    { fieldId: "photo", productIndex: 0, pageIndex: 0, kind: "image" as const, bbox: imageBox },
   ]])
 
   const run = async (slots: typeof withSlots) => {

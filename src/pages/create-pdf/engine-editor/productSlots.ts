@@ -39,6 +39,21 @@ export const PRODUCT_PHOTO_FIELD = "photo"
 export interface ProductSlotMark {
   /** A PRODUCT_FIELDS id, or PRODUCT_PHOTO_FIELD. */
   fieldId: string
+  /**
+   * WHICH product on the page this belongs to, counted from 0.
+   *
+   * A page can show several products — the brief asks for two-, four-, six-
+   * and eight-product pages — so "the SKU" is not enough to identify a slot.
+   * The third product's SKU and the first product's SKU are different places
+   * that both hold an SKU.
+   *
+   * How many products a page holds is DERIVED from this rather than set
+   * separately: marking a box as the third product's price is what makes it a
+   * three-product page. A count kept alongside the slots would be a second
+   * source of truth, and the two would disagree the first time a slot was
+   * cleared.
+   */
+  productIndex: number
   pageIndex: number
   kind: SlotKind
   bbox: PdfRect
@@ -91,10 +106,11 @@ export function markFor(marks: ProductSlotMap, key: string | null): ProductSlotM
  * Returns a NEW map — this is held in React state, where mutating the
  * existing one would not re-render.
  *
- * A field can only be in ONE place on a page. Marking a second box as the SKU
- * clears the first, because a page showing the same product's SKU twice from
- * two slots is not something anyone means to build, and when a product is
- * later poured into the page both would have to receive it anyway.
+ * A field can only be in ONE place PER PRODUCT on a page. Marking a second box
+ * as the first product's SKU clears the first, because a page showing one
+ * product's SKU twice is not something anyone means to build. The SECOND
+ * product's SKU is a different slot entirely and is left alone — that is what
+ * makes an eight-product page possible.
  */
 export function setSlotMark(
   marks: ProductSlotMap,
@@ -107,12 +123,18 @@ export function setSlotMark(
     return next
   }
   for (const [existingKey, existing] of next) {
-    if (existing.pageIndex === mark.pageIndex && existing.fieldId === mark.fieldId) {
+    if (existing.pageIndex === mark.pageIndex
+      && existing.fieldId === mark.fieldId
+      && existing.productIndex === mark.productIndex) {
       next.delete(existingKey)
     }
   }
   next.set(key, {
-    fieldId: mark.fieldId, pageIndex: mark.pageIndex, kind: mark.kind, bbox: mark.bbox,
+    fieldId: mark.fieldId,
+    productIndex: mark.productIndex,
+    pageIndex: mark.pageIndex,
+    kind: mark.kind,
+    bbox: mark.bbox,
   })
   return next
 }
@@ -289,4 +311,47 @@ export function fixedLabelForKind(kind: SlotKind): { key: string; fallback: stri
   if (kind === "image") return { key: "pdfTemplates.productSlotFixedImage", fallback: "Fixed image" }
   if (kind === "vector") return { key: "pdfTemplates.productSlotFixedVector", fallback: "Fixed artwork" }
   return { key: "pdfTemplates.productSlotNone", fallback: "Fixed text" }
+}
+
+/**
+ * How many products a page holds.
+ *
+ * Derived from the slots rather than stored: marking a box as the third
+ * product's price is what makes it a three-product page. A separate count
+ * would be a second source of truth, and the two would disagree the moment a
+ * slot was cleared.
+ *
+ * Counted as the HIGHEST product number used, not the number of distinct ones
+ * — a page with slots for products 1 and 3 but not 2 still holds three, and
+ * the generator must not quietly skip the gap.
+ */
+export function productCountOnPage(marks: ProductSlotMap, pageIndex: number): number {
+  let highest = -1
+  for (const mark of marks.values()) {
+    if (mark.pageIndex === pageIndex) highest = Math.max(highest, mark.productIndex)
+  }
+  return highest + 1
+}
+
+/** The slots belonging to one product on a page, for filling that position. */
+export function marksForProduct(
+  marks: ProductSlotMap, pageIndex: number, productIndex: number,
+): ProductSlotMark[] {
+  return [...marks.values()].filter(
+    (m) => m.pageIndex === pageIndex && m.productIndex === productIndex)
+}
+
+/**
+ * A short label naming which product a slot belongs to, for the badge.
+ *
+ * Absent on a one-product page, where "1" in front of every badge is noise
+ * that says nothing — the page has only one product to belong to.
+ */
+export function productSlotBadge(
+  t: (key: string, fallback: string) => string,
+  mark: ProductSlotMark,
+  productsOnPage: number,
+): string {
+  const field = productFieldLabel(t, mark.fieldId)
+  return productsOnPage > 1 ? `${mark.productIndex + 1} · ${field}` : field
 }

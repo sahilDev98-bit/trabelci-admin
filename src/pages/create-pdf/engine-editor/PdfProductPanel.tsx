@@ -69,6 +69,10 @@ interface PdfProductPanelProps {
   slotCountOnPage: number
   /** Pours the chosen product into every marked box at once. */
   onFillSlots: () => void
+  /** How many products the page in view shows. Above one, the button has to
+   * say WHICH position it fills — on an eight-product page "Fill 4 slots"
+   * leaves you wondering which of the eight got them. */
+  productsOnPage: number
   onClose: () => void
 }
 
@@ -83,7 +87,7 @@ function useDebounced<T>(value: T, delayMs: number): T {
 
 export function PdfProductPanel({
   product, onPickProduct, mode, onApply, onPlaceProduct,
-  slotCountOnPage, onFillSlots, onClose,
+  slotCountOnPage, onFillSlots, productsOnPage, onClose,
 }: PdfProductPanelProps) {
   const { t, i18n } = useTranslation()
   const [search, setSearch] = useState("")
@@ -280,15 +284,25 @@ export function PdfProductPanel({
                 onClick={onFillSlots}
               >
                 <SparklesIcon className="size-3.5" />
-                {t("pdfTemplates.productFillSlots", "Fill {{count}} slots on this page", {
-                  count: slotCountOnPage,
-                })}
+                {productsOnPage > 1
+                  ? t("pdfTemplates.productFillFirst", "Fill product 1 ({{count}} slots)", {
+                    count: slotCountOnPage,
+                  })
+                  : t("pdfTemplates.productFillSlots", "Fill {{count}} slots on this page", {
+                    count: slotCountOnPage,
+                  })}
               </Button>
               <p className="mt-1.5 text-xs text-muted-foreground">
-                {t(
-                  "pdfTemplates.productFillSlotsHint",
-                  "Puts this product into every box marked as holding a product detail.",
-                )}
+                {productsOnPage > 1
+                  ? t(
+                    "pdfTemplates.productFillFirstHint",
+                    "This page holds {{count}} products. Drop a product onto a photo to fill that position instead.",
+                    { count: productsOnPage },
+                  )
+                  : t(
+                    "pdfTemplates.productFillSlotsHint",
+                    "Puts this product into every box marked as holding a product detail.",
+                  )}
               </p>
             </div>
           )}

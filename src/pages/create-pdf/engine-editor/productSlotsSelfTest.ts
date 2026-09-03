@@ -17,6 +17,7 @@ import type { PdfRect } from "@/lib/pdf-engine"
 import {
   PRODUCT_PHOTO_FIELD, fieldsForKind, markFor, marksOnPage, pruneSlotMarks,
   reanchorMarksOnPage, reanchorSlotMark, setSlotMark, slotKeyFor,
+  marksForProduct, productCountOnPage, productSlotBadge,
   type ProductSlotMap,
 } from "./productSlots"
 
@@ -53,7 +54,7 @@ export function runProductSlotsSelfTest(): ProductSlotsTestResult {
   const skuBox = box(50, 700, 200, 720)
   const skuKey = slotKeyFor(0, "text", skuBox)!
   let marks: ProductSlotMap = setSlotMark(new Map(), skuKey, {
-    fieldId: "sku", pageIndex: 0, kind: "text", bbox: skuBox,
+    fieldId: "sku", productIndex: 0, pageIndex: 0, kind: "text", bbox: skuBox,
   })
 
   out.markedField = markFor(marks, skuKey)?.fieldId ?? null
@@ -104,11 +105,11 @@ export function runProductSlotsSelfTest(): ProductSlotsTestResult {
   // ── 3. One field, one place ──────────────────────────────────────────
   const nameBox = box(50, 600, 300, 630)
   marks = setSlotMark(marks, slotKeyFor(0, "text", nameBox)!, {
-    fieldId: "name", pageIndex: 0, kind: "text", bbox: nameBox,
+    fieldId: "name", productIndex: 0, pageIndex: 0, kind: "text", bbox: nameBox,
   })
   const photoBox = box(50, 300, 300, 560)
   marks = setSlotMark(marks, slotKeyFor(0, "image", photoBox)!, {
-    fieldId: PRODUCT_PHOTO_FIELD, pageIndex: 0, kind: "image", bbox: photoBox,
+    fieldId: PRODUCT_PHOTO_FIELD, productIndex: 0, pageIndex: 0, kind: "image", bbox: photoBox,
   })
   out.fieldsOnPage = marksOnPage(marks, 0).map((m) => m.fieldId).sort()
   if (out.fieldsOnPage.length !== 3) {
@@ -120,7 +121,7 @@ export function runProductSlotsSelfTest(): ProductSlotsTestResult {
   // would have to fill both.
   const secondSkuBox = box(400, 700, 500, 720)
   marks = setSlotMark(marks, slotKeyFor(0, "text", secondSkuBox)!, {
-    fieldId: "sku", pageIndex: 0, kind: "text", bbox: secondSkuBox,
+    fieldId: "sku", productIndex: 0, pageIndex: 0, kind: "text", bbox: secondSkuBox,
   })
   const skus = marksOnPage(marks, 0).filter((m) => m.fieldId === "sku")
   out.skuIsUniqueOnPage = skus.length === 1
@@ -134,7 +135,7 @@ export function runProductSlotsSelfTest(): ProductSlotsTestResult {
 
   // Clearing a mark removes it entirely.
   const cleared = setSlotMark(marks, slotKeyFor(0, "text", nameBox)!, {
-    fieldId: null, pageIndex: 0, kind: "text", bbox: nameBox,
+    fieldId: null, productIndex: 0, pageIndex: 0, kind: "text", bbox: nameBox,
   })
   if (markFor(cleared, slotKeyFor(0, "text", nameBox)) !== null) {
     out.errors.push("clearing a mark left it in place")
@@ -159,7 +160,7 @@ export function runProductSlotsSelfTest(): ProductSlotsTestResult {
   // A key starts with the page index, so marks from a removed page would be
   // inherited by whatever page takes that number.
   let twoPages: ProductSlotMap = setSlotMark(marks, slotKeyFor(1, "text", skuBox)!, {
-    fieldId: "sku", pageIndex: 1, kind: "text", bbox: skuBox,
+    fieldId: "sku", productIndex: 0, pageIndex: 1, kind: "text", bbox: skuBox,
   })
   twoPages = pruneSlotMarks(twoPages, 1)
   out.prunedAfterPageDelete = marksOnPage(twoPages, 1).length
@@ -223,13 +224,13 @@ export function runSlotReanchorSelfTest(): SlotReanchorTestResult {
   const nameBox = box(50, 250, 260, 275)
 
   let marks: ProductSlotMap = setSlotMark(new Map(), slotKeyFor(0, "image", photoBox)!, {
-    fieldId: PRODUCT_PHOTO_FIELD, pageIndex: 0, kind: "image", bbox: photoBox,
+    fieldId: PRODUCT_PHOTO_FIELD, productIndex: 0, pageIndex: 0, kind: "image", bbox: photoBox,
   })
   marks = setSlotMark(marks, slotKeyFor(0, "text", skuBox)!, {
-    fieldId: "sku", pageIndex: 0, kind: "text", bbox: skuBox,
+    fieldId: "sku", productIndex: 0, pageIndex: 0, kind: "text", bbox: skuBox,
   })
   marks = setSlotMark(marks, slotKeyFor(0, "text", nameBox)!, {
-    fieldId: "name", pageIndex: 0, kind: "text", bbox: nameBox,
+    fieldId: "name", productIndex: 0, pageIndex: 0, kind: "text", bbox: nameBox,
   })
 
   const live = (boxes: { kind: "text" | "image" | "vector"; bbox: PdfRect }[]) => boxes
@@ -331,6 +332,140 @@ export function runSlotReanchorSelfTest(): SlotReanchorTestResult {
     out.errors.push(
       "the product photo slot was dropped because the picture list had not"
       + " loaded yet — an unread list was taken for an empty page")
+  }
+
+  return out
+}
+
+/**
+ * Can a page hold EIGHT products?
+ *
+ * This is what the bulk generator rests on. The client's example is an
+ * eight-product page fed forty SKUs to make five pages — impossible until a
+ * slot can say WHICH product it belongs to, because "the SKU" names eight
+ * different boxes on such a page.
+ *
+ * The rules that matter are all about not confusing one position with
+ * another, so each is checked at eight, not at two.
+ */
+export interface MultiProductSlotsResult {
+  errors: string[]
+  productsOnPage: number
+  slotsPerProduct: number[]
+  /** Each product's SKU slot is its own box. */
+  eightDistinctSkuSlots: boolean
+  /** Re-marking product 3's SKU must not disturb product 4's. */
+  remarkingOneLeavesOthers: boolean
+  /** Filling reads only the position asked for. */
+  filledOnlyProductThree: string[]
+  /** A gap in the numbering still counts as the higher page size. */
+  countWithGap: number
+  badgeOnManyProducts: string
+  badgeOnOneProduct: string
+}
+
+export function runMultiProductSlotsSelfTest(): MultiProductSlotsResult {
+  const out: MultiProductSlotsResult = {
+    errors: [], productsOnPage: 0, slotsPerProduct: [],
+    eightDistinctSkuSlots: false, remarkingOneLeavesOthers: false,
+    filledOnlyProductThree: [], countWithGap: 0,
+    badgeOnManyProducts: "", badgeOnOneProduct: "",
+  }
+
+  // Eight products, each with a photo and an SKU, laid out in a 2x4 grid.
+  let marks: ProductSlotMap = new Map()
+  for (let i = 0; i < 8; i++) {
+    const col = i % 2
+    const row = Math.floor(i / 2)
+    const left = 40 + col * 280
+    const bottom = 700 - row * 170
+    const photo = box(left, bottom, left + 250, bottom + 120)
+    const sku = box(left, bottom - 20, left + 250, bottom - 2)
+    marks = setSlotMark(marks, slotKeyFor(0, "image", photo)!, {
+      fieldId: PRODUCT_PHOTO_FIELD, productIndex: i, pageIndex: 0, kind: "image", bbox: photo,
+    })
+    marks = setSlotMark(marks, slotKeyFor(0, "text", sku)!, {
+      fieldId: "sku", productIndex: i, pageIndex: 0, kind: "text", bbox: sku,
+    })
+  }
+
+  out.productsOnPage = productCountOnPage(marks, 0)
+  if (out.productsOnPage !== 8) {
+    out.errors.push(`the page reports ${out.productsOnPage} products, expected 8`)
+  }
+
+  out.slotsPerProduct = Array.from({ length: 8 }, (_, i) => marksForProduct(marks, 0, i).length)
+  if (out.slotsPerProduct.some((n) => n !== 2)) {
+    out.errors.push(`slots per product came out ${JSON.stringify(out.slotsPerProduct)}, expected two each`)
+  }
+
+  // Eight SKU slots, all present at once. Under the old one-field-per-page
+  // rule the eighth would have wiped out the other seven.
+  const skuSlots = marksOnPage(marks, 0).filter((m) => m.fieldId === "sku")
+  out.eightDistinctSkuSlots = skuSlots.length === 8
+    && new Set(skuSlots.map((m) => m.productIndex)).size === 8
+  if (!out.eightDistinctSkuSlots) {
+    out.errors.push(
+      `the page has ${skuSlots.length} SKU slots across`
+      + ` ${new Set(skuSlots.map((m) => m.productIndex)).size} products, expected 8 across 8`)
+  }
+
+  // ── Re-marking one position leaves the others alone ──────────────────
+  // The uniqueness rule is per PRODUCT now. Moving product 3's SKU to a new
+  // box must clear only product 3's old one.
+  const newSkuForThree = box(40, 100, 290, 118)
+  const after = setSlotMark(marks, slotKeyFor(0, "text", newSkuForThree)!, {
+    fieldId: "sku", productIndex: 2, pageIndex: 0, kind: "text", bbox: newSkuForThree,
+  })
+  const skusAfter = marksOnPage(after, 0).filter((m) => m.fieldId === "sku")
+  out.remarkingOneLeavesOthers = skusAfter.length === 8
+    && marksForProduct(after, 0, 2).some((m) => slotKeyFor(0, "text", m.bbox) === slotKeyFor(0, "text", newSkuForThree))
+  if (!out.remarkingOneLeavesOthers) {
+    out.errors.push(
+      `re-marking one product's SKU left ${skusAfter.length} SKU slots on the page,`
+      + " expected 8 — the other positions were disturbed")
+  }
+
+  // ── Filling reads only the position asked for ────────────────────────
+  // This is what stops one product being poured into all eight tiles.
+  out.filledOnlyProductThree = marksForProduct(marks, 0, 2)
+    .map((m) => `${m.fieldId}#${m.productIndex}`).sort()
+  if (out.filledOnlyProductThree.join(",") !== "photo#2,sku#2") {
+    out.errors.push(
+      `asking for product 3's slots returned ${JSON.stringify(out.filledOnlyProductThree)}`)
+  }
+
+  // ── A gap in the numbering ───────────────────────────────────────────
+  // Slots for products 1 and 4 but nothing between: the page still holds
+  // four positions, and the generator must not quietly skip the empty ones.
+  let gappy: ProductSlotMap = new Map()
+  const a = box(10, 10, 100, 30)
+  const b = box(200, 10, 290, 30)
+  gappy = setSlotMark(gappy, slotKeyFor(0, "text", a)!, {
+    fieldId: "sku", productIndex: 0, pageIndex: 0, kind: "text", bbox: a,
+  })
+  gappy = setSlotMark(gappy, slotKeyFor(0, "text", b)!, {
+    fieldId: "sku", productIndex: 3, pageIndex: 0, kind: "text", bbox: b,
+  })
+  out.countWithGap = productCountOnPage(gappy, 0)
+  if (out.countWithGap !== 4) {
+    out.errors.push(
+      `slots for products 1 and 4 report ${out.countWithGap} products, expected 4 —`
+      + " counting distinct numbers instead of the highest would lose the gap")
+  }
+
+  // ── The badge says which product, but only when it needs to ──────────
+  const t = (_k: string, fallback: string) => fallback
+  const mark = marksForProduct(marks, 0, 2)[0]
+  out.badgeOnManyProducts = productSlotBadge(t, mark, 8)
+  out.badgeOnOneProduct = productSlotBadge(t, { ...mark, productIndex: 0 }, 1)
+  if (!out.badgeOnManyProducts.startsWith("3 ")) {
+    out.errors.push(`the badge reads "${out.badgeOnManyProducts}" and does not say which product`)
+  }
+  // The control: on a ONE-product page a number in front of every badge is
+  // noise that says nothing — there is only one product to belong to.
+  if (/^\d/.test(out.badgeOnOneProduct)) {
+    out.errors.push(`a single-product page's badge reads "${out.badgeOnOneProduct}"`)
   }
 
   return out

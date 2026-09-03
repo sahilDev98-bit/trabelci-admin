@@ -174,6 +174,7 @@ function harness() {
         onPickProduct: setProduct,
         mode,
         slotCountOnPage: 0,
+      productsOnPage: 1,
         onFillSlots: () => {},
         onPlaceProduct: () => {},
     onApply: (value: string) => { fills.push(value) },
