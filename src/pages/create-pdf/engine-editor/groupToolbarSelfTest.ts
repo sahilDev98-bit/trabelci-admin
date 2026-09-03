@@ -71,6 +71,8 @@ function baseToolbar(overrides: Record<string, unknown>) {
     canUndo: false, canRedo: false, onUndo: () => {}, onRedo: () => {},
     onSaveTemplate: () => {},
     onGenerate: () => {},
+    canRefresh: false,
+    onRefreshFromDatabase: () => {},
     onAddPage: () => {},
     selectionLocked: false, onToggleLock: () => {}, onDuplicate: () => {},
     cropping: false, onToggleCrop: () => {},

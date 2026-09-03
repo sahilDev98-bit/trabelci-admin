@@ -616,6 +616,8 @@ export async function showWorkspaceForDrag(pageCount = 12): Promise<void> {
     canUndo: false, canRedo: false, onUndo: () => {}, onRedo: () => {},
     onSaveTemplate: () => {},
     onGenerate: () => {},
+    canRefresh: false,
+    onRefreshFromDatabase: () => {},
     onAddPage: () => {}, selectionLocked: false, onToggleLock: () => {},
       onDuplicate: () => {},
       cropping: false, onToggleCrop: () => {}, onSetFont: () => {},

@@ -289,6 +289,8 @@ export async function showGenerateDialog(
     busy: false,
     progress: null,
     onGenerate: () => {},
+    canRefresh: false,
+    onRefreshFromDatabase: () => {},
     onCancel: () => {},
   } as never))
   await new Promise((r) => setTimeout(r, 200))

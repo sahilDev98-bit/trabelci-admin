@@ -6,7 +6,7 @@ import {
   ScanSearchIcon, Trash2Icon, TypeIcon, TypeOutlineIcon, UndoIcon,
   FilePlusIcon, LockIcon, LockOpenIcon, CopyPlusIcon, CropIcon, XIcon,
   PanelLeftCloseIcon, PanelLeftOpenIcon, BookmarkPlusIcon, LayoutTemplateIcon,
-  SparklesIcon,
+  SparklesIcon, RefreshCwIcon,
 } from "lucide-react"
 import { useTranslation } from "react-i18next"
 
@@ -108,6 +108,11 @@ interface PdfEditorToolbarProps {
   onSaveTemplate: () => void
   /** Build many pages at once from a template and a list of SKUs. */
   onGenerate: () => void
+  /** Pull today's prices, names and photos into pages already built. Hidden
+   * when nothing on the document is linked to a product — a button whose only
+   * possible answer is "nothing to do" is noise. */
+  canRefresh: boolean
+  onRefreshFromDatabase: () => void
   /** Whether the SELECTED slot is locked, and the toggle for it. Locks are a
    * property of this editing session; a PDF has nowhere to store one. */
   selectionLocked: boolean
@@ -207,6 +212,7 @@ export function PdfEditorToolbar({
   productPanelOpen, onToggleProductPanel,
   layersPanelOpen, onToggleLayersPanel, onOpenOrganizer,
   canUndo, canRedo, onUndo, onRedo, onAddPage, onSaveTemplate, onGenerate,
+  canRefresh, onRefreshFromDatabase,
   selectionLocked, onToggleLock, onDuplicate, cropping, onToggleCrop,
   onEditSelectedText, onReplaceSelectedImage, onReplaceSelectedVector,
   textStyle, onToggleBold, onToggleItalic, onTextColor, onScaleText, onSetFont, onAlignText,
@@ -411,6 +417,15 @@ export function PdfEditorToolbar({
             <SparklesIcon className="size-4" />
             <span className="text-xs">{t("pdfTemplates.engineGenerateShort", "Generate")}</span>
           </Button>
+
+          {/* Keeping a built catalogue in step with the catalogue database. */}
+          {canRefresh && (
+            <ToolButton
+              label={t("pdfTemplates.refreshTitle", "Refresh from database")}
+              icon={RefreshCwIcon}
+              onClick={onRefreshFromDatabase}
+            />
+          )}
 
           {/* Saving the page as a template. Sits with the PAGE tools rather
               than the selection tools: it acts on the whole page in view, and

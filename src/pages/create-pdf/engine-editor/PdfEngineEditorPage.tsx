@@ -31,7 +31,13 @@ import {
 import { PdfSaveTemplateDialog } from "./PdfSaveTemplateDialog"
 import { PdfTemplatePanel } from "./PdfTemplatePanel"
 import { PdfGenerateDialog } from "./PdfGenerateDialog"
+import { PdfRefreshDialog } from "./PdfRefreshDialog"
 import { chunkForPages } from "./skuList"
+import {
+  bindingKey, pruneBindings, setBinding, shiftBindingsForInsert, verdictFor,
+  emptyRefreshPlan,
+  type ProductBinding, type ProductBindingMap, type RefreshPlan,
+} from "./productBindings"
 import type { PdfPageTemplate } from "@/features/pdfPageTemplates/types"
 import type { PdfAsset } from "@/features/pdfAssets/types"
 
@@ -209,6 +215,12 @@ export function PdfEngineEditorPage() {
    * the knowledge of which box is the SKU and which is the photo.
    */
   const [productSlots, setProductSlots] = useState<ProductSlotMap>(() => new Map())
+  /**
+   * Which product each position on each page is showing, and what was written
+   * into its boxes — Point 7's "linked to database" versus "manually
+   * overridden". See productBindings.ts.
+   */
+  const [productBindings, setProductBindings] = useState<ProductBindingMap>(() => new Map())
   /**
    * The OTHER things being moved along with the selected one.
    *
@@ -1237,6 +1249,9 @@ export function PdfEngineEditorPage() {
 
     let filled = 0
     const skipped: string[] = []
+    /** Exactly what goes into each box, so a refresh can tell later whether
+     * anybody has changed it. */
+    const written: Record<string, string> = {}
 
     for (const { mark, index } of targets) {
       try {
@@ -1244,6 +1259,10 @@ export function PdfEngineEditorPage() {
           if (!chosen.coverUrl) { skipped.push("photo"); continue }
           const file = await fetchProductCoverFile(chosen)
           await doc.replaceImage(pageIndex, index, file)
+          // The URL, not the bytes: it is the only thing about a picture that
+          // can be compared cheaply, and it answers the question that matters
+          // — has this product's photo changed since.
+          written[mark.fieldId] = chosen.coverUrl
           filled++
           continue
         }
@@ -1254,13 +1273,19 @@ export function PdfEngineEditorPage() {
         // simply has no series recorded.
         if (!value) { skipped.push(mark.fieldId); continue }
         await doc.editText(pageIndex, index, value).then(reportFontOutcome)
+        written[mark.fieldId] = value
         filled++
       } catch (err) {
         toast.error(err instanceof Error ? err.message : String(err))
       }
     }
 
+    // Remembered so a later "refresh from database" knows whose price to
+    // fetch, and can tell its own writing apart from somebody's editing.
     if (filled > 0) {
+      setProductBindings((current) => setBinding(current, {
+        pageIndex, productIndex, sku: chosen.sku, written,
+      }))
       toast.success(t("pdfTemplates.productSlotsFilled", "Filled {{count}} slots", { count: filled }))
     }
     if (skipped.length > 0) {
@@ -1778,6 +1803,7 @@ export function PdfEngineEditorPage() {
       // silently landing on the wrong page is worse than one that has to be
       // set again. It is visible either way — the badge is on the box.
       setProductSlots((current) => pruneSlotMarks(current, plan.length))
+      setProductBindings((current) => pruneBindings(current, plan.length))
     } catch (err) {
       toast.error(err instanceof Error ? err.message : String(err))
     }
@@ -1909,6 +1935,7 @@ export function PdfEngineEditorPage() {
         return next
       })
 
+      setProductBindings((current) => shiftBindingsForInsert(current, newPageIndex))
       setSelection(null)
       setAlsoSelected([])
       toast.success(template.slots.length > 0
@@ -1996,6 +2023,9 @@ export function PdfEngineEditorPage() {
     setGenerating(true)
     setGenerateProgress({ done: 0, total: groups.length })
     const notPlaced: string[] = []
+    /** Collected as the run goes and committed once at the end: forty pages
+     * would otherwise be forty state writes, each re-rendering the column. */
+    const bindingsMade: ProductBinding[] = []
 
     try {
       const { results } = await lookupProductsBySkus(skus)
@@ -2020,13 +2050,23 @@ export function PdfEngineEditorPage() {
         for (let i = 0; i < groups[g].length; i++) {
           const product = bySlot[g * perPage + i]
           if (!product) { notPlaced.push(groups[g][i]); continue }
-          await fillTemplateSlots(pageIndex, slots, product, i)
+          const written = await fillTemplateSlots(pageIndex, slots, product, i)
+          bindingsMade.push({ pageIndex, productIndex: i, sku: product.sku, written })
         }
 
         insertAfter = pageIndex
         setGenerateProgress({ done: g + 1, total: groups.length })
       }
 
+      setProductBindings((current) => {
+        // Everything after the insertion point moved down by the pages just
+        // added, so existing bindings shift before the new ones are added.
+        let next: ProductBindingMap = current
+        for (let i = 0; i < groups.length; i++) next = shiftBindingsForInsert(next, startAfter + 1)
+        let built = next
+        for (const binding of bindingsMade) built = setBinding(built, binding)
+        return built
+      })
       setSelection(null)
       setAlsoSelected([])
       setGenerateOpen(false)
@@ -2063,7 +2103,10 @@ export function PdfEngineEditorPage() {
     slots: PdfPageTemplate["slots"],
     product: CatalogProduct,
     productIndex: number,
-  ) => {
+  ): Promise<Record<string, string>> => {
+    /** What actually reached each box, so a later refresh can tell its own
+     * writing apart from somebody's editing. */
+    const written: Record<string, string> = {}
     const language = toProductFieldLanguage(i18n.language)
     // Resolved before any writing: filling a text box changes its width, so
     // reading the page between writes would lose the slots not yet filled.
@@ -2086,6 +2129,7 @@ export function PdfEngineEditorPage() {
         if (slot.fieldId === PRODUCT_PHOTO_FIELD) {
           if (!product.coverUrl) continue
           await doc.replaceImage(pageIndex, index, await fetchProductCoverFile(product))
+          written[slot.fieldId] = product.coverUrl
           continue
         }
         const field = PRODUCT_FIELDS.find((f) => f.id === slot.fieldId)
@@ -2095,10 +2139,164 @@ export function PdfEngineEditorPage() {
         // product that simply has no series recorded.
         if (!value) continue
         await doc.editText(pageIndex, index, value)
+        written[slot.fieldId] = value
       } catch {
         // One slot failing must not abandon the other thirty-nine pages.
         // The gap is visible on the page, which is the honest outcome.
       }
+    }
+    return written
+  }
+
+  // ── Refresh from database (Point 7) ───────────────────────────────────────
+
+  const [refreshOpen, setRefreshOpen] = useState(false)
+  const [refreshPlan, setRefreshPlan] = useState<RefreshPlan | null>(null)
+  const [refreshBusy, setRefreshBusy] = useState(false)
+
+  /**
+   * Work out what a refresh WOULD change, without changing anything.
+   *
+   * Planned before applied on purpose. "Refresh" on a finished catalogue is a
+   * frightening button unless you can see what it is about to touch — and the
+   * number that reassures is not how many fields will change but how many of
+   * your own edits are being left alone.
+   */
+  const planRefresh = async (): Promise<RefreshPlan> => {
+    const plan = emptyRefreshPlan()
+    const bindings = [...productBindings.values()]
+    if (bindings.length === 0) return plan
+    plan.products = bindings.length
+
+    const language = toProductFieldLanguage(i18n.language)
+    const { results } = await lookupProductsBySkus(bindings.map((b) => b.sku))
+    // Keyed lower-case: a SKU stored on the page can differ from the
+    // catalogue only in case, and that is not a missing product.
+    const fresh = new Map(
+      results.filter((r) => r.product).map((r) => [r.sku.toLowerCase(), r.product!]))
+
+    // Read once per page rather than once per product: an eight-product page
+    // would otherwise re-read the same page eight times.
+    const pageIndexes = [...new Set(bindings.map((b) => b.pageIndex))]
+    const linesByPage = new Map<number, Awaited<ReturnType<typeof doc.readPageText>>>()
+    const imagesByPage = new Map<number, Awaited<ReturnType<typeof doc.readPageImages>>>()
+    for (const pageIndex of pageIndexes) {
+      linesByPage.set(pageIndex, await doc.readPageText(pageIndex))
+      imagesByPage.set(pageIndex, await doc.readPageImages(pageIndex))
+    }
+
+    for (const binding of bindings) {
+      const product = fresh.get(binding.sku.toLowerCase())
+      if (!product) { plan.missingSkus.push(binding.sku); continue }
+
+      const lines = linesByPage.get(binding.pageIndex) ?? []
+      const images = imagesByPage.get(binding.pageIndex) ?? []
+
+      for (const mark of marksForProduct(liveProductSlots, binding.pageIndex, binding.productIndex)) {
+        const key = slotKeyFor(binding.pageIndex, mark.kind, mark.bbox)
+        const isPhoto = mark.fieldId === PRODUCT_PHOTO_FIELD
+
+        const slotIndex = isPhoto
+          ? images.findIndex((im) => im.bbox && slotKeyFor(binding.pageIndex, "image", im.bbox) === key)
+          : lines.findIndex((l) => slotKeyFor(binding.pageIndex, "text", l.bbox) === key)
+        if (slotIndex < 0) continue
+
+        // A picture cannot be compared by its contents, so its URL stands in:
+        // "current" is taken to be whatever we last wrote, which means a photo
+        // somebody replaced by hand is NOT detected. Said plainly in the
+        // dialog rather than hidden.
+        const current = isPhoto
+          ? (binding.written[mark.fieldId] ?? "")
+          : (lines[slotIndex]?.text ?? "")
+        const freshValue = isPhoto
+          ? product.coverUrl
+          : (PRODUCT_FIELDS.find((f) => f.id === mark.fieldId)?.read(product, language) ?? null)
+
+        const verdict = verdictFor({
+          current, written: binding.written[mark.fieldId], fresh: freshValue,
+        })
+        if (verdict === "update") {
+          plan.changes.push({
+            pageIndex: binding.pageIndex, productIndex: binding.productIndex,
+            sku: binding.sku, fieldId: mark.fieldId, kind: mark.kind,
+            slotIndex, from: current, to: freshValue!,
+          })
+        } else if (verdict === "overridden") plan.overridden++
+        else if (verdict === "unchanged") plan.unchanged++
+      }
+    }
+
+    plan.missingSkus = [...new Set(plan.missingSkus)]
+    return plan
+  }
+
+  const openRefresh = async () => {
+    setRefreshOpen(true)
+    setRefreshPlan(null)
+    setRefreshBusy(true)
+    try {
+      setRefreshPlan(await planRefresh())
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : String(err))
+      setRefreshOpen(false)
+    } finally {
+      setRefreshBusy(false)
+    }
+  }
+
+  /**
+   * Apply the plan.
+   *
+   * Text first, pictures after, and both grouped by page: writing text
+   * changes a box's width, which moves it — so every slot index is resolved
+   * during PLANNING, and the changes are applied from the end of each page
+   * backwards so an earlier write cannot renumber a later one.
+   */
+  const applyRefresh = async (plan: RefreshPlan) => {
+    setRefreshBusy(true)
+    let done = 0
+    const rewritten = new Map<string, Record<string, string>>()
+    try {
+      const ordered = [...plan.changes].sort((a, b) =>
+        b.pageIndex - a.pageIndex || b.slotIndex - a.slotIndex)
+
+      for (const change of ordered) {
+        try {
+          if (change.fieldId === PRODUCT_PHOTO_FIELD) {
+            const { results } = await lookupProductsBySkus([change.sku])
+            const product = results[0]?.product
+            if (!product?.coverUrl) continue
+            await doc.replaceImage(change.pageIndex, change.slotIndex,
+              await fetchProductCoverFile(product))
+          } else {
+            await doc.editText(change.pageIndex, change.slotIndex, change.to)
+          }
+          const key = bindingKey(change.pageIndex, change.productIndex)
+          rewritten.set(key, { ...(rewritten.get(key) ?? {}), [change.fieldId]: change.to })
+          done++
+        } catch {
+          // One field failing must not abandon the rest of the refresh.
+        }
+      }
+
+      // What was just written becomes the new baseline, or the very next
+      // refresh would read these as somebody's manual edits.
+      setProductBindings((current) => {
+        let next = current
+        for (const [key, fields] of rewritten) {
+          const binding = current.get(key)
+          if (!binding) continue
+          next = setBinding(next, { ...binding, written: { ...binding.written, ...fields } })
+        }
+        return next
+      })
+
+      setRefreshOpen(false)
+      toast.success(t("pdfTemplates.refreshDone", "Updated {{count}} fields", { count: done }))
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : String(err))
+    } finally {
+      setRefreshBusy(false)
     }
   }
 
@@ -2316,6 +2514,10 @@ export function PdfEngineEditorPage() {
           onAddPage: () => setAddingPageAfter(selection?.pageIndex ?? visiblePageIndex()),
           onSaveTemplate: () => setSavingTemplateFor(visiblePageIndex()),
           onGenerate: () => setGenerateOpen(true),
+          onRefreshFromDatabase: () => void openRefresh(),
+          /** Hidden entirely when no product is linked to any page: a button
+           * whose only possible answer is "nothing to do" is noise. */
+          canRefresh: productBindings.size > 0,
           canUndo: doc.canUndo,
           canRedo: doc.canRedo,
           onUndo: () => void runHistory("undo"),
@@ -2476,6 +2678,14 @@ export function PdfEngineEditorPage() {
             })
             .catch((err: unknown) => toast.error(err instanceof Error ? err.message : String(err)))
         }}
+      />
+
+      <PdfRefreshDialog
+        open={refreshOpen}
+        plan={refreshPlan}
+        busy={refreshBusy}
+        onCancel={() => setRefreshOpen(false)}
+        onApply={(plan) => void applyRefresh(plan)}
       />
 
       <PdfGenerateDialog
