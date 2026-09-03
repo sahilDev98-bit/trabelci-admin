@@ -70,6 +70,7 @@ function baseToolbar(overrides: Record<string, unknown>) {
     onOpenOrganizer: () => {},
     canUndo: false, canRedo: false, onUndo: () => {}, onRedo: () => {},
     onSaveTemplate: () => {},
+    onGenerate: () => {},
     onAddPage: () => {},
     selectionLocked: false, onToggleLock: () => {}, onDuplicate: () => {},
     cropping: false, onToggleCrop: () => {},

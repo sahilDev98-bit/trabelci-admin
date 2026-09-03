@@ -6,6 +6,7 @@ import {
   ScanSearchIcon, Trash2Icon, TypeIcon, TypeOutlineIcon, UndoIcon,
   FilePlusIcon, LockIcon, LockOpenIcon, CopyPlusIcon, CropIcon, XIcon,
   PanelLeftCloseIcon, PanelLeftOpenIcon, BookmarkPlusIcon, LayoutTemplateIcon,
+  SparklesIcon,
 } from "lucide-react"
 import { useTranslation } from "react-i18next"
 
@@ -105,6 +106,8 @@ interface PdfEditorToolbarProps {
   onAddPage: () => void
   /** Save the page in view as a reusable template, with its product slots. */
   onSaveTemplate: () => void
+  /** Build many pages at once from a template and a list of SKUs. */
+  onGenerate: () => void
   /** Whether the SELECTED slot is locked, and the toggle for it. Locks are a
    * property of this editing session; a PDF has nowhere to store one. */
   selectionLocked: boolean
@@ -203,7 +206,7 @@ export function PdfEditorToolbar({
   assetPanelOpen, onToggleAssetPanel, templatePanelOpen, onToggleTemplatePanel,
   productPanelOpen, onToggleProductPanel,
   layersPanelOpen, onToggleLayersPanel, onOpenOrganizer,
-  canUndo, canRedo, onUndo, onRedo, onAddPage, onSaveTemplate,
+  canUndo, canRedo, onUndo, onRedo, onAddPage, onSaveTemplate, onGenerate,
   selectionLocked, onToggleLock, onDuplicate, cropping, onToggleCrop,
   onEditSelectedText, onReplaceSelectedImage, onReplaceSelectedVector,
   textStyle, onToggleBold, onToggleItalic, onTextColor, onScaleText, onSetFont, onAlignText,
@@ -392,6 +395,21 @@ export function PdfEditorToolbar({
           >
             <LayoutTemplateIcon className="size-4" />
             <span className="text-xs">{t("pdfTemplates.engineTemplatesShort", "Templates")}</span>
+          </Button>
+
+          {/* Building many pages at once. Beside the template tools because
+              it is what templates are FOR — one design, forty products. */}
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            onClick={onGenerate}
+            className="h-8 shrink-0 gap-1.5 px-2"
+            aria-label={t("pdfTemplates.generateTitle", "Generate catalogue pages")}
+            title={t("pdfTemplates.generateTitle", "Generate catalogue pages")}
+          >
+            <SparklesIcon className="size-4" />
+            <span className="text-xs">{t("pdfTemplates.engineGenerateShort", "Generate")}</span>
           </Button>
 
           {/* Saving the page as a template. Sits with the PAGE tools rather

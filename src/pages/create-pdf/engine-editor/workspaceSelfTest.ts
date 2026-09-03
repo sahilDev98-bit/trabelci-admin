@@ -210,6 +210,7 @@ export async function runWorkspaceSelfTest(): Promise<WorkspaceTestResult> {
       onToggleAssetPanel: () => {},
       canUndo: false, canRedo: false, onUndo: () => {}, onRedo: () => {},
       onSaveTemplate: () => {},
+    onGenerate: () => {},
     onAddPage: () => {}, selectionLocked: false, onToggleLock: () => {},
       onDuplicate: () => {},
       cropping: false, onToggleCrop: () => {}, onSetFont: () => {},

@@ -75,6 +75,10 @@ export interface UsePdfEngineDocumentResult {
   /** Image slots per page index, loaded lazily alongside the text. */
   pageImages: Record<number, PageImageState>
   loadPageText: (pageIndex: number) => Promise<void>
+  /** A page's text read straight back rather than into state — for loops that
+   * write many pages and cannot wait for a re-render between each. */
+  readPageText: (pageIndex: number) => Promise<EngineTextLine[]>
+  readPageImages: (pageIndex: number) => Promise<EngineImage[]>
   loadPageImages: (pageIndex: number) => Promise<void>
   renderPage: (pageIndex: number, scale: number) => Promise<{ width: number; height: number; rgba: ArrayBuffer } | null>
   /** Resolves to what happened to the TYPEFACE: whether the page's own font
@@ -355,6 +359,28 @@ export function usePdfEngineDocument(templateId: string | null | undefined): Use
       ({ lines }) => setPageText((prev) => ({ ...prev, [pageIndex]: { lines, loaded: true } })),
     )
   }, [getEngine, loadWithRetry])
+
+  /**
+   * A page's text and pictures read STRAIGHT BACK, not put into state.
+   *
+   * For the bulk generator, which writes forty pages in a loop. Going through
+   * React state would mean waiting for a re-render between every page, and
+   * the loop reading whatever the previous render happened to hold. These
+   * return the page as it is at the moment they are called.
+   */
+  const readPageText = useCallback(async (pageIndex: number) => {
+    const id = docIdRef.current
+    if (!id) return []
+    const { lines } = await getEngine().listTextLines(id, pageIndex)
+    return lines
+  }, [getEngine])
+
+  const readPageImages = useCallback(async (pageIndex: number) => {
+    const id = docIdRef.current
+    if (!id) return []
+    const { images } = await getEngine().listImages(id, pageIndex)
+    return images
+  }, [getEngine])
 
   const loadPageVectors = useCallback(async (pageIndex: number) => {
     await loadWithRetry(
@@ -896,7 +922,7 @@ export function usePdfEngineDocument(templateId: string | null | undefined): Use
   // is moving.
   return useMemo(() => ({
     phase, error, downloadPercent, pages, docId, pageText, pageImages,
-    loadPageText, loadPageImages, loadPageVectors, pageVectors,
+    loadPageText, loadPageImages, loadPageVectors, readPageText, readPageImages, pageVectors,
     renderCleanPatch, renderImagePreview, renderPageRegion, lastChange,
     removeVector, replaceVector, setVectorRect, transformVector, transformText, styleText, scaleText, alignText, transformImage, renderPage, editText, moveText, moveTextToPage, moveImageToPage, removeText,
     replaceImage, removeImage, setImageRect, addTextOverlay, addImageOverlay, applyPagePlan,
@@ -905,7 +931,7 @@ export function usePdfEngineDocument(templateId: string | null | undefined): Use
     save, savePage, busy, revision,
   }), [
     phase, error, downloadPercent, pages, docId, pageText, pageImages,
-    loadPageText, loadPageImages, loadPageVectors, pageVectors,
+    loadPageText, loadPageImages, loadPageVectors, readPageText, readPageImages, pageVectors,
     renderCleanPatch, renderImagePreview, renderPageRegion, lastChange,
     removeVector, replaceVector, setVectorRect, transformVector, transformText, styleText, scaleText, alignText, transformImage,
     renderPage, editText, moveText, moveTextToPage, moveImageToPage, removeText,

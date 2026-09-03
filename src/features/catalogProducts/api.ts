@@ -111,6 +111,50 @@ export async function searchCatalogProducts(term: string): Promise<CatalogProduc
     .filter((product): product is CatalogProduct => product !== null)
 }
 
+/** One requested SKU and what it resolved to. */
+export interface SkuLookupEntry {
+  sku: string
+  product: CatalogProduct | null
+}
+
+/**
+ * Look up many SKUs at once, IN THE ORDER GIVEN.
+ *
+ * For the bulk catalogue generator. The order is the requirement — "read the
+ * SKUs in the exact order provided" — so the answer is one entry per
+ * requested SKU in that sequence, repeats included, misses included.
+ *
+ * One request rather than one per SKU: a forty-product catalogue would
+ * otherwise be forty round trips, and a four-hundred-product one unusable.
+ */
+export async function lookupProductsBySkus(
+  skus: readonly string[],
+): Promise<{ results: SkuLookupEntry[]; missing: string[] }> {
+  if (skus.length === 0) return { results: [], missing: [] }
+
+  const res = await apiFetch<{ results?: unknown; missing?: unknown }>(
+    `${API_ENDPOINTS.CATALOG_PRODUCTS}/by-skus`,
+    { method: "POST", body: JSON.stringify({ skus }) },
+  )
+
+  const rows = Array.isArray(res.results) ? res.results : []
+  const results: SkuLookupEntry[] = rows.map((row) => {
+    const r = (row ?? {}) as RawRecord
+    return {
+      sku: asString(r.sku) ?? "",
+      // Mapped through the same function the search uses, so a product from
+      // a list and a product from a search cannot differ in shape.
+      product: r.product ? mapProduct(r.product) : null,
+    }
+  }).filter((entry) => entry.sku !== "")
+
+  const missing = Array.isArray(res.missing)
+    ? res.missing.map((m) => asString(m)).filter((m): m is string => m !== null)
+    : []
+
+  return { results, missing }
+}
+
 /**
  * A product's cover photo as a File, ready to embed.
  *

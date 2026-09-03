@@ -14,7 +14,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import type { EngineTextLine, PagePlanRequest } from "@/lib/pdf-engine"
 import type { CatalogProduct } from "@/features/catalogProducts/types"
-import { fetchProductCoverFile } from "@/features/catalogProducts/api"
+import { fetchProductCoverFile, lookupProductsBySkus } from "@/features/catalogProducts/api"
 import { productDisplayName, toProductFieldLanguage } from "./productFields"
 import { PRODUCT_BLOCK_FIELD_IDS, planProductBlock, productBlockLines } from "./productBlock"
 import { PRODUCT_FIELDS } from "./productFields"
@@ -25,9 +25,13 @@ import {
   type LiveBox, type ProductSlotMap, type ProductSlotMark,
 } from "./productSlots"
 import { fetchPdfAssetFile } from "@/features/pdfAssets/api"
-import { fetchPageTemplateFile, useSavePageTemplateMutation } from "@/features/pdfPageTemplates/api"
+import {
+  fetchPageTemplateFile, usePdfPageTemplatesQuery, useSavePageTemplateMutation,
+} from "@/features/pdfPageTemplates/api"
 import { PdfSaveTemplateDialog } from "./PdfSaveTemplateDialog"
 import { PdfTemplatePanel } from "./PdfTemplatePanel"
+import { PdfGenerateDialog } from "./PdfGenerateDialog"
+import { chunkForPages } from "./skuList"
 import type { PdfPageTemplate } from "@/features/pdfPageTemplates/types"
 import type { PdfAsset } from "@/features/pdfAssets/types"
 
@@ -1919,6 +1923,156 @@ export function PdfEngineEditorPage() {
     }
   }
 
+  // ── Bulk generation ───────────────────────────────────────────────────────
+
+  const [generateOpen, setGenerateOpen] = useState(false)
+  const [generating, setGenerating] = useState(false)
+  const [generateProgress, setGenerateProgress] = useState<{ done: number; total: number } | null>(null)
+  const templateLibrary = usePdfPageTemplatesQuery()
+
+  /** Resolve a pasted list against the catalogue, before anything is built. */
+  const checkSkus = async (skus: string[]) => {
+    try {
+      const { results, missing } = await lookupProductsBySkus(skus)
+      return { found: results.filter((r) => r.product !== null).length, missing }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : String(err))
+      return { found: 0, missing: [] }
+    }
+  }
+
+  /**
+   * Build catalogue pages from one template and a list of SKUs.
+   *
+   * The client's worked example: forty SKUs into an eight-product template
+   * makes five pages. The loop is exactly that — take the next eight, insert
+   * a copy of the template, pour each product into its own position, repeat.
+   *
+   * Three things this is careful about:
+   *
+   *   - ORDER. The list is used exactly as given, repeats included. That is
+   *     the requirement, stated in those words.
+   *   - The template page is fetched ONCE and reused for every page. Fetching
+   *     it forty times would be forty downloads of the same file.
+   *   - A missing SKU leaves its tile as the template drew it rather than
+   *     stopping the run. Forty pages abandoned over one bad code would be a
+   *     poor trade, and the gap is visible on the page and named afterwards.
+   */
+  const generateCatalogue = async (template: PdfPageTemplate, skus: string[]) => {
+    const startAfter = visiblePageIndex()
+    const perPage = Math.max(1, template.productCount)
+    const groups = chunkForPages(skus, perPage)
+    if (groups.length === 0) return
+
+    setGenerating(true)
+    setGenerateProgress({ done: 0, total: groups.length })
+    const notPlaced: string[] = []
+
+    try {
+      const { results } = await lookupProductsBySkus(skus)
+      // Keyed by position in the list, NOT by SKU: the same SKU can appear
+      // twice and each occurrence is its own tile.
+      const bySlot = results.map((r) => r.product)
+
+      // Fetched once. Every page is a copy of these same bytes.
+      const templateBytes = await fetchPageTemplateFile(template.id)
+
+      let insertAfter = startAfter
+      for (let g = 0; g < groups.length; g++) {
+        // insertPageFrom TRANSFERS the buffer to the worker, which detaches
+        // it here — so each page gets its own copy, or the second page would
+        // be built from an empty array.
+        const pageIndex = await doc.insertPageFrom(templateBytes.slice(0), insertAfter)
+        if (pageIndex < 0) throw new Error("a template page could not be inserted")
+
+        // The slots come from the template, so they are registered against
+        // the new page directly rather than being re-marked by hand.
+        const slots = template.slots
+        for (let i = 0; i < groups[g].length; i++) {
+          const product = bySlot[g * perPage + i]
+          if (!product) { notPlaced.push(groups[g][i]); continue }
+          await fillTemplateSlots(pageIndex, slots, product, i)
+        }
+
+        insertAfter = pageIndex
+        setGenerateProgress({ done: g + 1, total: groups.length })
+      }
+
+      setSelection(null)
+      setAlsoSelected([])
+      setGenerateOpen(false)
+      toast.success(t(
+        "pdfTemplates.generateDone",
+        "Built {{pages}} pages from {{count}} SKUs",
+        { pages: groups.length, count: skus.length },
+      ))
+      if (notPlaced.length > 0) {
+        toast.warning(t(
+          "pdfTemplates.generateSomeNotPlaced",
+          "{{count}} SKUs were not in the catalogue and their places were left as the template drew them: {{list}}",
+          { count: notPlaced.length, list: notPlaced.slice(0, 6).join(", ") },
+        ))
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : String(err))
+    } finally {
+      setGenerating(false)
+      setGenerateProgress(null)
+    }
+  }
+
+  /**
+   * Pour one product into one product position on a freshly inserted page.
+   *
+   * Works from the TEMPLATE'S slot list rather than the editor's marks: the
+   * page has just been created, so its boxes are exactly where the template
+   * says they are, and going through React state would mean waiting for it
+   * to catch up between every one of forty pages.
+   */
+  const fillTemplateSlots = async (
+    pageIndex: number,
+    slots: PdfPageTemplate["slots"],
+    product: CatalogProduct,
+    productIndex: number,
+  ) => {
+    const language = toProductFieldLanguage(i18n.language)
+    // Resolved before any writing: filling a text box changes its width, so
+    // reading the page between writes would lose the slots not yet filled.
+    const lines = await doc.readPageText(pageIndex)
+    const images = await doc.readPageImages(pageIndex)
+
+    const targets = slots
+      .filter((slot) => slot.productIndex === productIndex)
+      .map((slot) => {
+        const key = slotKeyFor(pageIndex, slot.kind, slot.bbox)
+        const index = slot.kind === "text"
+          ? lines.findIndex((l) => slotKeyFor(pageIndex, "text", l.bbox) === key)
+          : images.findIndex((im) => im.bbox && slotKeyFor(pageIndex, "image", im.bbox) === key)
+        return { slot, index }
+      })
+      .filter((entry) => entry.index >= 0)
+
+    for (const { slot, index } of targets) {
+      try {
+        if (slot.fieldId === PRODUCT_PHOTO_FIELD) {
+          if (!product.coverUrl) continue
+          await doc.replaceImage(pageIndex, index, await fetchProductCoverFile(product))
+          continue
+        }
+        const field = PRODUCT_FIELDS.find((f) => f.id === slot.fieldId)
+        const value = field?.read(product, language) ?? null
+        // A slot with nothing to put in it is LEFT as the template drew it.
+        // Blanking it would strip the design's own placeholder text for a
+        // product that simply has no series recorded.
+        if (!value) continue
+        await doc.editText(pageIndex, index, value)
+      } catch {
+        // One slot failing must not abandon the other thirty-nine pages.
+        // The gap is visible on the page, which is the honest outcome.
+      }
+    }
+  }
+
   // ── Download ──────────────────────────────────────────────────────────────
 
   const handleDownload = async () => {
@@ -2132,6 +2286,7 @@ export function PdfEngineEditorPage() {
           },
           onAddPage: () => setAddingPageAfter(selection?.pageIndex ?? visiblePageIndex()),
           onSaveTemplate: () => setSavingTemplateFor(visiblePageIndex()),
+          onGenerate: () => setGenerateOpen(true),
           canUndo: doc.canUndo,
           canRedo: doc.canRedo,
           onUndo: () => void runHistory("undo"),
@@ -2292,6 +2447,18 @@ export function PdfEngineEditorPage() {
             })
             .catch((err: unknown) => toast.error(err instanceof Error ? err.message : String(err)))
         }}
+      />
+
+      <PdfGenerateDialog
+        open={generateOpen}
+        templates={templateLibrary.data ?? []}
+        templatesLoading={templateLibrary.isLoading}
+        afterPageNumber={visiblePageIndex() + 1}
+        onCheck={checkSkus}
+        busy={generating}
+        progress={generateProgress}
+        onCancel={() => setGenerateOpen(false)}
+        onGenerate={(template, skus) => void generateCatalogue(template, skus)}
       />
 
       <PdfSaveTemplateDialog
