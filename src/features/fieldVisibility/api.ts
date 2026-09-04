@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { apiFetch } from "@/lib/apiClient"
 import { API_ENDPOINTS } from "@/lib/apiEndpoints"
 import { fieldVisibilityKeys } from "./queryKeys"
+import { productsQueryKeys } from "@/features/products/queryKeys"
 import type {
   FieldDefinition,
   FieldVisibilityConfig,
@@ -146,6 +147,15 @@ export function useUpdateFieldVisibilityMutation() {
           queryKey: fieldVisibilityKeys.config(`user:${variables.userId}`),
         })
       }
+      // BUG-025: a field being newly enabled means its real value is
+      // genuinely absent from any product response fetched before this
+      // save (the backend strips hidden fields server-side) — only
+      // invalidating the visibility config left already-cached product
+      // list/detail queries serving that stale, value-less response until
+      // an unrelated remount forced a refetch. Products carry visibility-
+      // filtered fields for every viewer, not just this one BP/user, so
+      // invalidate broadly rather than trying to scope it.
+      await qc.invalidateQueries({ queryKey: productsQueryKeys.all })
     },
   })
 }

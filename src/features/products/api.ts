@@ -103,13 +103,28 @@ export async function fetchProductsPage(params: ProductsListParams): Promise<Pro
   }
 }
 
+// BUG-035/037: this used to fetch a single page (1000 items) and call that
+// "all products" — PostgREST hard-caps any single response at 1000 rows
+// regardless of the limit requested, so anything past the first 1000 (the
+// catalog has ~6,400) was silently invisible to every picker built on top
+// of this (BP Assignments' "Add Individual Products" and "Excluded
+// Products" search, both of which filter this list client-side). Loop
+// through every page instead so the picker's candidate list is genuinely
+// the whole catalog.
 async function fetchAllProducts(): Promise<Product[]> {
-  const result = await fetchProductsPage({
-    page: DEFAULT_ALL_PRODUCTS_PAGE,
-    pageSize: DEFAULT_ALL_PRODUCTS_PAGE_SIZE,
-    search: "",
-  })
-  return result.items
+  const items: Product[] = []
+  let page = DEFAULT_ALL_PRODUCTS_PAGE
+  while (true) {
+    const result = await fetchProductsPage({
+      page,
+      pageSize: DEFAULT_ALL_PRODUCTS_PAGE_SIZE,
+      search: "",
+    })
+    items.push(...result.items)
+    if (result.items.length < DEFAULT_ALL_PRODUCTS_PAGE_SIZE || items.length >= result.total) break
+    page += 1
+  }
+  return items
 }
 
 async function fetchProductById(id: string): Promise<Product> {

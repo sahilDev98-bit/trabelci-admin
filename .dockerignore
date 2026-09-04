@@ -2,3 +2,10 @@ node_modules
 *.log
 .git
 python-works
+
+# Secrets: never let these end up baked into an image layer, where they'd
+# survive even after a later commit deletes the file (forensic audit F-33).
+.env
+.env.*
+*.pem
+*.key
