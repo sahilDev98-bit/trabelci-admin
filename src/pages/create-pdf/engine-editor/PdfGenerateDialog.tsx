@@ -26,6 +26,31 @@ import { pagesNeeded, parseSkuList, readSkuFile } from "./skuList"
  * before the first one is.
  */
 
+/**
+ * Wraps a run of text so the bidi algorithm cannot reorder it against its
+ * neighbours.
+ *
+ * A collection label glues together three things that need not run the same
+ * way: a name that may be Latin ("LONDON"), a supplier that may be Hebrew,
+ * and a count. Left alone, the browser lays the whole line out as ONE
+ * bidirectional paragraph, and the digit is pulled out of its own phrase —
+ *
+ *   wanted:  LONDON — ‎<supplier>‎ · 4 products
+ *   got:     LONDON — ‎**4‎ · <supplier> products
+ *
+ * — which is a display fault only. The data underneath is correct, which is
+ * exactly what makes it survive a review: nothing is missing, it just reads
+ * as nonsense.
+ *
+ * This is done with CHARACTERS rather than the dir attribute or
+ * unicode-bidi:plaintext used elsewhere in this editor (see
+ * PdfEngineViewportBar and PdfProductPanel) for one reason: `<option>`
+ * renders its text content and nothing else, so there is no element to hang
+ * either of those on. U+2068 FIRST STRONG ISOLATE takes its direction from
+ * the run itself and U+2069 closes it — `<bdi>` expressed as text.
+ */
+const isolate = (text: string): string => `\u2068${text}\u2069`
+
 interface PdfGenerateDialogProps {
   open: boolean
   templates: PdfPageTemplate[]
@@ -314,12 +339,15 @@ export function PdfGenerateDialog({
                 </option>
                 {collections.map((collection) => (
                   <option key={collection.key} value={collection.key}>
-                    {collectionLabel(collection)}
-                    {collection.supplier ? ` — ${collection.supplier}` : ""}
+                    {/* Each run isolated separately: the name, the supplier
+                        and the count can each be Hebrew or Latin independently
+                        of the other two and of the interface language. */}
+                    {isolate(collectionLabel(collection))}
+                    {collection.supplier ? ` — ${isolate(collection.supplier)}` : ""}
                     {" · "}
-                    {t("pdfTemplates.generateCollectionSize", "{{count}} products", {
+                    {isolate(t("pdfTemplates.generateCollectionSize", "{{count}} products", {
                       count: collection.skuCount,
-                    })}
+                    }))}
                   </option>
                 ))}
               </select>
@@ -355,12 +383,15 @@ export function PdfGenerateDialog({
                   ? t(
                     "pdfTemplates.generateCollectionAdded",
                     "Added {{count}} SKUs from {{name}}. Edit or reorder them below before generating.",
-                    { count: collectionNote.count, name: collectionNote.name },
+                    // Isolated for the same reason as the dropdown: a Latin
+                    // collection name dropped into a Hebrew sentence is
+                    // otherwise reordered against the words around it.
+                    { count: collectionNote.count, name: isolate(collectionNote.name) },
                   )
                   : t(
                     "pdfTemplates.generateCollectionFailed",
                     "Could not load {{name}}. Nothing was added.",
-                    { name: collectionNote.name },
+                    { name: isolate(collectionNote.name) },
                   )}
               </p>
             )}

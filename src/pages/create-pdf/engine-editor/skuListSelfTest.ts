@@ -422,6 +422,142 @@ export async function runCollectionPickerSelfTest(): Promise<CollectionPickerRes
   return out
 }
 
+/**
+ * Does a collection's label survive a Hebrew supplier name?
+ *
+ * Reported from a real catalogue: a collection showed as
+ *
+ *   LONDON — **4 · עד products
+ *
+ * where the count had jumped out of its own phrase and landed beside the
+ * supplier. Nothing was missing and nothing was wrong in the database — the
+ * label is assembled from a Latin name, a Hebrew supplier and a count, and
+ * the browser lays all three out as one bidirectional paragraph. That is why
+ * it survived being looked at: it reads as damaged data rather than as a
+ * rendering fault.
+ *
+ * The test measures WHERE each part lands rather than what the string
+ * contains, because the string was always right. And it re-measures with the
+ * isolate characters stripped out — if that control does not fail, the
+ * measurement is not sensitive to the bug and proves nothing.
+ */
+export interface CollectionLabelBidiResult {
+  errors: string[]
+  optionText: string
+  positions: Record<string, number | null>
+  strippedPositions: Record<string, number | null>
+}
+
+export async function runCollectionLabelBidiSelfTest(): Promise<CollectionLabelBidiResult> {
+  const [{ createElement }, { createRoot }, { PdfGenerateDialog }] = await Promise.all([
+    import("react"), import("react-dom/client"), import("./PdfGenerateDialog"),
+  ])
+  const out: CollectionLabelBidiResult = {
+    errors: [], optionText: "", positions: {}, strippedPositions: {},
+  }
+
+  const host = document.createElement("div")
+  document.body.appendChild(host)
+  const root = createRoot(host)
+
+  /** Left edge of a substring as actually laid out, or null if absent. */
+  const xOf = (node: Text, text: string, needle: string): number | null => {
+    const i = text.indexOf(needle)
+    if (i < 0) return null
+    const range = document.createRange()
+    range.setStart(node, i)
+    range.setEnd(node, i + needle.length)
+    return Math.round(range.getBoundingClientRect().left)
+  }
+
+  /** Renders a string the way the dropdown would and reports where the parts
+   *  land. LTR because that is the English interface the fault was seen in —
+   *  a Hebrew supplier is enough on its own, the UI need not be Hebrew. */
+  const layout = (text: string): Record<string, number | null> => {
+    const span = document.createElement("span")
+    span.dir = "ltr"
+    span.style.cssText = "position:fixed;top:0;left:0;font:16px sans-serif;white-space:pre"
+    span.textContent = text
+    document.body.appendChild(span)
+    const node = span.firstChild as Text
+    const at = {
+      name: xOf(node, text, "LONDON"),
+      supplier: xOf(node, text, "עד"),
+      count: xOf(node, text, "4"),
+      unit: xOf(node, text, "products"),
+    }
+    span.remove()
+    return at
+  }
+
+  try {
+    root.render(createElement(PdfGenerateDialog, {
+      open: true,
+      templates: [],
+      templatesLoading: false,
+      pages: [{ index: 0, label: "Page 1" }],
+      defaultAfterIndex: 0,
+      onCheck: async () => ({ found: 0, missing: [] }),
+      // The reported shape: Latin collection name, Hebrew supplier, a count.
+      collections: [{
+        key: "k", series: "LONDON", seriesEn: "LONDON", supplier: "עד", skuCount: 4,
+      }],
+      collectionsLoading: false,
+      onLoadCollectionSkus: async () => [],
+      busy: false,
+      progress: null,
+      onGenerate: () => {},
+      onCancel: () => {},
+    } as never))
+    await new Promise((r) => setTimeout(r, 150))
+
+    const picker = document.querySelector<HTMLSelectElement>("[data-pdf-generate-collection]")
+    if (!picker || picker.options.length < 2) {
+      out.errors.push("the collection option is not on the screen")
+      return out
+    }
+    // The REAL string the component builds, not one retyped by the test.
+    out.optionText = picker.options[1].textContent ?? ""
+    out.positions = layout(out.optionText)
+
+    const { name, supplier, count, unit } = out.positions
+    if (name === null || supplier === null || count === null || unit === null) {
+      out.errors.push(`a part of the label is missing: ${JSON.stringify(out.positions)}`)
+      return out
+    }
+
+    // Logical order is name, supplier, count, unit. On screen it must run the
+    // same way, or the label says something the data does not.
+    if (!(name < supplier && supplier < count && count < unit)) {
+      out.errors.push(
+        `the label is laid out in the wrong order — name ${name}, supplier ${supplier},`
+        + ` count ${count}, unit ${unit}. The count has moved out of its own phrase.`)
+    }
+
+    // ── The control ───────────────────────────────────────────────────
+    // Same string, isolate characters removed. This is the broken version,
+    // and it MUST fail the check above — otherwise the measurement is blind
+    // and the passing result above means nothing.
+    const stripped = out.optionText.replace(/[⁨⁩]/g, "")
+    out.strippedPositions = layout(stripped)
+    const s = out.strippedPositions
+    if (s.name === null || s.supplier === null || s.count === null || s.unit === null) {
+      out.errors.push("the control string lost a part, so it cannot prove anything")
+    } else if (s.name < s.supplier && s.supplier < s.count && s.count < s.unit) {
+      out.errors.push(
+        "the control PASSED without the isolate characters — this test cannot"
+        + " detect the fault it exists for, so the result above is meaningless")
+    }
+  } catch (err) {
+    out.errors.push(String(err))
+  } finally {
+    root.unmount()
+    host.remove()
+  }
+
+  return out
+}
+
 /** Puts the generate dialog on screen, with a list already typed in. */
 export async function showGenerateDialog(
   language: "en" | "he", withSkus = true,
