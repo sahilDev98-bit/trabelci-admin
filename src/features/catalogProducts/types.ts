@@ -56,3 +56,23 @@ export interface CatalogProduct {
   /** Absent when this SKU has no row in sku_metadata. */
   skuMeta: CatalogSkuMeta | null
 }
+
+/**
+ * A collection of products — a `series` in SKU Management.
+ *
+ * The unit the catalogue brief means by "an entire collection". Identified by
+ * series AND supplier together, because a series name is not unique on its
+ * own: two suppliers may each sell a "Marble", and merging them would build
+ * one catalogue out of two unrelated ranges.
+ */
+export interface CatalogCollection {
+  /** Server-built identity for the (supplier, series) pair. Safe as a React
+   * key and as a select value, where the two fields separately would not be. */
+  key: string
+  series: string
+  /** The English name, when SKU Management has one recorded. */
+  seriesEn: string | null
+  /** Null for a collection whose supplier has not been filled in. */
+  supplier: string | null
+  skuCount: number
+}

@@ -13,8 +13,11 @@ import { Textarea } from "@/components/ui/textarea"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import type { EngineTextLine, PagePlanRequest } from "@/lib/pdf-engine"
-import type { CatalogProduct } from "@/features/catalogProducts/types"
-import { fetchProductCoverFile, lookupProductsBySkus } from "@/features/catalogProducts/api"
+import type { CatalogCollection, CatalogProduct } from "@/features/catalogProducts/types"
+import {
+  fetchCollectionSkus, fetchProductCoverFile, lookupProductsBySkus,
+  useCatalogCollectionsQuery,
+} from "@/features/catalogProducts/api"
 import { productDisplayName, toProductFieldLanguage } from "./productFields"
 import { PRODUCT_BLOCK_FIELD_IDS, planProductBlock, productBlockLines } from "./productBlock"
 import { PRODUCT_FIELDS } from "./productFields"
@@ -1981,6 +1984,31 @@ export function PdfEngineEditorPage() {
     [doc.pages, t],
   )
 
+  /**
+   * The collections available to build from.
+   *
+   * Fetched only while the generate dialog is open — this is a scan of the
+   * whole SKU table, and there is no reason to pay for it when somebody is
+   * dragging a text box around.
+   */
+  const catalogCollections = useCatalogCollectionsQuery(generateOpen)
+
+  /**
+   * One collection's SKUs, for the dialog to append to its list.
+   *
+   * Returns null rather than an empty array on failure, so the dialog can
+   * tell "this collection is empty" apart from "the request did not arrive" —
+   * one is worth a message about the data, the other about the network.
+   */
+  const loadCollectionSkus = async (collection: CatalogCollection) => {
+    try {
+      return await fetchCollectionSkus(collection)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : String(err))
+      return null
+    }
+  }
+
   /** Resolve a pasted list against the catalogue, before anything is built. */
   const checkSkus = async (skus: string[]) => {
     try {
@@ -2695,6 +2723,9 @@ export function PdfEngineEditorPage() {
         pages={generateTargetPages}
         defaultAfterIndex={visiblePageIndex()}
         onCheck={checkSkus}
+        collections={catalogCollections.data ?? []}
+        collectionsLoading={catalogCollections.isLoading}
+        onLoadCollectionSkus={loadCollectionSkus}
         busy={generating}
         progress={generateProgress}
         onCancel={() => setGenerateOpen(false)}

@@ -31,6 +31,7 @@ export const API_ENDPOINTS = {
   WHATSAPP_TEMPLATES: "/admin/whatsapp-templates",
   WHATSAPP_TEMPLATE_DEFAULT: "/admin/whatsapp-templates/default",
   CATALOG_PRODUCTS: "/catalog/products",
+  CATALOG_COLLECTIONS: "/catalog/collections",
   SIMILARITY_ANALYZE_ALL: "/admin/products/analyze-similarity-all",
   SIMILARITY_STATUS: "/admin/products/similarity-status",
   FIELD_VISIBILITY: "/admin/field-visibility",

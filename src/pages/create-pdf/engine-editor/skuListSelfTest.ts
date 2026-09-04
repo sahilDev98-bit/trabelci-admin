@@ -181,6 +181,9 @@ export async function runGenerateTargetSelfTest(): Promise<GenerateTargetResult>
       // Opened while looking at page 3, so THAT is what it should offer.
       defaultAfterIndex: 2,
       onCheck: async () => ({ found: 4, missing: [] }),
+      collections: [],
+      collectionsLoading: false,
+      onLoadCollectionSkus: async () => [],
       busy: false,
       progress: null,
       onGenerate: (_tpl: unknown, skus: string[], afterIndex: number) => {
@@ -255,6 +258,170 @@ export async function runGenerateTargetSelfTest(): Promise<GenerateTargetResult>
   return out
 }
 
+/**
+ * "Or an entire collection" — the brief's alternative to naming every product.
+ *
+ * Three things can go wrong here, and only one of them is obvious:
+ *
+ *   1. Adding a collection REPLACES a list somebody already built. Obvious
+ *      once it happens, and destructive — there is no undo in a dialog.
+ *   2. Only the series name is sent, not the supplier. Invisible: it works
+ *      perfectly until two suppliers both sell a "Marble", and then it
+ *      quietly builds a catalogue out of two unrelated ranges. This is the
+ *      one worth a test, because nothing about the screen would look wrong.
+ *   3. A failed load leaves the user believing products were added.
+ */
+export interface CollectionPickerResult {
+  errors: string[]
+  optionLabels: string[]
+  /** What the loader was actually asked for — the identity question. */
+  requested: { series: string; supplier: string | null } | null
+  textBefore: string
+  textAfter: string
+  note: string
+  textAfterFailure: string
+}
+
+export async function runCollectionPickerSelfTest(): Promise<CollectionPickerResult> {
+  const [{ createElement }, { createRoot }, { PdfGenerateDialog }] = await Promise.all([
+    import("react"), import("react-dom/client"), import("./PdfGenerateDialog"),
+  ])
+  const out: CollectionPickerResult = {
+    errors: [], optionLabels: [], requested: null,
+    textBefore: "", textAfter: "", note: "", textAfterFailure: "",
+  }
+
+  const host = document.createElement("div")
+  document.body.appendChild(host)
+  const root = createRoot(host)
+
+  // TWO suppliers with the SAME series name. If a collection is identified by
+  // its name alone these are indistinguishable, and the test below proves
+  // which one was asked for.
+  const collections = [
+    { key: "Alpha Marble", series: "Marble", seriesEn: "Marble", supplier: "Alpha", skuCount: 3 },
+    { key: "Beta Marble", series: "Marble", seriesEn: "Marble", supplier: "Beta", skuCount: 2 },
+  ]
+
+  const asked: { series: string; supplier: string | null }[] = []
+  // Fails on the SECOND call, so one run covers both the success and the
+  // failure without rebuilding the dialog.
+  let failNext = false
+
+  const setValue = (el: HTMLElement, prototype: { prototype: object }, value: string) => {
+    const setter = Object.getOwnPropertyDescriptor(prototype.prototype, "value")?.set
+    setter?.call(el, value)
+  }
+
+  try {
+    root.render(createElement(PdfGenerateDialog, {
+      open: true,
+      templates: [],
+      templatesLoading: false,
+      pages: [{ index: 0, label: "Page 1" }],
+      defaultAfterIndex: 0,
+      onCheck: async () => ({ found: 0, missing: [] }),
+      collections,
+      collectionsLoading: false,
+      onLoadCollectionSkus: async (c: { series: string; supplier: string | null }) => {
+        asked.push({ series: c.series, supplier: c.supplier })
+        if (failNext) return null
+        return ["BETA-1", "BETA-2"]
+      },
+      busy: false,
+      progress: null,
+      onGenerate: () => {},
+      onCancel: () => {},
+    } as never))
+    await new Promise((r) => setTimeout(r, 150))
+
+    const picker = document.querySelector<HTMLSelectElement>("[data-pdf-generate-collection]")
+    const area = document.querySelector<HTMLTextAreaElement>("[data-pdf-generate-skus]")
+    if (!picker || !area) {
+      out.errors.push("the collection picker is not on the screen")
+      return out
+    }
+    out.optionLabels = Array.from(picker.options).map((o) => o.textContent?.trim() ?? "")
+
+    // The size belongs in the label: the brief's whole framing is "50 / 100 /
+    // 500 products", so a name with no number cannot answer the question the
+    // user is actually asking.
+    if (!out.optionLabels.some((label) => label.includes("3 products"))) {
+      out.errors.push(
+        `no option says how big the collection is — labels were ${JSON.stringify(out.optionLabels)}`)
+    }
+
+    // ── A list is already in progress ─────────────────────────────────
+    setValue(area, window.HTMLTextAreaElement, "MINE-1\nMINE-2")
+    area.dispatchEvent(new Event("input", { bubbles: true }))
+    await new Promise((r) => setTimeout(r, 60))
+    out.textBefore = area.value
+
+    // Pick the SECOND "Marble" — same name as the first, different supplier.
+    setValue(picker, window.HTMLSelectElement, "Beta Marble")
+    picker.dispatchEvent(new Event("change", { bubbles: true }))
+    await new Promise((r) => setTimeout(r, 60))
+
+    document.querySelector<HTMLButtonElement>("[data-pdf-generate-collection-add]")?.click()
+    await new Promise((r) => setTimeout(r, 200))
+
+    out.requested = asked[0] ?? null
+    out.textAfter =
+      document.querySelector<HTMLTextAreaElement>("[data-pdf-generate-skus]")?.value ?? ""
+    out.note =
+      document.querySelector("[data-pdf-generate-collection-note]")?.textContent?.trim() ?? ""
+
+    // THE identity check. Asking for "Marble" with no supplier would fetch
+    // Alpha's range, or both, and the screen would look identical.
+    if (out.requested?.supplier !== "Beta") {
+      out.errors.push(
+        `picked Beta's Marble but the loader was asked for supplier`
+        + ` ${JSON.stringify(out.requested?.supplier ?? null)} — two suppliers'`
+        + " collections are being treated as one")
+    }
+
+    // THE destructive check. A list somebody pasted must survive.
+    if (!out.textAfter.includes("MINE-1") || !out.textAfter.includes("MINE-2")) {
+      out.errors.push(
+        `the existing list was destroyed — the box now reads ${JSON.stringify(out.textAfter)}`)
+    }
+    if (!out.textAfter.includes("BETA-1") || !out.textAfter.includes("BETA-2")) {
+      out.errors.push(
+        `the collection's SKUs were not added — the box reads ${JSON.stringify(out.textAfter)}`)
+    }
+    // Appended, not prepended: the order somebody typed is the order they meant.
+    if (out.textAfter.indexOf("MINE-1") > out.textAfter.indexOf("BETA-1")) {
+      out.errors.push("the collection was added ABOVE the existing list, reordering it")
+    }
+    if (!out.note.includes("2")) {
+      out.errors.push(`adding a collection said "${out.note}", which does not report what it did`)
+    }
+
+    // ── And when the load fails ───────────────────────────────────────
+    failNext = true
+    document.querySelector<HTMLButtonElement>("[data-pdf-generate-collection-add]")?.click()
+    await new Promise((r) => setTimeout(r, 200))
+    out.textAfterFailure =
+      document.querySelector<HTMLTextAreaElement>("[data-pdf-generate-skus]")?.value ?? ""
+
+    if (out.textAfterFailure !== out.textAfter) {
+      out.errors.push("a failed load still changed the list")
+    }
+    const failNote =
+      document.querySelector("[data-pdf-generate-collection-note]")?.textContent?.trim() ?? ""
+    if (failNote === out.note || failNote === "") {
+      out.errors.push(`a failed load still reads "${failNote}" — it looks like it worked`)
+    }
+  } catch (err) {
+    out.errors.push(String(err))
+  } finally {
+    root.unmount()
+    host.remove()
+  }
+
+  return out
+}
+
 /** Puts the generate dialog on screen, with a list already typed in. */
 export async function showGenerateDialog(
   language: "en" | "he", withSkus = true,
@@ -286,6 +453,13 @@ export async function showGenerateDialog(
     ],
     defaultAfterIndex: 0,
     onCheck: async () => ({ found: 38, missing: ["BAD-1", "BAD-2"] }),
+    collections: [
+      { key: "Varmora Carnaby", series: "קרנבי", seriesEn: "Carnaby", supplier: "Varmora", skuCount: 48 },
+      { key: "Varmora Concrete", series: "בטון", seriesEn: "Concrete Look", supplier: "Varmora", skuCount: 12 },
+      { key: " Marble", series: "שיש", seriesEn: "Marble", supplier: null, skuCount: 7 },
+    ],
+    collectionsLoading: false,
+    onLoadCollectionSkus: async () => ["A-1", "A-2", "A-3"],
     busy: false,
     progress: null,
     onGenerate: () => {},

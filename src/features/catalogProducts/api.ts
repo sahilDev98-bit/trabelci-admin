@@ -3,7 +3,7 @@ import { keepPreviousData, useQuery } from "@tanstack/react-query"
 import { apiFetch } from "@/lib/apiClient"
 import { API_ENDPOINTS } from "@/lib/apiEndpoints"
 import { catalogProductsQueryKeys } from "./queryKeys"
-import type { CatalogProduct, CatalogSkuMeta } from "./types"
+import type { CatalogCollection, CatalogProduct, CatalogSkuMeta } from "./types"
 
 /**
  * Product lookup against the CATALOG endpoint.
@@ -153,6 +153,72 @@ export async function lookupProductsBySkus(
     : []
 
   return { results, missing }
+}
+
+/**
+ * The collections a catalogue can be built from.
+ *
+ * The brief's "or an entire collection" — the alternative to naming every
+ * product. Counts come with the names because the choice is made ON size:
+ * "Carnaby" tells you nothing about whether you are about to build four pages
+ * or forty.
+ */
+export async function listCatalogCollections(): Promise<CatalogCollection[]> {
+  const res = await apiFetch<{ collections?: unknown }>(API_ENDPOINTS.CATALOG_COLLECTIONS)
+  const rows = Array.isArray(res.collections) ? res.collections : []
+  return rows
+    .map((value): CatalogCollection | null => {
+      const row = (value ?? {}) as RawRecord
+      const series = asString(row.series)
+      // Without a name there is nothing to show and nothing to ask for.
+      if (!series) return null
+      const supplier = asString(row.supplier)
+      return {
+        key: asString(row.key) ?? `${supplier ?? ""}\u0000${series}`,
+        series,
+        seriesEn: asString(row.seriesEn),
+        supplier,
+        skuCount: asNumber(row.skuCount) ?? 0,
+      }
+    })
+    .filter((c): c is CatalogCollection => c !== null)
+}
+
+/**
+ * Every SKU in one collection, in the order the server sorted them.
+ *
+ * The order is a starting point, not a decision — these land in the
+ * generator's text box, where they can be reordered or trimmed before
+ * anything is built.
+ */
+export async function fetchCollectionSkus(collection: CatalogCollection): Promise<string[]> {
+  const query = new URLSearchParams({ series: collection.series })
+  // Omitted rather than sent empty: on the server an absent supplier ASKS FOR
+  // the collection whose supplier is unset, and `supplier=` would be trimmed
+  // to exactly that anyway — but leaving it out says so plainly.
+  if (collection.supplier) query.set("supplier", collection.supplier)
+
+  const res = await apiFetch<{ skus?: unknown }>(
+    `${API_ENDPOINTS.CATALOG_COLLECTIONS}/skus?${query.toString()}`,
+  )
+  const rows = Array.isArray(res.skus) ? res.skus : []
+  return rows.map((s) => asString(s)).filter((s): s is string => s !== null)
+}
+
+/**
+ * The collection list for the generator's picker.
+ *
+ * Long staleTime for the same reason the product search has one: the
+ * catalogue's collections do not change while somebody is laying out a
+ * document, and the picker is reopened repeatedly during one session.
+ */
+export function useCatalogCollectionsQuery(enabled: boolean) {
+  return useQuery({
+    queryKey: catalogProductsQueryKeys.collections(),
+    queryFn: listCatalogCollections,
+    enabled,
+    staleTime: 5 * 60_000,
+  })
 }
 
 /**

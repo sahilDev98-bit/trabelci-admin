@@ -8,6 +8,7 @@ import {
 } from "@/components/ui/dialog"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
+import type { CatalogCollection } from "@/features/catalogProducts/types"
 import type { PdfPageTemplate } from "@/features/pdfPageTemplates/types"
 import { pagesNeeded, parseSkuList, readSkuFile } from "./skuList"
 
@@ -37,6 +38,13 @@ interface PdfGenerateDialogProps {
   defaultAfterIndex: number
   /** Resolves the list against the catalogue: which SKUs exist, which do not. */
   onCheck: (skus: string[]) => Promise<{ found: number; missing: string[] }>
+  /** The brief's "or an entire collection" — the alternative to naming
+   * products one at a time. Empty is a normal state, not a failure. */
+  collections: CatalogCollection[]
+  collectionsLoading: boolean
+  /** Fetches one collection's SKUs. Returns null if they could not be read,
+   * so the dialog can say so rather than silently adding nothing. */
+  onLoadCollectionSkus: (collection: CatalogCollection) => Promise<string[] | null>
   busy: boolean
   /** Progress while generating, so a forty-page build is not a frozen box. */
   progress: { done: number; total: number } | null
@@ -46,9 +54,10 @@ interface PdfGenerateDialogProps {
 
 export function PdfGenerateDialog({
   open, templates, templatesLoading, pages, defaultAfterIndex,
-  onCheck, busy, progress, onGenerate, onCancel,
+  onCheck, collections, collectionsLoading, onLoadCollectionSkus,
+  busy, progress, onGenerate, onCancel,
 }: PdfGenerateDialogProps) {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   const [templateId, setTemplateId] = useState<string>("")
   const [text, setText] = useState("")
   const [checking, setChecking] = useState(false)
@@ -63,6 +72,15 @@ export function PdfGenerateDialog({
    */
   const [afterIndex, setAfterIndex] = useState<number | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
+
+  /** The collection picker: which one is selected, whether it is being
+   * fetched, and what the last attempt did. The outcome is kept so adding a
+   * collection is not a silent event — 200 SKUs appearing in a box you were
+   * not looking at needs saying out loud. */
+  const [collectionKey, setCollectionKey] = useState("")
+  const [loadingCollection, setLoadingCollection] = useState(false)
+  const [collectionNote, setCollectionNote] =
+    useState<{ ok: boolean; name: string; count: number } | null>(null)
 
   const insertAfter = afterIndex ?? defaultAfterIndex
   const afterPageNumber = insertAfter + 1
@@ -94,6 +112,50 @@ export function PdfGenerateDialog({
       return
     }
     updateText(outcome.text)
+  }
+
+  /**
+   * What to call a collection on screen.
+   *
+   * SKU Management records both names, and which one is the useful one
+   * depends on who is reading: `series` is the name as it comes off the SAP
+   * item, `series_en` the English rendering. Falls back rather than showing
+   * a blank when only one of the two exists.
+   */
+  const collectionLabel = (collection: CatalogCollection): string => {
+    const english = collection.seriesEn ?? collection.series
+    return i18n.language.startsWith("he") ? collection.series : english
+  }
+
+  /**
+   * Add a collection's SKUs to the list.
+   *
+   * APPENDS rather than replaces, for two reasons. A catalogue made of two
+   * collections is an ordinary request, and replacing would make it
+   * impossible. And a click that silently discards a list somebody pasted or
+   * uploaded is destructive in a dialog with no undo.
+   */
+  const addCollection = async () => {
+    const collection = collections.find((c) => c.key === collectionKey)
+    if (!collection || loadingCollection) return
+
+    setLoadingCollection(true)
+    setCollectionNote(null)
+    try {
+      const skus = await onLoadCollectionSkus(collection)
+      if (skus === null) {
+        setCollectionNote({ ok: false, name: collectionLabel(collection), count: 0 })
+        return
+      }
+      // Joined with a newline only when there is something to join to, so the
+      // box does not start with a blank line — which parses fine, but looks
+      // like the list is missing its first entry.
+      const existing = text.trim()
+      updateText(existing ? `${existing}\n${skus.join("\n")}` : skus.join("\n"))
+      setCollectionNote({ ok: true, name: collectionLabel(collection), count: skus.length })
+    } finally {
+      setLoadingCollection(false)
+    }
   }
 
   const check = async () => {
@@ -225,6 +287,84 @@ export function PdfGenerateDialog({
               className="h-32 max-h-32 resize-none overflow-y-auto font-mono text-xs"
               placeholder={"100201305\n911120\n.4211121"}
             />
+            {/* ── Or take a whole collection ──────────────────────────────
+                The brief offers "50 products / 100 products / 500 products,
+                OR an entire collection". Everything above is the first half;
+                this is the second. It deliberately fills the SAME box rather
+                than being a separate mode: the count, the duplicate warning,
+                the catalogue check and the page arithmetic are all already
+                right for a list, and the user still gets to see and edit what
+                they are about to build. */}
+            <div className="flex items-center gap-2">
+              <select
+                aria-label={t("pdfTemplates.generateCollection", "Add a whole collection")}
+                data-pdf-generate-collection
+                value={collectionKey}
+                onChange={(e) => setCollectionKey(e.target.value)}
+                disabled={busy || loadingCollection || collections.length === 0}
+                // bg-background, not a translucent tint: Chrome builds the
+                // dropdown's own panel from this colour, and a see-through one
+                // renders the open list unreadable.
+                className="h-8 min-w-0 flex-1 rounded-md border bg-background px-2 text-xs text-foreground"
+              >
+                <option value="">
+                  {collectionsLoading
+                    ? t("pdfTemplates.generateCollectionsLoading", "Loading collections…")
+                    : t("pdfTemplates.generateCollectionPick", "Or add a whole collection…")}
+                </option>
+                {collections.map((collection) => (
+                  <option key={collection.key} value={collection.key}>
+                    {collectionLabel(collection)}
+                    {collection.supplier ? ` — ${collection.supplier}` : ""}
+                    {" · "}
+                    {t("pdfTemplates.generateCollectionSize", "{{count}} products", {
+                      count: collection.skuCount,
+                    })}
+                  </option>
+                ))}
+              </select>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="h-8 shrink-0 gap-1.5 px-2 text-xs"
+                data-pdf-generate-collection-add
+                disabled={busy || loadingCollection || collectionKey === ""}
+                onClick={() => void addCollection()}
+              >
+                {loadingCollection && <Loader2Icon className="size-3 animate-spin" />}
+                {t("pdfTemplates.generateCollectionAdd", "Add to the list")}
+              </Button>
+            </div>
+            {!collectionsLoading && collections.length === 0 && (
+              <p className="text-xs text-muted-foreground">
+                {t(
+                  "pdfTemplates.generateNoCollections",
+                  "No collections found. A collection is a Series in SKU Management — products need one recorded before they can be added this way.",
+                )}
+              </p>
+            )}
+            {collectionNote && (
+              <p
+                data-pdf-generate-collection-note
+                className={`text-xs ${collectionNote.ok
+                  ? "text-muted-foreground"
+                  : "text-destructive"}`}
+              >
+                {collectionNote.ok
+                  ? t(
+                    "pdfTemplates.generateCollectionAdded",
+                    "Added {{count}} SKUs from {{name}}. Edit or reorder them below before generating.",
+                    { count: collectionNote.count, name: collectionNote.name },
+                  )
+                  : t(
+                    "pdfTemplates.generateCollectionFailed",
+                    "Could not load {{name}}. Nothing was added.",
+                    { name: collectionNote.name },
+                  )}
+              </p>
+            )}
+
             {fileProblem && (
               <p className="text-xs text-destructive">
                 {fileProblem === "spreadsheet"
