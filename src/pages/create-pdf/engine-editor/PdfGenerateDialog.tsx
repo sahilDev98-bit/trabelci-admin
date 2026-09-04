@@ -9,6 +9,7 @@ import {
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import type { CatalogCollection } from "@/features/catalogProducts/types"
+import { isolate } from "./bidi"
 import type { PdfPageTemplate } from "@/features/pdfPageTemplates/types"
 import { pagesNeeded, parseSkuList, readSkuFile } from "./skuList"
 
@@ -26,30 +27,6 @@ import { pagesNeeded, parseSkuList, readSkuFile } from "./skuList"
  * before the first one is.
  */
 
-/**
- * Wraps a run of text so the bidi algorithm cannot reorder it against its
- * neighbours.
- *
- * A collection label glues together three things that need not run the same
- * way: a name that may be Latin ("LONDON"), a supplier that may be Hebrew,
- * and a count. Left alone, the browser lays the whole line out as ONE
- * bidirectional paragraph, and the digit is pulled out of its own phrase —
- *
- *   wanted:  LONDON — ‎<supplier>‎ · 4 products
- *   got:     LONDON — ‎**4‎ · <supplier> products
- *
- * — which is a display fault only. The data underneath is correct, which is
- * exactly what makes it survive a review: nothing is missing, it just reads
- * as nonsense.
- *
- * This is done with CHARACTERS rather than the dir attribute or
- * unicode-bidi:plaintext used elsewhere in this editor (see
- * PdfEngineViewportBar and PdfProductPanel) for one reason: `<option>`
- * renders its text content and nothing else, so there is no element to hang
- * either of those on. U+2068 FIRST STRONG ISOLATE takes its direction from
- * the run itself and U+2069 closes it — `<bdi>` expressed as text.
- */
-const isolate = (text: string): string => `\u2068${text}\u2069`
 
 interface PdfGenerateDialogProps {
   open: boolean
@@ -193,8 +170,17 @@ export function PdfGenerateDialog({
     }
   }
 
+  /**
+   * The SKUs that were not found, for dropping into a sentence.
+   *
+   * Each one isolated individually, not the joined string: these are codes
+   * inside Hebrew prose, and without it the commas and any leading punctuation
+   * are reordered against the words around them — the reader is then given a
+   * list of SKUs that do not exist to go and look for.
+   */
   const missingList = checked
-    ? checked.missing.slice(0, 8).join(", ") + (checked.missing.length > 8 ? "…" : "")
+    ? checked.missing.slice(0, 8).map(isolate).join(", ")
+      + (checked.missing.length > 8 ? "…" : "")
     : ""
 
   return (
@@ -301,6 +287,19 @@ export function PdfGenerateDialog({
             <Textarea
               id="generate-skus"
               data-pdf-generate-skus
+              // ALWAYS left-to-right, whatever the interface language.
+              //
+              // A SKU is a code, not prose. Under Hebrew the box inherits RTL
+              // and any SKU beginning with a neutral character is reordered on
+              // screen: ".4211121" — a real SKU in this catalogue — displays as
+              // "4211121.", so the reader sees a SKU that does not exist. The
+              // value is untouched and looks up correctly, which is precisely
+              // why it is worth pinning: the fault is invisible to everything
+              // except a person reading the box.
+              //
+              // Same reasoning as the page counter in PdfEngineViewportBar,
+              // where "3 / 14" was being shown as "14 / 3".
+              dir="ltr"
               value={text}
               onChange={(e) => updateText(e.target.value)}
               disabled={busy}

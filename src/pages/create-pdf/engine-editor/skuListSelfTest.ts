@@ -558,6 +558,123 @@ export async function runCollectionLabelBidiSelfTest(): Promise<CollectionLabelB
   return out
 }
 
+/**
+ * Does a SKU still read as itself under Hebrew?
+ *
+ * ".4211121" is a real SKU in this catalogue. In the Hebrew interface the SKU
+ * box inherited the page's right-to-left direction and showed it as
+ * "4211121." — the leading dot is a neutral character, and the bidi algorithm
+ * moved it to the far end.
+ *
+ * The value was never altered: it uploaded, looked up and generated
+ * correctly. Only the person reading the box was misled, which is why this
+ * needs measuring rather than inspecting.
+ *
+ * Two things are checked. That the box is pinned to left-to-right, and — the
+ * control — that the same string in a right-to-left box really does come out
+ * reordered. Without the second, the first proves only that an attribute was
+ * set, not that setting it mattered.
+ */
+export interface SkuDirectionResult {
+  errors: string[]
+  textareaDirection: string
+  ltrDotAtStart: boolean
+  rtlDotAtStart: boolean
+}
+
+export async function runSkuDirectionSelfTest(): Promise<SkuDirectionResult> {
+  const [{ createElement }, { createRoot }, i18n, { PdfGenerateDialog }] = await Promise.all([
+    import("react"), import("react-dom/client"), import("@/i18n"),
+    import("./PdfGenerateDialog"),
+  ])
+  const out: SkuDirectionResult = {
+    errors: [], textareaDirection: "", ltrDotAtStart: false, rtlDotAtStart: false,
+  }
+  const previousLanguage = i18n.default.language
+
+  const host = document.createElement("div")
+  document.body.appendChild(host)
+  const root = createRoot(host)
+
+  /** Is the dot drawn to the LEFT of the digits, as written? */
+  const dotComesFirst = (dir: "ltr" | "rtl"): boolean => {
+    const sku = ".4211121"
+    const span = document.createElement("span")
+    span.dir = dir
+    span.style.cssText = "position:fixed;top:0;left:0;font:16px monospace;white-space:pre"
+    span.textContent = sku
+    document.body.appendChild(span)
+    const node = span.firstChild as Text
+    const at = (from: number, to: number) => {
+      const r = document.createRange()
+      r.setStart(node, from)
+      r.setEnd(node, to)
+      return r.getBoundingClientRect().left
+    }
+    const dot = at(0, 1)
+    const digits = at(1, sku.length)
+    span.remove()
+    return dot < digits
+  }
+
+  try {
+    // Hebrew, because that is the only situation in which this goes wrong.
+    await i18n.default.changeLanguage("he")
+
+    root.render(createElement(PdfGenerateDialog, {
+      open: true,
+      templates: [],
+      templatesLoading: false,
+      pages: [{ index: 0, label: "1" }],
+      defaultAfterIndex: 0,
+      onCheck: async () => ({ found: 0, missing: [] }),
+      collections: [],
+      collectionsLoading: false,
+      onLoadCollectionSkus: async () => [],
+      busy: false,
+      progress: null,
+      onGenerate: () => {},
+      onCancel: () => {},
+    } as never))
+    await new Promise((r) => setTimeout(r, 150))
+
+    const area = document.querySelector<HTMLTextAreaElement>("[data-pdf-generate-skus]")
+    if (!area) {
+      out.errors.push("the SKU box is not on the screen")
+      return out
+    }
+    out.textareaDirection = getComputedStyle(area).direction
+    if (out.textareaDirection !== "ltr") {
+      out.errors.push(
+        `under Hebrew the SKU box computes to direction:${out.textareaDirection} —`
+        + ' a SKU beginning with a dot will be shown with the dot at the far end')
+    }
+
+    out.ltrDotAtStart = dotComesFirst("ltr")
+    out.rtlDotAtStart = dotComesFirst("rtl")
+
+    if (!out.ltrDotAtStart) {
+      out.errors.push("even left-to-right draws the dot after the digits — the measurement is wrong")
+    }
+    // THE control. If right-to-left ALSO keeps the dot first then this bug
+    // cannot be reproduced here, and the check above is not evidence of
+    // anything.
+    if (out.rtlDotAtStart) {
+      out.errors.push(
+        "right-to-left kept the dot in place, so the fault this test exists for"
+        + " does not reproduce and the result above proves nothing")
+    }
+  } catch (err) {
+    out.errors.push(String(err))
+  } finally {
+    root.unmount()
+    host.remove()
+    await i18n.default.changeLanguage(previousLanguage)
+  }
+
+  return out
+}
+
 /** Puts the generate dialog on screen, with a list already typed in. */
 export async function showGenerateDialog(
   language: "en" | "he", withSkus = true,

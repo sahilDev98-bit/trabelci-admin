@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button"
 import {
   Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog"
+import { isolate } from "./bidi"
 import { productFieldLabel } from "./productSlots"
 import type { RefreshPlan } from "./productBindings"
 
@@ -83,7 +84,11 @@ export function PdfRefreshDialog({ open, plan, busy, onApply, onCancel }: PdfRef
                       <span className="text-muted-foreground">
                         {productFieldLabel(t, change.fieldId)}
                         {" · "}
-                        {change.sku}
+                        {/* Isolated: a SKU is a code sitting between a
+                            translated field name and a separator, and under
+                            Hebrew a leading dot moves to the far end — the
+                            reader is shown a SKU that does not exist. */}
+                        {isolate(change.sku)}
                         {": "}
                       </span>
                       {/* The photo's "value" is a URL, which tells nobody
@@ -137,7 +142,9 @@ export function PdfRefreshDialog({ open, plan, busy, onApply, onCancel }: PdfRef
                   {t(
                     "pdfTemplates.refreshMissing",
                     "No longer in the catalogue, and left untouched: {{list}}",
-                    { list: plan.missingSkus.slice(0, 6).join(", ") },
+                    // Each SKU isolated on its own, not the joined string —
+                    // otherwise the commas separating them are reordered too.
+                    { list: plan.missingSkus.slice(0, 6).map(isolate).join(", ") },
                   )}
                 </span>
               </p>
